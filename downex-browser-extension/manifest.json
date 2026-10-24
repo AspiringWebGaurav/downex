@@ -1,0 +1,58 @@
+{
+  "manifest_version": 3,
+  "name": "Downex — Media Grabber & Download Accelerator",
+  "short_name": "Downex",
+  "version": "0.0.1",
+  "version_name": "0.0.1",
+  "author": "Gaurav Patil <AspiringWebGaurav>",
+  "homepage_url": "https://github.com/AspiringWebGaurav/downex",
+  "description": "Enterprise-grade high-performance download accelerator companion. Air-gapped local loopback bridge, multi-stream TCP multiplexing, in-DOM video grabber, and zero cloud telemetry.",
+  "minimum_chrome_version": "100",
+  "incognito": "spanning",
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "action": {
+    "default_popup": "popup/popup.html",
+    "default_title": "Downex Download Accelerator",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png"
+    }
+  },
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "run_at": "document_start",
+      "all_frames": true
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["page-hook.js", "icons/*"],
+      "matches": ["<all_urls>"]
+    }
+  ],
+  "permissions": [
+    "downloads",
+    "cookies",
+    "storage",
+    "contextMenus",
+    "activeTab",
+    "scripting"
+  ],
+  "optional_permissions": [
+    "nativeMessaging"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ]
+}

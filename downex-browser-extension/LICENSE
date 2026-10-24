@@ -1,0 +1,33 @@
+MIT License
+
+Copyright (c) 2026 Gaurav Patil (AspiringWebGaurav)
+Project: Downex — Enterprise Download Accelerator & Media Companion
+Repository: https://github.com/AspiringWebGaurav/downex
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+================================================================================
+ENTERPRISE PRIVACY & LOCAL ARCHITECTURE STATEMENT
+================================================================================
+1. Zero Cloud Telemetry: Downex and this extension do NOT transmit any user data,
+   URLs, cookies, browsing history, or identifiers to any remote server or cloud.
+2. Air-Gapped Local Loopback: All communication between this extension and the
+   desktop Downex accelerator is strictly bound to 127.0.0.1 (local machine only).
+3. Memory Safety: All media detection uses scoped Shadow-DOM elements and WeakMaps
+   to ensure zero memory leaks and zero CSS contamination of host web pages.

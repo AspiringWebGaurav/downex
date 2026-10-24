@@ -1,0 +1,261 @@
+import { create } from 'zustand';
+import { DownloadItem, DownloadProgressEvent } from '../types/download';
+import { 
+  addDownload, 
+  cancelDownload, 
+  changeDownloadDestination, 
+  getDownloads, 
+  onDownloadProgress, 
+  pauseDownload, 
+  resumeDownload,
+  startQueue,
+  pauseQueue,
+  isQueueRunning,
+  queueDownload,
+  DownloadInfoModalPayload,
+} from '../services/tauriService';
+
+interface DownloadStore {
+  items: DownloadItem[];
+  selectedCategory: string;
+  searchQuery: string;
+  isNewModalOpen: boolean;
+  isStandaloneModal: boolean;
+  setIsStandaloneModal: (val: boolean) => void;
+  initialModalData?: DownloadInfoModalPayload;
+  openNewModalWithData: (data: DownloadInfoModalPayload) => void;
+  totalSpeed: number;
+  speedHistory: number[];
+  showTelemetryOnHome: boolean;
+  setShowTelemetryOnHome: (val: boolean) => void;
+
+  isQueueRunning: boolean;
+  startQueue: () => Promise<void>;
+  pauseQueue: () => Promise<void>;
+  queueDownload: (id: string) => Promise<void>;
+  loadItems: () => Promise<void>;
+  addNewDownload: (url: string, folder?: string, queue?: string, headers?: Record<string, string>, startImmediately?: boolean) => Promise<void>;
+  changeFolderAndRetry: (id: string, newFolder: string) => Promise<void>;
+  togglePause: (id: string) => Promise<void>;
+  removeDownload: (id: string, deleteFile?: boolean) => Promise<void>;
+  setSelectedCategory: (cat: string) => void;
+  setSearchQuery: (query: string) => void;
+  setNewModalOpen: (open: boolean) => void;
+  initListener: () => () => void;
+}
+
+export const useDownloadStore = create<DownloadStore>((set, get) => ({
+  items: [],
+  selectedCategory: 'all',
+  searchQuery: '',
+  isNewModalOpen: false,
+  isStandaloneModal: false,
+  setIsStandaloneModal: (val: boolean) => set({ isStandaloneModal: val }),
+  totalSpeed: 0,
+  speedHistory: Array(20).fill(0),
+  isQueueRunning: false,
+  showTelemetryOnHome: (() => {
+    try {
+      return localStorage.getItem('downex_show_telemetry_on_home') === 'true';
+    } catch {
+      return false;
+    }
+  })(),
+  setShowTelemetryOnHome: (val: boolean) => {
+    try {
+      localStorage.setItem('downex_show_telemetry_on_home', String(val));
+    } catch (e) {
+      console.warn('Failed to save telemetry setting to localStorage:', e);
+    }
+    set({ showTelemetryOnHome: val });
+  },
+
+  loadItems: async () => {
+    try {
+      const [dbItems, queueRunning] = await Promise.all([
+        getDownloads(),
+        isQueueRunning(),
+      ]);
+      set((state) => {
+        const merged = dbItems.map((dbItem) => {
+          const existing = state.items.find((i) => i.id === dbItem.id);
+          const isDownloading = dbItem.status === 'downloading' || existing?.status === 'downloading';
+          const speed = isDownloading
+            ? Math.max(existing?.speed_bytes_sec || 0, dbItem.speed_bytes_sec || 0)
+            : dbItem.speed_bytes_sec;
+
+          let eta = existing?.eta_seconds;
+          if (!eta && isDownloading && speed > 0 && dbItem.total_bytes && dbItem.total_bytes > dbItem.downloaded_bytes) {
+            eta = Math.max(1, Math.round((dbItem.total_bytes - dbItem.downloaded_bytes) / speed));
+          }
+
+          return {
+            ...dbItem,
+            status: isDownloading ? 'downloading' : dbItem.status,
+            // Preserve live in-memory segments and active download metrics if available
+            segments: existing?.segments && existing.segments.length > 0 ? existing.segments : dbItem.segments,
+            speed_bytes_sec: speed,
+            eta_seconds: eta,
+          };
+        });
+        return { items: merged, isQueueRunning: queueRunning };
+      });
+    } catch (e) {
+      console.warn('Failed to load downloads:', e);
+    }
+  },
+
+  startQueue: async () => {
+    try {
+      await startQueue();
+      set({ isQueueRunning: true });
+      await get().loadItems();
+    } catch (e) {
+      console.warn('Failed to start queue:', e);
+    }
+  },
+
+  pauseQueue: async () => {
+    try {
+      await pauseQueue();
+      set({ isQueueRunning: false });
+      await get().loadItems();
+    } catch (e) {
+      console.warn('Failed to pause queue:', e);
+    }
+  },
+
+  queueDownload: async (id: string) => {
+    try {
+      await queueDownload(id);
+      await get().loadItems();
+    } catch (e) {
+      console.warn('Failed to queue download:', e);
+    }
+  },
+
+  addNewDownload: async (url: string, folder?: string, queue?: string, headers?: Record<string, string>, startImmediately = true) => {
+    const item = await addDownload(url, folder, queue, headers, startImmediately);
+    set((state) => ({ items: [item, ...state.items] }));
+  },
+
+  changeFolderAndRetry: async (id: string, newFolder: string) => {
+    try {
+      await changeDownloadDestination(id, newFolder);
+      await get().loadItems();
+    } catch (err) {
+      console.error('Failed to change download destination:', err);
+    }
+  },
+
+  togglePause: async (id: string) => {
+    const item = get().items.find((i) => i.id === id);
+    if (!item) return;
+
+    if (item.status === 'downloading' || item.status === 'probing') {
+      await pauseDownload(id);
+      set((state) => ({
+        items: state.items.map((i) => (i.id === id ? { ...i, status: 'paused', speed_bytes_sec: 0 } : i)),
+      }));
+    } else {
+      await resumeDownload(id);
+      set((state) => ({
+        items: state.items.map((i) => (i.id === id ? { ...i, status: 'downloading' } : i)),
+      }));
+    }
+  },
+
+  removeDownload: async (id: string, deleteFile = false) => {
+    await cancelDownload(id, deleteFile);
+    set((state) => ({ items: state.items.filter((i) => i.id !== id) }));
+  },
+
+  setSelectedCategory: (cat: string) => set({ selectedCategory: cat }),
+  setSearchQuery: (query: string) => set({ searchQuery: query }),
+  setNewModalOpen: (open: boolean) =>
+    set({
+      isNewModalOpen: open,
+      initialModalData: open ? get().initialModalData : undefined,
+      isStandaloneModal: open ? get().isStandaloneModal : false,
+    }),
+  openNewModalWithData: (data: DownloadInfoModalPayload) =>
+    set({
+      isNewModalOpen: true,
+      initialModalData: data,
+      isStandaloneModal: !!data.standalone_modal,
+    }),
+
+  initListener: () => {
+    // 1. High-frequency push event listener from Tauri Rust backend
+    const unlistenProgress = onDownloadProgress((event: DownloadProgressEvent) => {
+      set((state) => {
+        let currentTotalSpeed = 0;
+        let taskFinished = false;
+        let itemFound = false;
+
+        const updated = state.items.map((item) => {
+          if (item.id === event.task_id) {
+            itemFound = true;
+            currentTotalSpeed += event.speed_bytes_sec;
+            if (item.status !== event.status && (event.status === 'completed' || event.status === 'failed' || event.status === 'error')) {
+              taskFinished = true;
+            }
+            const isDownloading = event.status === 'downloading' || item.status === 'downloading';
+            const effectiveSpeed = event.speed_bytes_sec > 0
+              ? event.speed_bytes_sec
+              : (isDownloading ? (item.speed_bytes_sec || 0) : 0);
+
+            const total = event.total_bytes ?? item.total_bytes;
+            let effectiveEta = event.eta_seconds ?? item.eta_seconds;
+            if ((effectiveEta === undefined || effectiveEta === null) && isDownloading && total && total > event.downloaded_bytes && effectiveSpeed > 0) {
+              effectiveEta = Math.max(1, Math.round((total - event.downloaded_bytes) / effectiveSpeed));
+            }
+
+            currentTotalSpeed += effectiveSpeed;
+
+            return {
+              ...item,
+              downloaded_bytes: event.downloaded_bytes,
+              total_bytes: total,
+              speed_bytes_sec: effectiveSpeed,
+              eta_seconds: effectiveEta,
+              status: event.status as any,
+              segments: event.segments && event.segments.length > 0 ? event.segments : item.segments,
+            };
+          }
+          if (item.status === 'downloading') {
+            currentTotalSpeed += (item.speed_bytes_sec || 0);
+          }
+          return item;
+        });
+
+        // If the task was added externally (e.g. extension), fetch it into store
+        if (!itemFound) {
+          get().loadItems();
+        }
+
+        if (taskFinished) {
+          setTimeout(() => {
+            get().loadItems();
+          }, 300);
+        }
+
+        const newHistory = [...state.speedHistory.slice(1), currentTotalSpeed];
+        return { items: updated, totalSpeed: currentTotalSpeed, speedHistory: newHistory };
+      });
+    });
+
+    // 2. Safety heartbeat polling: Sync with SQLite every 1000ms while any task is active
+    const intervalId = setInterval(() => {
+      const hasActive = get().items.some((i) => i.status === 'downloading' || i.status === 'probing');
+      if (hasActive) {
+        get().loadItems();
+      }
+    }, 1000);
+
+    return () => {
+      unlistenProgress();
+      clearInterval(intervalId);
+    };
+  },
+}));

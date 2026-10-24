@@ -1,0 +1,118 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "project": "Downex",
+  "tagline": "Independent High-Performance Windows Download Manager",
+  "repository": "https://github.com/AspiringWebGaurav/downex",
+  "currentVersion": "0.0.0",
+  "author": "Gaurav Patil",
+  "migrationSOP": {
+    "step1": "Clone repository: git clone https://github.com/AspiringWebGaurav/downex.git",
+    "step2": "Restore private workspace assets: npm run vault:unpack (Enter master password when prompted)",
+    "step3": "Install dependencies: npm install",
+    "step4": "Launch development environment: npm run dev"
+  },
+  "securityProtocol": {
+    "vaultContainer": "downex-vault.enc",
+    "vaultEngine": "AES-256-GCM + scrypt (N: 16384, r: 8, p: 1) + zlib Gzip Level 9",
+    "headerFormat": "DWNXVALT (8B) + Version (1B) + Attempts (1B) + Salt (32B) + IV (12B) + AuthTag (16B) + Ciphertext",
+    "hackerDefenseLifecycle": {
+      "attempt1": "Logs warning, marks in-header attempt byte to 1, sets .vault_attempts sidecar",
+      "attempt2": "Permanently scrambles local vault file on disk with crypto.randomBytes(fileSize)",
+      "recovery": "Successful unpack resets attempts to 0 and removes sidecar"
+    },
+    "zeroPlainSecretsRule": "Never commit unencrypted .env.local, .tauri/*.key, or reference/ to version control."
+  },
+  "components": {
+    "desktopApp": {
+      "description": "Tauri v2 + React 19 + TypeScript + Vite + Tailwind CSS v4 Windows desktop application",
+      "entrypoint": "src/App.tsx",
+      "packageJson": "package.json",
+      "viteConfig": "vite.config.ts",
+      "src": {
+        "components": {
+          "DownexWindowHeader": "Centered frameless window controls, titlebar, minimize, and close",
+          "DownexSidebar": "Categories, download queues, scheduler, completed list, and settings tab",
+          "DownloadTable": "High-throughput real-time virtualized transfer list with progress rings",
+          "NewDownloadModal": "Manual URL entry, category selection, and segment worker configuration",
+          "UpdateModal": "In-process OTA release notifier and downloader",
+          "TelemetryWidget": "Active connection socket graph, aggregate speed, and RAM usage"
+        },
+        "stores": {
+          "downloadStore.ts": "Zustand store for live download transfer states and speeds",
+          "appVersionStore.ts": "Zustand store for client runtime version and OTA state"
+        },
+        "services": {
+          "tauriService.ts": "IPC bridge invoking Rust backend commands",
+          "updateService.ts": "In-process self-updater and hash validator",
+          "otaContainer.ts": "Client-side AES-256-GCM OTA container decryptor"
+        }
+      },
+      "srcTauri": {
+        "CargoToml": "Rust dependencies (tauri 2.2, tokio, reqwest, rusqlite, parking_lot, serde)",
+        "tauriConfJson": "Tauri v2 window, NSIS, and capability definitions",
+        "src": {
+          "main.rs": "Native application entrypoint",
+          "lib.rs": "AppState, HTTP client pool (HTTP/1.1 forced sockets), single-instance, and tray setup",
+          "engine": {
+            "mod.rs": "Worker pool coordination and work stealer",
+            "probe.rs": "Pre-flight HTTP HEAD/GET probe for Accept-Ranges and Content-Length",
+            "writer.rs": "High-performance positional file writer (seek_write)",
+            "state.rs": "Transfer state machine"
+          },
+          "bridge": {
+            "nativeHost.rs": "Chrome Native Messaging stdio protocol handler",
+            "httpServer.rs": "Local fallback WebSocket/HTTP bridge for non-native extension targets"
+          },
+          "db": {
+            "mod.rs": "SQLite WAL database manager for download tasks, queues, and segments",
+            "schema.rs": "SQLite table creation statements and pragmas"
+          },
+          "ota": {
+            "mod.rs": "In-process binary updater, SHA-256 validator, and NTFS atomic shadow swap"
+          },
+          "scheduler": {
+            "queue.rs": "Concurrency queues with tokio semaphore limits"
+          },
+          "tray.rs": "Windows system tray icon, animated progress frames, and context menu"
+        }
+      }
+    },
+    "browserExtension": {
+      "description": "Manifest V3 / V2 WebExtension for Chrome, Edge, Brave, and Firefox",
+      "manifest": "downex-browser-extension/manifest.json",
+      "nativeMessagingHost": "downex-browser-extension/com.downex.host.json",
+      "files": {
+        "background.js": "Extension service worker, download listener, and native messaging pipe",
+        "content.js": "DOM media sniffer and shadow-DOM floating download pill",
+        "pageHook.js": "In-page XHR/Fetch hook intercepting DASH (.mpd), HLS (.m3u8), and YouTube streams",
+        "installHost.bat": "Windows registry installer for Google Chrome and Chromium native host registration"
+      }
+    },
+    "scripts": {
+      "vault.mjs": "AES-256-GCM + scrypt project vault packager, unpacker, and hacker defense manager",
+      "testVaultE2e.mjs": "Full automated test suite for vault packing, defense lifecycle, and sandbox restore",
+      "ship.mjs": "In-process OTA release compiler, container packager, Ed25519 signer, and GPHost publisher",
+      "buildBase.mjs": "Immutable Base v0.0.0 NSIS installer builder",
+      "decryptVault.ps1": "Windows PowerShell helper launcher for vault:unpack"
+    }
+  },
+  "otaPipeline": {
+    "appSlug": "downex",
+    "gphostFolder": "downex",
+    "apiBase": "https://gphost.eu.cc",
+    "triggerCommand": "npm run ship <target_version> -m '<release_notes>'",
+    "currentBaseVersion": "0.0.0",
+    "buildSteps": [
+      "1. Synchronize version in package.json, src-tauri/Cargo.toml, and src-tauri/tauri.conf.json",
+      "2. Compile frontend bundle (tsc && vite build)",
+      "3. Compile native Windows binary (tauri build --no-bundle)",
+      "4. Encrypt binary into AES-256-GCM OTA container (Magic: DWNX_OTA)",
+      "5. Generate Minisign Ed25519 cryptographic signature (.tauri/downex.key)",
+      "6. Stream container to Cloudflare R2 on GPHost (folder: downex, noShareLink: true)",
+      "7. Identify and safeguard Base 0.0.0 installer; archive previous version to downex/OLD/",
+      "8. Publish atomic release manifest: POST /api/v1/releases/downex/publish",
+      "9. Smoke test live HTTP 200 manifest and container endpoints",
+      "10. Revert local repository back to immutable base version 0.0.0"
+    ]
+  }
+}

@@ -1,0 +1,7 @@
+Downex License Agreement
+
+1. The Downex download manager software, artwork and other components included in this version of product (collectively the "Software") are the property of Downex. You must not (a) sell, rent, lease or sublicense all or any portion of the Software; (b) modify or prepare derivative works of the Software; (c) reverse engineer, decompile or disassemble the Software without authorization.
+
+2. You are granted a personal license to use Downex for legal downloading and queue management on your computers.
+
+3. Downex is provided "AS IS" without warranties of any kind, express or implied. In no event shall the authors or contributors be liable for any direct, indirect, incidental, special, or consequential damages arising out of the use or inability to use this software.
