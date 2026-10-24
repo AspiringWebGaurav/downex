@@ -1,7 +1,7 @@
 use tauri::image::Image;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
-use tauri::{AppHandle, Emitter, Manager, Runtime};
+use tauri::{AppHandle, Manager, Runtime};
 
 /// Dynamically constructs the tray context menu reflecting real-time window & download state (IDM / REA pattern)
 pub fn build_dynamic_tray_menu<R: Runtime>(app: &AppHandle<R>) -> Result<Menu<R>, Box<dyn std::error::Error>> {
@@ -127,8 +127,7 @@ pub fn setup_system_tray<R: Runtime>(app: &AppHandle<R>) -> Result<TrayIcon<R>, 
                 let _ = refresh_tray_menu(app);
             }
             "new_download" => {
-                let _ = create_or_show_main_window(app);
-                let _ = app.emit("open-new-download-modal", ());
+                crate::commands::show_download_dialog(app, None);
                 let _ = refresh_tray_menu(app);
             }
             "pause_all" => {

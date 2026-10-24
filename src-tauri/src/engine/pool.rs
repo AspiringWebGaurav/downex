@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 use tokio::sync::{mpsc, RwLock};
 use tokio_util::sync::CancellationToken;
 
-const MIN_SPLIT_THRESHOLD_BYTES: u64 = 1024 * 1024; // 1 MB minimum to split a chunk
+const MIN_SPLIT_THRESHOLD_BYTES: u64 = 10 * 1024 * 1024; // 10 MB minimum to split a chunk (avoids micro-connection thrashing near EOF)
 
 #[derive(Debug, Clone)]
 pub struct ActiveSegment {
@@ -116,6 +116,7 @@ impl DownloadEnginePool {
             segs.iter().map(|s| s.downloaded.load(Ordering::Relaxed)).sum()
         };
 
+        let t_progress_tx = progress_tx.clone();
         let telemetry_handle = tauri::async_runtime::spawn(async move {
             let mut last_bytes = initial_downloaded;
             let mut last_time = Instant::now();
@@ -194,7 +195,7 @@ impl DownloadEnginePool {
                             segments: snapshots,
                         };
 
-                        let _ = progress_tx.send(event).await;
+                        let _ = t_progress_tx.send(event).await;
                         let _ = p_db.update_download_progress(&p_task_id, current_total, speed);
                     }
                 }
@@ -245,10 +246,28 @@ impl DownloadEnginePool {
 
         if cancel_token.is_cancelled() {
             let _ = self.db.update_download_status(&task_id, "paused", 0, None);
+            let _ = progress_tx.send(DownloadProgressEvent {
+                task_id: task_id.clone(),
+                status: "paused".to_string(),
+                downloaded_bytes: total_downloaded.load(Ordering::Relaxed),
+                total_bytes,
+                speed_bytes_sec: 0,
+                eta_seconds: None,
+                segments: Vec::new(),
+            }).await;
         } else {
-            let final_downloaded = total_downloaded.load(Ordering::Relaxed);
+            let final_downloaded = total_bytes.unwrap_or_else(|| total_downloaded.load(Ordering::Relaxed));
             let _ = self.db.update_download_progress(&task_id, final_downloaded, 0);
             let _ = self.db.update_download_status(&task_id, "completed", 0, None);
+            let _ = progress_tx.send(DownloadProgressEvent {
+                task_id: task_id.clone(),
+                status: "completed".to_string(),
+                downloaded_bytes: final_downloaded,
+                total_bytes,
+                speed_bytes_sec: 0,
+                eta_seconds: None,
+                segments: Vec::new(),
+            }).await;
         }
 
         Ok(())
@@ -426,6 +445,11 @@ impl DownloadEnginePool {
     /// splits it in half atomically, and returns the new segment index.
     async fn try_steal_work(segments: &Arc<RwLock<Vec<ActiveSegment>>>) -> Option<u32> {
         let mut segs = segments.write().await;
+        // Strict cap at 32 segments: Prevents uncontrolled connection proliferation near completion
+        if segs.len() >= 32 {
+            return None;
+        }
+
         let mut max_remaining = 0u64;
         let mut target_seg_idx = None;
 

@@ -12,12 +12,13 @@ import {
   pauseQueue,
   isQueueRunning,
   queueDownload,
+  onRefreshDownloads,
   DownloadInfoModalPayload,
 } from '../services/tauriService';
 
 interface DownloadStore {
   items: DownloadItem[];
-  selectedCategory: string;
+  selectedView: string;
   searchQuery: string;
   isNewModalOpen: boolean;
   isStandaloneModal: boolean;
@@ -34,11 +35,11 @@ interface DownloadStore {
   pauseQueue: () => Promise<void>;
   queueDownload: (id: string) => Promise<void>;
   loadItems: () => Promise<void>;
-  addNewDownload: (url: string, folder?: string, queue?: string, headers?: Record<string, string>, startImmediately?: boolean) => Promise<void>;
+  addNewDownload: (url: string, folder?: string, queue?: string, headers?: Record<string, string>, startImmediately?: boolean, customFilename?: string) => Promise<void>;
   changeFolderAndRetry: (id: string, newFolder: string) => Promise<void>;
   togglePause: (id: string) => Promise<void>;
   removeDownload: (id: string, deleteFile?: boolean) => Promise<void>;
-  setSelectedCategory: (cat: string) => void;
+  setSelectedView: (view: string) => void;
   setSearchQuery: (query: string) => void;
   setNewModalOpen: (open: boolean) => void;
   initListener: () => () => void;
@@ -46,7 +47,7 @@ interface DownloadStore {
 
 export const useDownloadStore = create<DownloadStore>((set, get) => ({
   items: [],
-  selectedCategory: 'all',
+  selectedView: 'all',
   searchQuery: '',
   isNewModalOpen: false,
   isStandaloneModal: false,
@@ -79,21 +80,23 @@ export const useDownloadStore = create<DownloadStore>((set, get) => ({
       set((state) => {
         const merged = dbItems.map((dbItem) => {
           const existing = state.items.find((i) => i.id === dbItem.id);
-          const isDownloading = dbItem.status === 'downloading' || existing?.status === 'downloading';
+          // Database status is absolute authority for terminal/settled states
+          const isTerminalState = dbItem.status === 'completed' || dbItem.status === 'paused' || dbItem.status === 'failed';
+          const isDownloading = !isTerminalState && (dbItem.status === 'downloading' || existing?.status === 'downloading');
           const speed = isDownloading
             ? Math.max(existing?.speed_bytes_sec || 0, dbItem.speed_bytes_sec || 0)
-            : dbItem.speed_bytes_sec;
+            : 0;
 
-          let eta = existing?.eta_seconds;
+          let eta = isDownloading ? existing?.eta_seconds : null;
           if (!eta && isDownloading && speed > 0 && dbItem.total_bytes && dbItem.total_bytes > dbItem.downloaded_bytes) {
             eta = Math.max(1, Math.round((dbItem.total_bytes - dbItem.downloaded_bytes) / speed));
           }
 
           return {
             ...dbItem,
-            status: isDownloading ? 'downloading' : dbItem.status,
-            // Preserve live in-memory segments and active download metrics if available
-            segments: existing?.segments && existing.segments.length > 0 ? existing.segments : dbItem.segments,
+            status: isTerminalState ? dbItem.status : (isDownloading ? 'downloading' : dbItem.status),
+            // Preserve live in-memory segments and active download metrics only while downloading
+            segments: isDownloading && existing?.segments && existing.segments.length > 0 ? existing.segments : dbItem.segments,
             speed_bytes_sec: speed,
             eta_seconds: eta,
           };
@@ -134,8 +137,8 @@ export const useDownloadStore = create<DownloadStore>((set, get) => ({
     }
   },
 
-  addNewDownload: async (url: string, folder?: string, queue?: string, headers?: Record<string, string>, startImmediately = true) => {
-    const item = await addDownload(url, folder, queue, headers, startImmediately);
+  addNewDownload: async (url: string, folder?: string, queue?: string, headers?: Record<string, string>, startImmediately = true, customFilename?: string) => {
+    const item = await addDownload(url, folder, queue, headers, startImmediately, customFilename);
     set((state) => ({ items: [item, ...state.items] }));
   },
 
@@ -170,7 +173,7 @@ export const useDownloadStore = create<DownloadStore>((set, get) => ({
     set((state) => ({ items: state.items.filter((i) => i.id !== id) }));
   },
 
-  setSelectedCategory: (cat: string) => set({ selectedCategory: cat }),
+  setSelectedView: (view: string) => set({ selectedView: view }),
   setSearchQuery: (query: string) => set({ searchQuery: query }),
   setNewModalOpen: (open: boolean) =>
     set({
@@ -196,31 +199,34 @@ export const useDownloadStore = create<DownloadStore>((set, get) => ({
         const updated = state.items.map((item) => {
           if (item.id === event.task_id) {
             itemFound = true;
-            currentTotalSpeed += event.speed_bytes_sec;
-            if (item.status !== event.status && (event.status === 'completed' || event.status === 'failed' || event.status === 'error')) {
+            const isCompleted = event.status === 'completed';
+            const isTerminal = isCompleted || event.status === 'failed' || event.status === 'error' || event.status === 'paused';
+            if (item.status !== event.status && isTerminal) {
               taskFinished = true;
             }
-            const isDownloading = event.status === 'downloading' || item.status === 'downloading';
-            const effectiveSpeed = event.speed_bytes_sec > 0
-              ? event.speed_bytes_sec
-              : (isDownloading ? (item.speed_bytes_sec || 0) : 0);
+            const isDownloading = !isTerminal && (event.status === 'downloading' || item.status === 'downloading');
+            const effectiveSpeed = isDownloading
+              ? (event.speed_bytes_sec > 0 ? event.speed_bytes_sec : (item.speed_bytes_sec || 0))
+              : 0;
 
             const total = event.total_bytes ?? item.total_bytes;
-            let effectiveEta = event.eta_seconds ?? item.eta_seconds;
-            if ((effectiveEta === undefined || effectiveEta === null) && isDownloading && total && total > event.downloaded_bytes && effectiveSpeed > 0) {
+            let effectiveEta = isDownloading ? (event.eta_seconds ?? item.eta_seconds) : null;
+            if (effectiveEta === null && isDownloading && total && total > event.downloaded_bytes && effectiveSpeed > 0) {
               effectiveEta = Math.max(1, Math.round((total - event.downloaded_bytes) / effectiveSpeed));
             }
 
-            currentTotalSpeed += effectiveSpeed;
+            if (isDownloading) {
+              currentTotalSpeed += effectiveSpeed;
+            }
 
             return {
               ...item,
-              downloaded_bytes: event.downloaded_bytes,
+              downloaded_bytes: isCompleted && total ? total : event.downloaded_bytes,
               total_bytes: total,
               speed_bytes_sec: effectiveSpeed,
               eta_seconds: effectiveEta,
               status: event.status as any,
-              segments: event.segments && event.segments.length > 0 ? event.segments : item.segments,
+              segments: isDownloading && event.segments && event.segments.length > 0 ? event.segments : item.segments,
             };
           }
           if (item.status === 'downloading') {
@@ -245,7 +251,13 @@ export const useDownloadStore = create<DownloadStore>((set, get) => ({
       });
     });
 
-    // 2. Safety heartbeat polling: Sync with SQLite every 1000ms while any task is active
+    // 2. Refresh listener triggered when downloads are started from dialog/tray
+    const unlistenRefresh = onRefreshDownloads(() => {
+      get().loadItems();
+      get().setSelectedView('all');
+    });
+
+    // 3. Safety heartbeat polling: Sync with SQLite every 1000ms while any task is active
     const intervalId = setInterval(() => {
       const hasActive = get().items.some((i) => i.status === 'downloading' || i.status === 'probing');
       if (hasActive) {
@@ -255,6 +267,7 @@ export const useDownloadStore = create<DownloadStore>((set, get) => ({
 
     return () => {
       unlistenProgress();
+      unlistenRefresh();
       clearInterval(intervalId);
     };
   },

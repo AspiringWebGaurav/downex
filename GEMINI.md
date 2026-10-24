@@ -89,3 +89,11 @@ Downex is an independent, multi-process desktop download manager consisting of:
   ```
 - **Strict Gitignore Compliance:** Never remove `.env.local`, `.tauri/`, `reference/`, or `scratch/` from `.gitignore`.
 - **Reference Catalog:** Full architectural SOP and component mapping is maintained in [`PROJECT_MAP.json`](file:///c:/GITHUB/downex/PROJECT_MAP.json).
+
+---
+
+## 🛑 Step 4: Strict Git Push Permission Rule
+
+- **NEVER PUSH WITHOUT USER PERMISSION:** Agents, scripts, and workflows must **NEVER** execute `git push`, publish branches, or push tags to GitHub/remote repositories without explicit, direct user permission in the active session.
+- Always require the user to explicitly command or confirm a push before running `git push`.
+

@@ -63,23 +63,12 @@ impl QueueManager {
         let id = uuid::Uuid::new_v4().to_string();
         let queue = queue_id.unwrap_or_else(|| "default".to_string());
 
-        // Resolve single unified Downex download folder (strictly no category subfolders)
+        // Resolve unified Downex download folder
         let default_dir = PathBuf::from(self.get_default_download_directory());
         let save_dir_buf = match destination_folder {
             Some(ref custom) if !custom.trim().is_empty() => {
                 let p = PathBuf::from(custom.trim());
-                let p_str = p.to_string_lossy().replace('/', "\\");
-                let def_str = default_dir.to_string_lossy().replace('/', "\\");
-
-                // If path ends with any category subfolder, collapse directly to Downex root
-                let is_category = [
-                    r"\Video", r"\Compressed", r"\Music", r"\Programs", r"\Documents", r"\General",
-                    "Downloads\\Video", "Downloads\\Compressed", "Downloads\\Music", "Downloads\\Programs", "Downloads\\Documents"
-                ].iter().any(|cat| p_str.ends_with(cat));
-
-                if is_category || p_str == def_str || !p.is_absolute() {
-                    default_dir
-                } else if std::fs::create_dir_all(&p).is_ok() {
+                if p.is_absolute() && std::fs::create_dir_all(&p).is_ok() {
                     p
                 } else {
                     default_dir
@@ -456,7 +445,7 @@ impl QueueManager {
 }
 
 pub fn resolve_default_download_directory() -> PathBuf {
-    // 1. Primary: %USERPROFILE%\Downloads\Downex (Single unified folder, no IDM video/document subcategories)
+    // 1. Primary: %USERPROFILE%\Downloads\Downex
     if let Ok(user_profile) = std::env::var("USERPROFILE") {
         let primary = PathBuf::from(&user_profile).join("Downloads").join("Downex");
         if std::fs::create_dir_all(&primary).is_ok() {

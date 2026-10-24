@@ -1,7 +1,11 @@
 use crate::db::DownloadRecord;
 use crate::ota::{check_latest_release, ReleaseManifest};
 use crate::AppState;
-use tauri::{AppHandle, Manager, State};
+use std::sync::Mutex;
+use tauri::{AppHandle, Emitter, Manager, State};
+
+static LAST_DOWNLOAD_DIALOG_PAYLOAD: Mutex<Option<serde_json::Value>> = Mutex::new(None);
+static LAST_DOWNLOAD_COMPLETE_PAYLOAD: Mutex<Option<serde_json::Value>> = Mutex::new(None);
 
 #[tauri::command]
 pub async fn cmd_probe_url(
@@ -23,6 +27,7 @@ pub async fn cmd_add_download(
     queue_id: Option<String>,
     headers: Option<std::collections::HashMap<String, String>>,
     start_immediately: Option<bool>,
+    custom_filename: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<DownloadRecord, String> {
     state
@@ -33,7 +38,7 @@ pub async fn cmd_add_download(
             queue_id,
             headers,
             start_immediately.unwrap_or(true),
-            None,
+            custom_filename,
         )
         .await
         .map_err(|e| e.to_string())
@@ -192,10 +197,14 @@ pub fn sync_windows_installed_version(new_version: &str) {
 
     // 1. Current User Registry (Standard for NSIS currentUser install mode)
     if let Ok((key, _disp)) = hkcu.create_subkey(canonical_subkey) {
-        let _ = key.set_value("DisplayVersion", &clean_ver);
-        let _ = key.set_value("Version", &clean_ver);
-        let _ = key.set_value("VersionMajor", &major);
-        let _ = key.set_value("VersionMinor", &minor);
+        let existing = key.get_value::<String, _>("DisplayVersion").unwrap_or_default();
+        if existing != clean_ver {
+            let _ = key.set_value("DisplayVersion", &clean_ver);
+            let _ = key.set_value("Version", &clean_ver);
+            let _ = key.set_value("VersionMajor", &major);
+            let _ = key.set_value("VersionMinor", &minor);
+            eprintln!("[Downex Registry] Synced HKCU\\{} DisplayVersion to {}", canonical_subkey, clean_ver);
+        }
 
         if key.get_value::<String, _>("DisplayName").is_err() {
             let _ = key.set_value("DisplayName", &"Downex");
@@ -207,7 +216,6 @@ pub fn sync_windows_installed_version(new_version: &str) {
                 let _ = key.set_value("InstallLocation", dir);
             }
         }
-        eprintln!("[Downex Registry] Synced HKCU\\{} DisplayVersion to {}", canonical_subkey, clean_ver);
     }
 
     // 2. App Paths: Register 'downex' for Windows Search and Win+R execution
@@ -447,28 +455,220 @@ pub fn cmd_set_tray_icon(app: AppHandle, state: String) -> Result<(), String> {
     crate::tray::set_tray_icon_state(&app, &state).map_err(|e| e.to_string())
 }
 
-#[tauri::command]
-pub fn cmd_restore_manager_window(app: AppHandle) -> Result<(), String> {
-    if let Some(window) = app.get_webview_window("main") {
-        let _ = window.set_size(tauri::LogicalSize::new(960.0, 640.0));
-        let _ = window.center();
+pub fn show_download_dialog<R: tauri::Runtime>(app: &tauri::AppHandle<R>, payload: Option<serde_json::Value>) {
+    if let Some(ref p) = payload {
+        if let Ok(mut lock) = LAST_DOWNLOAD_DIALOG_PAYLOAD.lock() {
+            *lock = Some(p.clone());
+        }
+    }
+
+    if let Some(window) = app.get_webview_window("download_dialog") {
         let _ = window.show();
         let _ = window.unminimize();
+        let _ = window.center();
+        let _ = window.set_always_on_top(true);
         let _ = window.set_focus();
-        let _ = crate::tray::refresh_tray_menu(&app);
+    } else {
+        let builder = tauri::WebviewWindowBuilder::new(
+            app,
+            "download_dialog",
+            tauri::WebviewUrl::App("index.html?window=download_dialog".into()),
+        )
+        .title("Downex - Download File Info")
+        .inner_size(540.0, 440.0)
+        .decorations(false)
+        .transparent(false)
+        .shadow(true)
+        .center()
+        .resizable(false)
+        .always_on_top(true)
+        .visible(true);
+
+        let _ = builder.build();
     }
+    if let Some(p) = payload {
+        let _ = app.emit("open-download-info-modal", p);
+    }
+}
+
+#[tauri::command]
+pub fn cmd_get_download_dialog_payload() -> Option<serde_json::Value> {
+    LAST_DOWNLOAD_DIALOG_PAYLOAD.lock().ok().and_then(|mut g| g.take())
+}
+
+#[tauri::command]
+pub fn cmd_show_download_dialog(app: AppHandle, payload: Option<serde_json::Value>) -> Result<(), String> {
+    show_download_dialog(&app, payload);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn cmd_close_download_dialog(app: AppHandle) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window("download_dialog") {
+        let _ = window.set_always_on_top(false);
+        let _ = window.hide();
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn cmd_get_disk_free_space(path: String) -> Result<u64, String> {
+    #[cfg(target_os = "windows")]
+    {
+        use std::ffi::OsStr;
+        use std::os::windows::ffi::OsStrExt;
+        let mut free_bytes_available: u64 = 0;
+        let mut total_bytes: u64 = 0;
+        let mut total_free_bytes: u64 = 0;
+
+        let clean_path = path.trim().replace('/', "\\");
+        let mut wide: Vec<u16> = OsStr::new(&clean_path).encode_wide().collect();
+        wide.push(0);
+
+        unsafe {
+            let res = windows_sys::Win32::Storage::FileSystem::GetDiskFreeSpaceExW(
+                wide.as_ptr(),
+                &mut free_bytes_available,
+                &mut total_bytes,
+                &mut total_free_bytes,
+            );
+            if res != 0 {
+                return Ok(free_bytes_available);
+            }
+        }
+    }
+    Ok(0)
+}
+
+#[tauri::command]
+pub fn cmd_restore_manager_window(app: AppHandle) -> Result<(), String> {
+    let window = if let Some(w) = app.get_webview_window("main") {
+        w
+    } else {
+        crate::tray::create_or_show_main_window(&app).map_err(|e| e.to_string())?
+    };
+    let _ = window.show();
+    let _ = window.unminimize();
+    let _ = window.set_focus();
+    let _ = crate::tray::refresh_tray_menu(&app);
+    let _ = app.emit("refresh-downloads", ());
     Ok(())
 }
 
 #[tauri::command]
 pub fn cmd_hide_main_window(app: AppHandle) -> Result<(), String> {
     if let Some(window) = app.get_webview_window("main") {
-        let _ = window.set_size(tauri::LogicalSize::new(960.0, 640.0));
         let _ = window.hide();
         let _ = crate::tray::refresh_tray_menu(&app);
     }
     Ok(())
 }
+
+#[tauri::command]
+pub fn cmd_open_file(path: String) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        let clean_path = path.replace('/', "\\");
+        std::process::Command::new("cmd")
+            .args(["/C", "start", "", &clean_path])
+            .creation_flags(0x08000000) // CREATE_NO_WINDOW
+            .spawn()
+            .map_err(|e| e.to_string())?;
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = opener::open(&path);
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn cmd_open_file_with(path: String) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        let clean_path = path.replace('/', "\\");
+        std::process::Command::new("rundll32.exe")
+            .args(["shell32.dll,OpenAs_RunDLL", &clean_path])
+            .creation_flags(0x08000000) // CREATE_NO_WINDOW
+            .spawn()
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn cmd_open_file_folder(path: String) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        let clean_path = path.replace('/', "\\");
+        std::process::Command::new("explorer.exe")
+            .arg(format!("/select,{}", clean_path))
+            .creation_flags(0x08000000) // CREATE_NO_WINDOW
+            .spawn()
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+pub fn show_download_complete<R: tauri::Runtime>(app: &tauri::AppHandle<R>, payload: Option<serde_json::Value>) {
+    if let Some(ref p) = payload {
+        if let Ok(mut lock) = LAST_DOWNLOAD_COMPLETE_PAYLOAD.lock() {
+            *lock = Some(p.clone());
+        }
+    }
+
+    if let Some(window) = app.get_webview_window("download_complete") {
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.center();
+        let _ = window.set_always_on_top(true);
+        let _ = window.set_focus();
+    } else {
+        let builder = tauri::WebviewWindowBuilder::new(
+            app,
+            "download_complete",
+            tauri::WebviewUrl::App("index.html?window=download_complete".into()),
+        )
+        .title("Download complete")
+        .inner_size(520.0, 310.0)
+        .decorations(false)
+        .transparent(false)
+        .shadow(true)
+        .center()
+        .resizable(false)
+        .always_on_top(true)
+        .visible(true);
+
+        let _ = builder.build();
+    }
+    if let Some(p) = payload {
+        let _ = app.emit("open-download-complete-modal", p);
+    }
+}
+
+#[tauri::command]
+pub fn cmd_get_download_complete_payload() -> Option<serde_json::Value> {
+    LAST_DOWNLOAD_COMPLETE_PAYLOAD.lock().ok().and_then(|mut g| g.take())
+}
+
+#[tauri::command]
+pub fn cmd_show_download_complete(app: AppHandle, payload: Option<serde_json::Value>) -> Result<(), String> {
+    show_download_complete(&app, payload);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn cmd_close_download_complete(app: AppHandle) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window("download_complete") {
+        let _ = window.set_always_on_top(false);
+        let _ = window.hide();
+    }
+    Ok(())
+}
+
 
 
 

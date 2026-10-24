@@ -9,7 +9,8 @@ import { useDownloadStore } from './stores/downloadStore';
 import { useAppVersionStore } from './stores/appVersionStore';
 import { UpdateModal } from './components/UpdateModal';
 import { SettingsView } from './components/SettingsView';
-import { onOpenNewDownloadModal, onOpenDownloadInfoModal } from './services/tauriService';
+import { onOpenNewDownloadModal, showDownloadDialog, isTauri } from './services/tauriService';
+import { getCurrentWindow } from '@tauri-apps/api/window';
 import './App.css';
 
 export const App: React.FC = () => {
@@ -22,17 +23,23 @@ export const App: React.FC = () => {
   const initVersion = useAppVersionStore((state) => state.initVersion);
   const searchQuery = useDownloadStore((state) => state.searchQuery);
   const setSearchQuery = useDownloadStore((state) => state.setSearchQuery);
-  const isNewModalOpen = useDownloadStore((state) => state.isNewModalOpen);
   const setNewModalOpen = useDownloadStore((state) => state.setNewModalOpen);
-  const isStandaloneModal = useDownloadStore((state) => state.isStandaloneModal);
   const openNewModalWithData = useDownloadStore((state) => state.openNewModalWithData);
-  const selectedCategory = useDownloadStore((state) => state.selectedCategory);
+  const selectedView = useDownloadStore((state) => state.selectedView);
   const showTelemetryOnHome = useDownloadStore((state) => state.showTelemetryOnHome);
 
   useEffect(() => {
     initVersion();
     loadItems();
     const unlisten = initListener();
+
+    // Show window gracefully after initial DOM render to prevent white flash
+    if (isTauri) {
+      getCurrentWindow().show().then(() => {
+        getCurrentWindow().setFocus();
+      }).catch(() => {});
+    }
+
     return () => unlisten();
   }, [initVersion, loadItems, initListener]);
 
@@ -47,7 +54,7 @@ export const App: React.FC = () => {
     }
   }, [darkMode]);
 
-  // Global Ctrl+K / Ctrl+N shortcuts & Tray / Browser Extension Download Intercept Events
+  // Global Ctrl+K / Ctrl+N shortcuts & Tray events
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
@@ -57,35 +64,31 @@ export const App: React.FC = () => {
       }
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'n') {
         e.preventDefault();
-        setNewModalOpen(true);
+        showDownloadDialog();
       }
     };
     window.addEventListener('keydown', handleKeyDown);
 
-    const unlistenTrayModal = onOpenNewDownloadModal(() => {
-      setNewModalOpen(true);
-    });
+    // Browser preview fallback listener
+    const handleBrowserOpen = (e: any) => {
+      if (e.detail) {
+        openNewModalWithData(e.detail);
+      } else {
+        setNewModalOpen(true);
+      }
+    };
+    window.addEventListener('downex-open-new-download', handleBrowserOpen);
 
-    // IDM-style: When extension intercepts a link, pop up the Download File Info modal with probed data!
-    const unlistenInterceptModal = onOpenDownloadInfoModal((payload) => {
-      openNewModalWithData(payload);
+    const unlistenTrayModal = onOpenNewDownloadModal(() => {
+      showDownloadDialog();
     });
 
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('downex-open-new-download', handleBrowserOpen);
       unlistenTrayModal();
-      unlistenInterceptModal();
     };
   }, [setNewModalOpen, openNewModalWithData]);
-
-  // Requirement 2: If intercepted from browser while manager is in background, show ONLY the modal dialog
-  if (isStandaloneModal && isNewModalOpen) {
-    return (
-      <div className="w-screen h-screen bg-white dark:bg-zinc-900 text-zinc-900 dark:text-zinc-100 overflow-hidden font-sans select-none flex flex-col">
-        <NewDownloadModal isStandalone={true} />
-      </div>
-    );
-  }
 
   return (
     <div className="w-screen h-screen flex flex-col bg-white dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 overflow-hidden font-sans">
@@ -99,7 +102,7 @@ export const App: React.FC = () => {
 
         {/* Center Workspace */}
         <main className="flex-1 flex flex-col overflow-hidden bg-white dark:bg-zinc-950">
-          {selectedCategory === 'settings' ? (
+          {selectedView === 'settings' ? (
             <SettingsView darkMode={darkMode} setDarkMode={setDarkMode} />
           ) : (
             <>
@@ -120,7 +123,7 @@ export const App: React.FC = () => {
 
                 {/* New Download Action Button */}
                 <button
-                  onClick={() => setNewModalOpen(true)}
+                  onClick={() => showDownloadDialog()}
                   className="px-3.5 py-1.5 rounded-lg bg-zinc-900 text-white dark:bg-white dark:text-zinc-900 font-semibold text-xs flex items-center gap-1.5 shadow-xs hover:opacity-90 active:scale-[0.98] transition-all cursor-pointer"
                 >
                   <Plus className="w-4 h-4 stroke-[2.5]" />
@@ -135,7 +138,7 @@ export const App: React.FC = () => {
         </main>
 
         {/* Right Telemetry & Speed Sparkline Panel (Only when enabled in settings and not on settings page) */}
-        {showTelemetryOnHome && selectedCategory !== 'settings' && (
+        {showTelemetryOnHome && selectedView !== 'settings' && (
           <TelemetryWidget layout="sidebar" />
         )}
       </div>

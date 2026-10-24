@@ -19,8 +19,8 @@ export const DownexSidebar: React.FC<DownexSidebarProps> = ({ darkMode, setDarkM
     }
   });
 
-  const selectedCategory = useDownloadStore((state) => state.selectedCategory);
-  const setSelectedCategory = useDownloadStore((state) => state.setSelectedCategory);
+  const selectedView = useDownloadStore((state) => state.selectedView);
+  const setSelectedView = useDownloadStore((state) => state.setSelectedView);
   const setNewModalOpen = useDownloadStore((state) => state.setNewModalOpen);
   const items = useDownloadStore((state) => state.items);
   const status = useAppVersionStore((state) => state.status);
@@ -118,7 +118,7 @@ export const DownexSidebar: React.FC<DownexSidebarProps> = ({ darkMode, setDarkM
         {/* Navigation Items */}
         {navItems.map((item) => {
           const Icon = item.icon;
-          const isSelected = selectedCategory === item.id;
+          const isSelected = selectedView === item.id;
           const tooltip = `${item.label}${item.isAction ? ' (Ctrl+N)' : ''}${item.count !== undefined && item.count > 0 ? ` [${item.count}]` : ''}`;
 
           return (
@@ -129,7 +129,7 @@ export const DownexSidebar: React.FC<DownexSidebarProps> = ({ darkMode, setDarkM
                 if (item.isAction) {
                   setNewModalOpen(true);
                 } else {
-                  setSelectedCategory(item.id);
+                  setSelectedView(item.id);
                 }
               }}
               className={`relative flex items-center transition-all cursor-pointer rounded-lg text-xs font-medium ${

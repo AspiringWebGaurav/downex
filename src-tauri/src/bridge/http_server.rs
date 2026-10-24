@@ -6,7 +6,6 @@ use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 
-use tauri::{Emitter, Manager};
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct ExtensionDownloadRequest {
@@ -297,53 +296,54 @@ Content-Length: 0\r\n\r\n";
 
                         let should_show_dialog = req.show_dialog.unwrap_or(true);
                         if should_show_dialog && self.app_handle.is_some() {
-                            let probe_res = self
-                                .queue_manager
-                                .probe_url_info(&req.url, headers_opt.as_ref())
-                                .await;
+                            // FAST PATH: Resolve immediate filename from extension or URL to eliminate popup delay
+                            let initial_filename = req.filename.clone().unwrap_or_else(|| {
+                                req.url
+                                    .split('?')
+                                    .next()
+                                    .unwrap_or(&req.url)
+                                    .split('/')
+                                    .last()
+                                    .unwrap_or("download.bin")
+                                    .to_string()
+                            });
 
-                            let (resolved_filename, total_bytes, supports_ranges) = match probe_res {
-                                Ok(p) => {
-                                    let name = match req.filename {
-                                        Some(ref cf) if cf.contains('.') => cf.clone(),
-                                        _ => p.filename,
-                                    };
-                                    (name, p.total_bytes, p.supports_ranges)
-                                }
-                                Err(_) => {
-                                    let fallback_name = req.filename.clone().unwrap_or_else(|| {
-                                        req.url.split('?').next().unwrap_or(&req.url).split('/').last().unwrap_or("download.bin").to_string()
-                                    });
-                                    (fallback_name, None, true)
-                                }
-                            };
-
-                            let handle = self.app_handle.as_ref().unwrap();
-                            let mut standalone = false;
-                            if let Some(window) = handle.get_webview_window("main") {
-                                let is_already_visible = window.is_visible().unwrap_or(false) && !window.is_minimized().unwrap_or(false);
-                                if !is_already_visible {
-                                    standalone = true;
-                                    // Compact IDM "Download File Info" modal window size
-                                    let _ = window.set_size(tauri::LogicalSize::new(560.0, 430.0));
-                                    let _ = window.center();
-                                }
-                                let _ = window.show();
-                                let _ = window.unminimize();
-                                let _ = window.set_focus();
-                            }
-
-                            let payload = serde_json::json!({
+                            let handle = self.app_handle.as_ref().unwrap().clone();
+                            let initial_payload = serde_json::json!({
                                 "url": req.url,
-                                "filename": resolved_filename,
-                                "total_bytes": total_bytes,
-                                "supports_ranges": supports_ranges,
+                                "filename": initial_filename,
+                                "total_bytes": serde_json::Value::Null,
+                                "supports_ranges": true,
                                 "cookies": req.cookies,
                                 "referer": req.referer,
                                 "user_agent": req.user_agent,
-                                "standalone_modal": standalone,
                             });
-                            let _ = handle.emit("open-download-info-modal", payload);
+
+                            // INSTANT: Show dialog in front within milliseconds!
+                            crate::commands::show_download_dialog(&handle, Some(initial_payload));
+
+                            // ASYNC BACKGROUND PROBE: Query server in background to get precise Content-Length & range support
+                            let qm = self.queue_manager.clone();
+                            let url_clone = req.url.clone();
+                            let req_filename_clone = req.filename.clone();
+                            let custom_headers_clone = headers_opt.clone();
+                            tauri::async_runtime::spawn(async move {
+                                let headers_ref = custom_headers_clone.as_ref();
+                                if let Ok(p) = qm.probe_url_info(&url_clone, headers_ref).await {
+                                    use tauri::Emitter;
+                                    let resolved_name = match req_filename_clone {
+                                        Some(ref cf) if cf.contains('.') => cf.clone(),
+                                        _ => p.filename,
+                                    };
+                                    let update_payload = serde_json::json!({
+                                        "url": url_clone,
+                                        "filename": resolved_name,
+                                        "total_bytes": p.total_bytes,
+                                        "supports_ranges": p.supports_ranges,
+                                    });
+                                    let _ = handle.emit("open-download-info-modal", update_payload);
+                                }
+                            });
 
                             (
                                 200,
@@ -351,7 +351,7 @@ Content-Length: 0\r\n\r\n";
                                     "success": true,
                                     "data": {
                                         "dialog_opened": true,
-                                        "filename": resolved_filename,
+                                        "filename": initial_filename,
                                     }
                                 }),
                             )

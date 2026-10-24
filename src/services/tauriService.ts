@@ -37,14 +37,16 @@ export async function addDownload(
   queueId?: string,
   headers?: Record<string, string>,
   startImmediately = true,
+  customFilename?: string,
 ): Promise<DownloadItem> {
   if (!isTauri) {
     // Mock browser preview
+    const name = customFilename || url.split('/').pop() || 'file.bin';
     return {
       id: 'mock-' + Date.now(),
       url,
-      filename: url.split('/').pop() || 'file.bin',
-      destination_path: 'C:\\Downloads\\' + (url.split('/').pop() || 'file.bin'),
+      filename: name,
+      destination_path: 'C:\\Downloads\\' + name,
       total_bytes: 104857600,
       downloaded_bytes: 0,
       status: startImmediately ? 'downloading' : 'paused',
@@ -60,6 +62,7 @@ export async function addDownload(
     queueId,
     headers,
     startImmediately,
+    customFilename,
   });
 }
 
@@ -263,6 +266,36 @@ export function onOpenNewDownloadModal(callback: () => void): () => void {
   };
 }
 
+export function onRefreshDownloads(callback: () => void): () => void {
+  if (!isTauri) return () => {};
+  let isCancelled = false;
+  let unlistenFn: (() => void) | null = null;
+
+  listen('refresh-downloads', () => {
+    if (!isCancelled) {
+      callback();
+    }
+  })
+    .then((fn) => {
+      if (isCancelled) {
+        fn();
+      } else {
+        unlistenFn = fn;
+      }
+    })
+    .catch((err) => {
+      console.error('[Downex] Error listening to refresh-downloads:', err);
+    });
+
+  return () => {
+    isCancelled = true;
+    if (unlistenFn) {
+      unlistenFn();
+      unlistenFn = null;
+    }
+  };
+}
+
 export interface DownloadInfoModalPayload {
   url: string;
   filename?: string;
@@ -289,6 +322,46 @@ export async function hideMainWindow(): Promise<void> {
     await invoke('cmd_hide_main_window');
   } catch (e) {
     console.warn('Failed to hide main window:', e);
+  }
+}
+
+export async function showDownloadDialog(payload?: DownloadInfoModalPayload): Promise<void> {
+  if (!isTauri) {
+    window.dispatchEvent(new CustomEvent('downex-open-new-download', { detail: payload }));
+    return;
+  }
+  try {
+    await invoke('cmd_show_download_dialog', { payload: payload || null });
+  } catch (e) {
+    console.warn('Failed to show download dialog:', e);
+  }
+}
+
+export async function closeDownloadDialog(): Promise<void> {
+  if (!isTauri) return;
+  try {
+    await invoke('cmd_close_download_dialog');
+  } catch (e) {
+    console.warn('Failed to close download dialog:', e);
+  }
+}
+
+export async function getDownloadDialogPayload(): Promise<DownloadInfoModalPayload | null> {
+  if (!isTauri) return null;
+  try {
+    return await invoke<DownloadInfoModalPayload | null>('cmd_get_download_dialog_payload');
+  } catch {
+    return null;
+  }
+}
+
+export async function getDiskFreeSpace(path: string): Promise<number> {
+  if (!isTauri) return 142 * 1024 * 1024 * 1024; // Mock 142 GB in browser
+  try {
+    return await invoke<number>('cmd_get_disk_free_space', { path });
+  } catch (e) {
+    console.warn('Failed to get disk free space:', e);
+    return 0;
   }
 }
 
@@ -321,6 +394,87 @@ export function onOpenDownloadInfoModal(callback: (payload: DownloadInfoModalPay
     }
   };
 }
+
+export interface DownloadCompletePayload {
+  id: string;
+  url: string;
+  filename: string;
+  destination_path: string;
+  total_bytes?: number | null;
+  downloaded_bytes?: number | null;
+}
+
+export async function openFile(path: string): Promise<void> {
+  if (!isTauri) {
+    alert(`[Preview Mode] Open file: ${path}`);
+    return;
+  }
+  await invoke('cmd_open_file', { path });
+}
+
+export async function openFileWith(path: string): Promise<void> {
+  if (!isTauri) {
+    alert(`[Preview Mode] Open with...: ${path}`);
+    return;
+  }
+  await invoke('cmd_open_file_with', { path });
+}
+
+export async function openFileFolder(path: string): Promise<void> {
+  if (!isTauri) {
+    alert(`[Preview Mode] Open folder: ${path}`);
+    return;
+  }
+  await invoke('cmd_open_file_folder', { path });
+}
+
+export async function showDownloadCompleteDialog(payload?: DownloadCompletePayload): Promise<void> {
+  if (isTauri) {
+    await invoke('cmd_show_download_complete', { payload: payload || null });
+  }
+}
+
+export async function closeDownloadCompleteDialog(): Promise<void> {
+  if (isTauri) {
+    await invoke('cmd_close_download_complete');
+  }
+}
+
+export async function getDownloadCompletePayload(): Promise<DownloadCompletePayload | null> {
+  if (!isTauri) return null;
+  return await invoke<DownloadCompletePayload | null>('cmd_get_download_complete_payload');
+}
+
+export function onDownloadCompleted(callback: (payload: DownloadCompletePayload) => void): () => void {
+  if (!isTauri) return () => {};
+  let isCancelled = false;
+  let unlistenFn: (() => void) | null = null;
+
+  listen<DownloadCompletePayload>('download-completed', (e) => {
+    if (!isCancelled) {
+      callback(e.payload);
+    }
+  })
+    .then((fn) => {
+      if (isCancelled) {
+        fn();
+      } else {
+        unlistenFn = fn;
+      }
+    })
+    .catch((err) => {
+      console.error('[Downex] Error listening to download-completed:', err);
+    });
+
+  return () => {
+    isCancelled = true;
+    if (unlistenFn) {
+      unlistenFn();
+      unlistenFn = null;
+    }
+  };
+}
+
 
 
 

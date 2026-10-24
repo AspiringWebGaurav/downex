@@ -80,9 +80,33 @@ pub fn run() {
 
             // Forward download progress events to frontend at high frequency
             let app_handle = app.handle().clone();
+            let db_handle = db.clone();
             tauri::async_runtime::spawn(async move {
                 while let Some(progress) = progress_rx.recv().await {
-                    let _ = app_handle.emit("download-progress", progress);
+                    let is_completed = progress.status == "completed";
+                    let task_id = progress.task_id.clone();
+                    let _ = app_handle.emit("download-progress", &progress);
+
+                    if is_completed {
+                        if let Ok(Some(record)) = db_handle.get_download(&task_id) {
+                            let payload = serde_json::json!({
+                                "id": record.id,
+                                "url": record.url,
+                                "filename": record.filename,
+                                "destination_path": record.destination_path,
+                                "total_bytes": record.total_bytes,
+                                "downloaded_bytes": record.downloaded_bytes,
+                            });
+                            let _ = app_handle.emit("download-completed", &payload);
+                            crate::commands::show_download_complete(&app_handle, Some(payload));
+
+                            // Hide main downloader window so only the complete dialog appears on the desktop (IDM tribute)
+                            if let Some(main_win) = app_handle.get_webview_window("main") {
+                                let _ = main_win.hide();
+                                let _ = crate::tray::refresh_tray_menu(&app_handle);
+                            }
+                        }
+                    }
                 }
             });
 
@@ -123,6 +147,16 @@ pub fn run() {
             cmd_queue_download,
             cmd_restore_manager_window,
             cmd_hide_main_window,
+            cmd_show_download_dialog,
+            cmd_close_download_dialog,
+            cmd_get_download_dialog_payload,
+            cmd_get_disk_free_space,
+            cmd_open_file,
+            cmd_open_file_with,
+            cmd_open_file_folder,
+            cmd_show_download_complete,
+            cmd_close_download_complete,
+            cmd_get_download_complete_payload,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Downex application");

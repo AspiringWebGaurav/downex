@@ -1,13 +1,13 @@
 import React, { useState, useRef } from 'react';
-import { Play, Pause, Trash2, File, AlertCircle, FolderEdit, ListOrdered, ChevronDown, ChevronUp, ShieldCheck } from 'lucide-react';
+import { Play, Pause, Trash2, File, AlertCircle, FolderEdit, ListOrdered, ChevronDown, ChevronUp, ShieldCheck, FolderOpen, ExternalLink } from 'lucide-react';
 import { useDownloadStore } from '../stores/downloadStore';
-import { openFolderPicker } from '../services/tauriService';
+import { openFolderPicker, openFile, openFileFolder, showDownloadCompleteDialog } from '../services/tauriService';
 import { DeleteConfirmModal } from './DeleteConfirmModal';
 import { DownloadItem } from '../types/download';
 
 export const DownloadTable: React.FC = () => {
   const items = useDownloadStore((state) => state.items);
-  const selectedCategory = useDownloadStore((state) => state.selectedCategory);
+  const selectedView = useDownloadStore((state) => state.selectedView);
   const searchQuery = useDownloadStore((state) => state.searchQuery);
   const togglePause = useDownloadStore((state) => state.togglePause);
   const removeDownload = useDownloadStore((state) => state.removeDownload);
@@ -32,7 +32,7 @@ export const DownloadTable: React.FC = () => {
     setShowAllSegmentsMap((prev) => ({ ...prev, [id]: !prev[id] }));
   };
 
-  const isQueuesView = selectedCategory === 'queues';
+  const isQueuesView = selectedView === 'queues';
 
   const queuedItems = items
     .filter((item) => item.status === 'queued')
@@ -46,13 +46,13 @@ export const DownloadTable: React.FC = () => {
     if (searchQuery.trim() && !item.filename.toLowerCase().includes(searchQuery.toLowerCase())) {
       return false;
     }
-    if (selectedCategory === 'active') {
+    if (selectedView === 'active') {
       return item.status === 'downloading' || item.status === 'probing';
     }
-    if (selectedCategory === 'completed') {
+    if (selectedView === 'completed') {
       return item.status === 'completed';
     }
-    if (selectedCategory === 'queues') {
+    if (selectedView === 'queues') {
       return item.status === 'queued' || item.status === 'downloading' || item.status === 'probing';
     }
     return true;
@@ -299,7 +299,7 @@ export const DownloadTable: React.FC = () => {
                   </button>
                 )}
 
-                {item.status !== 'completed' && (
+                {item.status !== 'completed' ? (
                   <button
                     onClick={() => togglePause(item.id)}
                     className="p-1.5 rounded-md hover:bg-zinc-100 dark:hover:bg-zinc-800 text-zinc-600 dark:text-zinc-300 transition-colors cursor-pointer"
@@ -311,6 +311,37 @@ export const DownloadTable: React.FC = () => {
                       <Play className="w-3.5 h-3.5 fill-current" />
                     )}
                   </button>
+                ) : (
+                  <div className="flex items-center gap-1">
+                    <button
+                      onClick={() => openFile(item.destination_path)}
+                      className="p-1.5 rounded-md hover:bg-emerald-50 dark:hover:bg-emerald-950/40 text-emerald-600 dark:text-emerald-400 transition-colors cursor-pointer"
+                      title="Open file"
+                    >
+                      <ExternalLink className="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      onClick={() => openFileFolder(item.destination_path)}
+                      className="p-1.5 rounded-md hover:bg-zinc-100 dark:hover:bg-zinc-800 text-zinc-600 dark:text-zinc-300 transition-colors cursor-pointer"
+                      title="Show in folder"
+                    >
+                      <FolderOpen className="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      onClick={() => showDownloadCompleteDialog({
+                        id: item.id,
+                        url: item.url,
+                        filename: item.filename,
+                        destination_path: item.destination_path,
+                        total_bytes: item.total_bytes ?? undefined,
+                        downloaded_bytes: item.downloaded_bytes ?? undefined,
+                      })}
+                      className="px-2 py-0.5 rounded text-[10px] font-medium bg-emerald-100 hover:bg-emerald-200 dark:bg-emerald-950/60 dark:hover:bg-emerald-900/60 text-emerald-800 dark:text-emerald-300 transition-colors cursor-pointer"
+                      title="Show complete details dialog"
+                    >
+                      Details
+                    </button>
+                  </div>
                 )}
 
                 <button
@@ -347,16 +378,42 @@ export const DownloadTable: React.FC = () => {
 
             {/* IDM-Style Structured Information Grid (Image 2 Tribute) */}
             <div className="rounded-lg bg-zinc-50/90 dark:bg-zinc-950/80 border border-zinc-200/90 dark:border-zinc-800/90 p-3 text-[11px] font-mono grid grid-cols-2 md:grid-cols-3 gap-x-5 gap-y-2 select-text shadow-2xs">
-              <div className="flex items-center gap-1.5 overflow-hidden">
+              <div className="flex items-center gap-1.5 min-w-0">
                 <span className="text-zinc-400 dark:text-zinc-500 w-[78px] shrink-0 font-medium">Status</span>
-                <span className={`font-semibold truncate flex items-center gap-1.5 ${
-                  isDownloading ? 'text-blue-600 dark:text-blue-400' :
-                  item.status === 'completed' ? 'text-emerald-600 dark:text-emerald-400' :
-                  isPaused ? 'text-amber-600 dark:text-amber-400' : 'text-zinc-600 dark:text-zinc-400'
-                }`}>
-                  {isDownloading && <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-ping shrink-0 inline-block" />}
-                  {isDownloading ? 'Receiving data...' : isPaused ? 'Paused' : item.status === 'completed' ? 'Completed' : item.status}
-                </span>
+                <div className="flex items-center gap-2 min-w-0">
+                  {isDownloading && (
+                    <span className="relative flex h-3.5 w-3.5 items-center justify-center shrink-0">
+                      {/* Full 360-degree radar / beacon wave pulse */}
+                      <span className="absolute inline-flex h-full w-full rounded-full bg-emerald-400/80 animate-ping pointer-events-none" />
+                      {/* Permanent 100% solid full circle with glowing shadow */}
+                      <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500 shadow-[0_0_6px_rgba(16,185,129,0.9)]" />
+                    </span>
+                  )}
+                  {isPaused && (
+                    <span className="relative flex h-3.5 w-3.5 items-center justify-center shrink-0">
+                      <span className="inline-flex rounded-full h-2 w-2 bg-amber-500 shadow-[0_0_4px_rgba(245,158,11,0.6)]" />
+                    </span>
+                  )}
+                  {item.status === 'completed' && (
+                    <span className="relative flex h-3.5 w-3.5 items-center justify-center shrink-0">
+                      <span className="inline-flex rounded-full h-2 w-2 bg-emerald-500 shadow-[0_0_4px_rgba(16,185,129,0.6)]" />
+                    </span>
+                  )}
+                  {item.status === 'failed' && (
+                    <span className="relative flex h-3.5 w-3.5 items-center justify-center shrink-0">
+                      <span className="inline-flex rounded-full h-2 w-2 bg-rose-500 shadow-[0_0_4px_rgba(244,63,94,0.6)]" />
+                    </span>
+                  )}
+                  <span className={`font-semibold truncate ${
+                    isDownloading ? 'text-blue-600 dark:text-blue-400' :
+                    item.status === 'completed' ? 'text-emerald-600 dark:text-emerald-400' :
+                    isPaused ? 'text-amber-600 dark:text-amber-400' :
+                    item.status === 'failed' ? 'text-rose-600 dark:text-rose-400' :
+                    'text-zinc-600 dark:text-zinc-400'
+                  }`}>
+                    {isDownloading ? 'Receiving data...' : isPaused ? 'Paused' : item.status === 'completed' ? 'Completed' : item.status === 'failed' ? 'Failed' : item.status}
+                  </span>
+                </div>
               </div>
 
               <div className="flex items-center gap-1.5 overflow-hidden">
@@ -403,23 +460,42 @@ export const DownloadTable: React.FC = () => {
               </div>
             </div>
 
-            {/* Main Segmented Progress Bar (IDM tribute) */}
-            <div className="w-full h-3.5 bg-zinc-200/90 dark:bg-zinc-800 rounded-sm p-[1px] shadow-[inset_0_1.5px_3px_rgba(0,0,0,0.22)] border border-zinc-300/80 dark:border-zinc-700/70 relative overflow-hidden">
+            {/* Main Progress Bar (Sleek Slim Height with Rich Multi-Layer Animations) */}
+            <div className="w-full h-[15px] bg-zinc-200/90 dark:bg-zinc-800/90 rounded-sm p-[1px] shadow-[inset_0_1.5px_3px_rgba(0,0,0,0.22)] border border-zinc-300/80 dark:border-zinc-700/80 relative overflow-hidden flex items-center">
               <div
-                className={`h-full rounded-xs transition-all duration-200 relative overflow-hidden ${
+                className={`h-full rounded-xs transition-all duration-300 relative overflow-hidden ${
                   item.status === 'completed'
-                    ? 'bg-gradient-to-r from-emerald-600 to-emerald-500 shadow-sm'
+                    ? 'bg-gradient-to-r from-emerald-600 via-emerald-500 to-emerald-400 shadow-sm'
                     : isDownloading
-                    ? 'bg-emerald-600 shadow-[0_1px_3px_rgba(34,197,94,0.45)]'
+                    ? 'bg-gradient-to-r from-emerald-600 via-emerald-500 to-teal-500 shadow-[0_0_12px_rgba(16,185,129,0.5)]'
                     : isPaused
-                    ? 'bg-amber-500'
+                    ? 'bg-gradient-to-r from-amber-600 to-amber-500'
                     : item.status === 'failed'
-                    ? 'bg-rose-500'
+                    ? 'bg-gradient-to-r from-rose-600 to-rose-500'
                     : 'bg-zinc-400 dark:bg-zinc-600'
                 }`}
                 style={{ width: `${Math.max(percent > 0 ? percent : isDownloading ? 2 : 0, 0)}%` }}
               >
-                <div className="absolute inset-x-0 top-0 h-[45%] bg-white/35 rounded-t-xs pointer-events-none" />
+                {/* Flowing animated barber-pole diagonal stripes */}
+                {isDownloading && (
+                  <div className="absolute inset-0 animate-stripes opacity-45 mix-blend-overlay pointer-events-none" />
+                )}
+
+                {/* Sweeping specular light shimmer beam */}
+                {isDownloading && (
+                  <div className="animate-shimmer pointer-events-none" />
+                )}
+
+                {/* Top gloss glass highlight */}
+                <div className="absolute inset-x-0 top-0 h-[45%] bg-gradient-to-b from-white/35 to-transparent pointer-events-none" />
+
+                {/* Bottom 3D bevel shadow */}
+                <div className="absolute inset-x-0 bottom-0 h-[30%] bg-gradient-to-t from-black/20 to-transparent pointer-events-none" />
+
+                {/* Pulsing energetic leading-edge head at download boundary */}
+                {isDownloading && percent > 0 && percent < 100 && (
+                  <div className="absolute right-0 top-0 bottom-0 w-1.5 bg-white shadow-[0_0_8px_#ffffff,0_0_14px_#34d399] animate-pulse pointer-events-none" />
+                )}
               </div>
             </div>
 
@@ -526,9 +602,12 @@ export const DownloadTable: React.FC = () => {
                               </td>
                               <td className="py-1 px-3">
                                 {seg.is_active ? (
-                                  <span className="inline-flex items-center gap-1.5 text-blue-600 dark:text-blue-400 font-medium">
-                                    <span className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-ping" />
-                                    Receiving data...
+                                  <span className="inline-flex items-center gap-2 text-blue-600 dark:text-blue-400 font-medium">
+                                    <span className="relative flex h-3 w-3 items-center justify-center shrink-0">
+                                      <span className="absolute inline-flex h-full w-full rounded-full bg-blue-400/80 animate-ping pointer-events-none" />
+                                      <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-blue-500 shadow-[0_0_4px_rgba(59,130,246,0.8)]" />
+                                    </span>
+                                    <span>Receiving data...</span>
                                   </span>
                                 ) : seg.downloaded > 0 && seg.downloaded >= (seg.end - seg.start) ? (
                                   <span className="text-emerald-600 dark:text-emerald-400 font-medium">Completed</span>

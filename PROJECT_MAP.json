@@ -20,7 +20,8 @@
       "attempt2": "Permanently scrambles local vault file on disk with crypto.randomBytes(fileSize)",
       "recovery": "Successful unpack resets attempts to 0 and removes sidecar"
     },
-    "zeroPlainSecretsRule": "Never commit unencrypted .env.local, .tauri/*.key, or reference/ to version control."
+    "zeroPlainSecretsRule": "Never commit unencrypted .env.local, .tauri/*.key, or reference/ to version control.",
+    "gitPushPermissionRule": "NEVER execute git push, publish branches, or push tags to remote repositories without explicit user permission."
   },
   "components": {
     "desktopApp": {
@@ -31,11 +32,15 @@
       "src": {
         "components": {
           "DownexWindowHeader": "Centered frameless window controls, titlebar, minimize, and close",
-          "DownexSidebar": "Categories, download queues, scheduler, completed list, and settings tab",
+          "DownexSidebar": "Download views, queues, scheduler, completed list, and settings tab",
           "DownloadTable": "High-throughput real-time virtualized transfer list with progress rings",
-          "NewDownloadModal": "Manual URL entry, category selection, and segment worker configuration",
+          "NewDownloadModal": "Manual URL entry, destination folder selection, and segment worker configuration",
           "UpdateModal": "In-process OTA release notifier and downloader",
           "TelemetryWidget": "Active connection socket graph, aggregate speed, and RAM usage"
+        },
+        "windows": {
+          "DownloadDialogWindow": "Dedicated frameless browser link grabber dialog window",
+          "DownloadCompleteWindow": "IDM-style complete compilation, action buttons, and show folder window"
         },
         "stores": {
           "downloadStore.ts": "Zustand store for live download transfer states and speeds",
