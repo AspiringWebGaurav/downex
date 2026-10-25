@@ -19,7 +19,9 @@
     "vault:status": "node scripts/vault.mjs status",
     "vault:test": "node scripts/test-vault-e2e.mjs",
     "vault:decrypt": "node scripts/vault.mjs unpack",
-    "vault:encrypt": "node scripts/vault.mjs pack"
+    "vault:encrypt": "node scripts/vault.mjs pack",
+    "rea": "rea-agents",
+    "rea:doctor": "rea-agents mcp doctor"
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.0.9",
@@ -39,6 +41,7 @@
     "@types/react": "^19.0.10",
     "@types/react-dom": "^19.0.4",
     "@vitejs/plugin-react": "^4.3.4",
+    "rea-agents": "^6.7.0",
     "typescript": "^5.7.3",
     "vite": "^6.2.0"
   }

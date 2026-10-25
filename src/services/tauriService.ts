@@ -163,10 +163,19 @@ export async function writeUpdateStagingFile(fileName: string, bytes: Uint8Array
   });
 }
 
+export async function verifyUpdateSignature(containerBytes: Uint8Array, signature: string): Promise<boolean> {
+  if (!isTauri) return true;
+  return await invoke<boolean>('cmd_verify_update_signature', {
+    containerBytes: Array.from(containerBytes),
+    signature,
+  });
+}
+
 export async function applyInProcessUpdate(options: {
   binaryBytes?: Uint8Array;
   stagingPath?: string;
   targetVersion?: string;
+  signature?: string;
 }): Promise<void> {
   if (!isTauri) {
     alert(`[Mock Mode] Applied in-process update to ${options.targetVersion}!`);
@@ -176,6 +185,7 @@ export async function applyInProcessUpdate(options: {
     binaryBytes: options.binaryBytes ? Array.from(options.binaryBytes) : null,
     stagingPath: options.stagingPath || null,
     targetVersion: options.targetVersion || null,
+    signature: options.signature || null,
   });
 }
 

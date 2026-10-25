@@ -49,3 +49,26 @@ CREATE TABLE IF NOT EXISTS app_settings (
 INSERT OR IGNORE INTO queues (id, name, max_concurrent_tasks, is_active)
 VALUES ('default', 'Main Download Queue', 3, 1);
 "#;
+
+pub struct Migration {
+    pub version: i32,
+    pub description: &'static str,
+    pub sql: &'static str,
+}
+
+pub const MIGRATIONS: &[Migration] = &[
+    Migration {
+        version: 1,
+        description: "Initial base schema (downloads, segments, queues, app_settings)",
+        sql: CREATE_TABLES_SQL,
+    },
+    Migration {
+        version: 2,
+        description: "Add checksum and media_type fields for stream remuxer and integrity verification",
+        sql: r#"
+        ALTER TABLE downloads ADD COLUMN checksum TEXT;
+        ALTER TABLE downloads ADD COLUMN media_type TEXT;
+        "#,
+    },
+];
+

@@ -63,3 +63,15 @@ fn is_newer_version(remote: &str, current: &str) -> bool {
 
     false
 }
+
+pub const DOWNEX_PUBLIC_KEY: &str = "RWTlF3zfMjQrPQFQjTf9O0vLKNdG7hXa5+lE67R6eXO+J5chsKkmRCnU";
+
+pub fn verify_minisign_signature(data: &[u8], signature_str: &str) -> Result<(), String> {
+    let pubkey = minisign_verify::PublicKey::from_base64(DOWNEX_PUBLIC_KEY)
+        .map_err(|e| format!("Invalid embedded public key: {}", e))?;
+    let sig = minisign_verify::Signature::decode(signature_str)
+        .map_err(|e| format!("Failed to parse Minisign signature: {}", e))?;
+    pubkey.verify(data, &sig, false)
+        .map_err(|e| format!("Cryptographic signature verification failed: {}", e))?;
+    Ok(())
+}

@@ -18,6 +18,21 @@ pub struct NativeResponse {
     pub task_id: Option<String>,
 }
 
+fn get_bridge_token() -> Option<String> {
+    if let Ok(app_data) = std::env::var("APPDATA") {
+        let token_path = std::path::PathBuf::from(app_data)
+            .join("com.downex.manager")
+            .join("bridge.token");
+        if let Ok(token) = std::fs::read_to_string(token_path) {
+            let trimmed = token.trim();
+            if trimmed.len() >= 32 {
+                return Some(trimmed.to_string());
+            }
+        }
+    }
+    None
+}
+
 /// Run native messaging loop over stdin / stdout
 pub fn run_native_host() -> io::Result<()> {
     let mut stdin = io::stdin();
@@ -49,6 +64,18 @@ pub fn run_native_host() -> io::Result<()> {
                         message: "Downex Native Host is alive".to_string(),
                         task_id: None,
                     },
+                    "get_auth_token" => {
+                        let token = get_bridge_token().unwrap_or_default();
+                        NativeResponse {
+                            success: !token.is_empty(),
+                            message: if token.is_empty() {
+                                "Bridge token not found. Is Downex running?".to_string()
+                            } else {
+                                token
+                            },
+                            task_id: None,
+                        }
+                    }
                     "download" => {
                         if let Some(ref url) = msg.url {
                             let mut success = false;
@@ -63,15 +90,21 @@ pub fn run_native_host() -> io::Result<()> {
                                 "user_agent": msg.user_agent,
                             });
                             let payload_str = payload.to_string();
+                            let token_hdr = if let Some(token) = get_bridge_token() {
+                                format!("Authorization: Bearer {}\r\n", token)
+                            } else {
+                                String::new()
+                            };
 
                             if let Ok(mut stream) = std::net::TcpStream::connect("127.0.0.1:18888") {
                                 let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(3)));
                                 let req = format!(
                                     "POST /api/download HTTP/1.1\r\n\
 Host: 127.0.0.1:18888\r\n\
-Content-Type: application/json\r\n\
+{}Content-Type: application/json\r\n\
 Content-Length: {}\r\n\
 Connection: close\r\n\r\n{}",
+                                    token_hdr,
                                     payload_str.len(),
                                     payload_str
                                 );

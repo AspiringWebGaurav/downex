@@ -24,6 +24,8 @@ export interface DownloadItem {
   speed_bytes_sec: number;
   eta_seconds?: number | null;
   error_message?: string | null;
+  checksum?: string | null;
+  media_type?: string | null;
   created_at: number;
   updated_at: number;
   segments?: SegmentSnapshot[];
@@ -45,4 +47,5 @@ export interface ReleaseManifest {
   pub_date?: string;
   url?: string;
   size?: number;
+  signature?: string;
 }

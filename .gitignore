@@ -40,6 +40,7 @@ update*.downex.bin
 *.sig
 src-tauri/target/*.downex.bin
 src-tauri/target/*.sig
+releases/
 
 # Local Databases & Runtime WAL
 *.db

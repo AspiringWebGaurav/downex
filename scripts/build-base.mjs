@@ -52,7 +52,7 @@ if (!GPHOST_API_KEY) {
   process.exit(1);
 }
 
-const GPHOST_FOLDER = process.env.GPHOST_FOLDER || 'downex';
+const GPHOST_FOLDER = process.env.GPHOST_FOLDER || 'downex-dynamic-binaries';
 
 console.log('\n===============================================================');
 console.log('   Downex — Building Permanent Immutable Base 0.0.0 Binary');
@@ -73,15 +73,15 @@ console.log('[1/4] Compiling production frontend bundle (tsc && vite build)...')
 execSync('npm.cmd run build:frontend', { cwd: rootDir, stdio: 'inherit' });
 console.log('  ✓ Frontend compiled.');
 
-// 4. Compile Production Native Binary
-console.log('\n[2/4] Compiling native Windows release binary (tauri build --no-bundle)...');
+// 4. Compile Production Native Binary and NSIS Installer
+console.log('\n[2/4] Compiling native Windows release binary and NSIS base installer (tauri build --bundles nsis)...');
 const srcTauriDir = path.join(rootDir, 'src-tauri');
 const releaseAppName = path.join(srcTauriDir, 'target', 'release', 'Downex.exe');
 const releaseLower = path.join(srcTauriDir, 'target', 'release', 'downex.exe');
 if (fs.existsSync(releaseAppName)) fs.unlinkSync(releaseAppName);
 if (fs.existsSync(releaseLower)) fs.unlinkSync(releaseLower);
 
-execSync('npx.cmd tauri build --no-bundle', { cwd: rootDir, stdio: 'inherit' });
+execSync('npx.cmd tauri build --bundles nsis', { cwd: rootDir, stdio: 'inherit' });
 
 let binaryPath = releaseAppName;
 if (!fs.existsSync(binaryPath)) {
@@ -97,7 +97,19 @@ const sha256 = crypto.createHash('sha256').update(binaryBytes).digest('hex');
 console.log(`  ✓ Release binary built: ${(binaryBytes.length / (1024 * 1024)).toFixed(2)} MB`);
 console.log(`  ✓ SHA-256: ${sha256}`);
 
-// 5. Save Immutable Local Base Copy
+// Locate NSIS installer artifact
+let nsisInstallerPath = null;
+const nsisBundleDir = path.join(srcTauriDir, 'target', 'release', 'bundle', 'nsis');
+if (fs.existsSync(nsisBundleDir)) {
+  const files = fs.readdirSync(nsisBundleDir);
+  const setupFile = files.find((f) => f.endsWith('.exe') && !f.endsWith('.old'));
+  if (setupFile) {
+    nsisInstallerPath = path.join(nsisBundleDir, setupFile);
+    console.log(`  ✓ NSIS Setup Installer located: ${setupFile} (${(fs.statSync(nsisInstallerPath).size / (1024 * 1024)).toFixed(2)} MB)`);
+  }
+}
+
+// 5. Save Immutable Local Base Copies
 console.log('\n[3/4] Preserving immutable local copy in releases/base/...');
 const baseDir = path.join(rootDir, 'releases', 'base');
 fs.mkdirSync(baseDir, { recursive: true });
@@ -105,9 +117,32 @@ fs.mkdirSync(baseDir, { recursive: true });
 const localBaseExe = path.join(baseDir, 'Downex-0.0.0.exe');
 fs.writeFileSync(localBaseExe, binaryBytes);
 fs.writeFileSync(path.join(baseDir, 'Downex-0.0.0.exe.sha256'), sha256 + ' *Downex-0.0.0.exe\n');
-console.log(`  ✓ Permanently archived to: ${localBaseExe}`);
+console.log(`  ✓ Standalone executable permanently archived to: ${localBaseExe}`);
+
+if (nsisInstallerPath && fs.existsSync(nsisInstallerPath)) {
+  const installerBytes = fs.readFileSync(nsisInstallerPath);
+  const installerSha256 = crypto.createHash('sha256').update(installerBytes).digest('hex');
+  const localInstaller = path.join(baseDir, 'Downex-0.0.0-Setup.exe');
+  fs.writeFileSync(localInstaller, installerBytes);
+  fs.writeFileSync(path.join(baseDir, 'Downex-0.0.0-Setup.exe.sha256'), installerSha256 + ' *Downex-0.0.0-Setup.exe\n');
+  console.log(`  ✓ NSIS Setup Installer permanently archived to: ${localInstaller}`);
+}
 
 // 6. Upload Permanent Base Binary to GPHost
+const noUpload = process.argv.includes('--no-upload') || process.argv.includes('--dry-run');
+if (noUpload) {
+  console.log('\n[4/4] Skipping GPHost upload (--no-upload specified). Base 0.0.0 artifacts preserved locally.');
+  console.log('===============================================================');
+  console.log(' [SUCCESS] Permanent Base 0.0.0 Binary Verified & Archived!');
+  console.log(`   - Local Binary Archive: ${localBaseExe}`);
+  if (nsisInstallerPath && fs.existsSync(nsisInstallerPath)) {
+    console.log(`   - Local NSIS Installer: ${path.join(baseDir, 'Downex-0.0.0-Setup.exe')}`);
+  }
+  console.log(`   - SHA-256: ${sha256}`);
+  console.log('===============================================================\n');
+  process.exit(0);
+}
+
 console.log('\n[4/4] Uploading immutable base binary to GPHost Cloudflare R2...');
 const baseFilename = 'downex-base-0.0.0.exe';
 
@@ -123,7 +158,7 @@ try {
       filename: baseFilename,
       byteSize: binaryBytes.length,
       mimeType: 'application/vnd.microsoft.portable-executable',
-      folder: GPHOST_FOLDER,
+      folder: `${GPHOST_FOLDER}/base`,
       slug: 'downex-base',
       noShareLink: true,
       isPermanent: true,

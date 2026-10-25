@@ -21,6 +21,10 @@ pub struct DownloadRecord {
     pub queue_id: String,
     pub speed_bytes_sec: u64,
     pub error_message: Option<String>,
+    #[serde(default)]
+    pub checksum: Option<String>,
+    #[serde(default)]
+    pub media_type: Option<String>,
     pub created_at: i64,
     pub updated_at: i64,
 }
@@ -60,7 +64,7 @@ impl DatabaseManager {
             let _ = std::fs::create_dir_all(parent);
         }
 
-        let conn = Connection::open(&db_path)?;
+        let mut conn = Connection::open(&db_path)?;
 
         // Performance pragmas for high-throughput concurrent I/O
         conn.execute_batch(
@@ -70,12 +74,56 @@ impl DatabaseManager {
              PRAGMA temp_store = MEMORY;",
         )?;
 
-        conn.execute_batch(schema::CREATE_TABLES_SQL)?;
+        Self::apply_migrations(&mut conn)?;
 
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
             db_path,
         })
+    }
+
+    fn has_column(conn: &Connection, table: &str, column: &str) -> bool {
+        let mut stmt = match conn.prepare(&format!("PRAGMA table_info({})", table)) {
+            Ok(s) => s,
+            Err(_) => return false,
+        };
+        let names: Vec<String> = stmt
+            .query_map([], |row| row.get(1))
+            .map(|rows| rows.filter_map(|r| r.ok()).collect())
+            .unwrap_or_default();
+        names.iter().any(|n| n.eq_ignore_ascii_case(column))
+    }
+
+    fn apply_migrations(conn: &mut Connection) -> Result<()> {
+        let current_version: i32 = conn
+            .query_row("PRAGMA user_version;", [], |row| row.get(0))
+            .unwrap_or(0);
+
+        for migration in schema::MIGRATIONS {
+            if migration.version > current_version {
+                eprintln!(
+                    "[Downex DB] Applying migration v{}: {}",
+                    migration.version, migration.description
+                );
+
+                let tx = conn.transaction()?;
+                if migration.version == 2 {
+                    if !Self::has_column(&tx, "downloads", "checksum") {
+                        let _ = tx.execute("ALTER TABLE downloads ADD COLUMN checksum TEXT;", []);
+                    }
+                    if !Self::has_column(&tx, "downloads", "media_type") {
+                        let _ = tx.execute("ALTER TABLE downloads ADD COLUMN media_type TEXT;", []);
+                    }
+                } else {
+                    tx.execute_batch(migration.sql)?;
+                }
+                tx.execute_batch(&format!("PRAGMA user_version = {};", migration.version))?;
+                tx.commit()?;
+                eprintln!("[Downex DB] Successfully applied migration v{}", migration.version);
+            }
+        }
+
+        Ok(())
     }
 
     pub fn insert_download(&self, record: &DownloadRecord) -> Result<()> {
@@ -84,8 +132,8 @@ impl DatabaseManager {
             "INSERT INTO downloads (
                 id, url, filename, destination_path, total_bytes, downloaded_bytes,
                 status, etag, last_modified, headers_json, queue_id, speed_bytes_sec,
-                error_message, created_at, updated_at
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+                error_message, checksum, media_type, created_at, updated_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
             params![
                 record.id,
                 record.url,
@@ -100,6 +148,8 @@ impl DatabaseManager {
                 record.queue_id,
                 record.speed_bytes_sec as i64,
                 record.error_message,
+                record.checksum,
+                record.media_type,
                 record.created_at,
                 record.updated_at,
             ],
@@ -132,7 +182,7 @@ impl DatabaseManager {
         let mut stmt = conn.prepare(
             "SELECT id, url, filename, destination_path, total_bytes, downloaded_bytes,
                     status, etag, last_modified, headers_json, queue_id, speed_bytes_sec,
-                    error_message, created_at, updated_at
+                    error_message, checksum, media_type, created_at, updated_at
              FROM downloads ORDER BY created_at DESC",
         )?;
 
@@ -154,8 +204,10 @@ impl DatabaseManager {
                 queue_id: row.get(10)?,
                 speed_bytes_sec: speed as u64,
                 error_message: row.get(12)?,
-                created_at: row.get(13)?,
-                updated_at: row.get(14)?,
+                checksum: row.get(13)?,
+                media_type: row.get(14)?,
+                created_at: row.get(15)?,
+                updated_at: row.get(16)?,
             })
         })?;
 
@@ -171,7 +223,7 @@ impl DatabaseManager {
         let mut stmt = conn.prepare(
             "SELECT id, url, filename, destination_path, total_bytes, downloaded_bytes,
                     status, etag, last_modified, headers_json, queue_id, speed_bytes_sec,
-                    error_message, created_at, updated_at
+                    error_message, checksum, media_type, created_at, updated_at
              FROM downloads WHERE status = 'queued' ORDER BY created_at ASC",
         )?;
 
@@ -193,8 +245,10 @@ impl DatabaseManager {
                 queue_id: row.get(10)?,
                 speed_bytes_sec: speed as u64,
                 error_message: row.get(12)?,
-                created_at: row.get(13)?,
-                updated_at: row.get(14)?,
+                checksum: row.get(13)?,
+                media_type: row.get(14)?,
+                created_at: row.get(15)?,
+                updated_at: row.get(16)?,
             })
         })?;
 
@@ -210,7 +264,7 @@ impl DatabaseManager {
         let mut stmt = conn.prepare(
             "SELECT id, url, filename, destination_path, total_bytes, downloaded_bytes,
                     status, etag, last_modified, headers_json, queue_id, speed_bytes_sec,
-                    error_message, created_at, updated_at
+                    error_message, checksum, media_type, created_at, updated_at
              FROM downloads WHERE id = ?1",
         )?;
 
@@ -230,8 +284,10 @@ impl DatabaseManager {
                 queue_id: row.get(10)?,
                 speed_bytes_sec: speed as u64,
                 error_message: row.get(12)?,
-                created_at: row.get(13)?,
-                updated_at: row.get(14)?,
+                checksum: row.get(13)?,
+                media_type: row.get(14)?,
+                created_at: row.get(15)?,
+                updated_at: row.get(16)?,
             })
         })?;
 

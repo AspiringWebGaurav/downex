@@ -271,11 +271,21 @@ pub fn cmd_write_update_staging_file(file_name: String, bytes: Vec<u8>) -> Resul
 }
 
 #[tauri::command]
+pub fn cmd_verify_update_signature(
+    container_bytes: Vec<u8>,
+    signature: String,
+) -> Result<bool, String> {
+    crate::ota::verify_minisign_signature(&container_bytes, &signature)
+        .map(|_| true)
+}
+
+#[tauri::command]
 pub fn cmd_apply_in_process_update(
     app: AppHandle,
     binary_bytes: Option<Vec<u8>>,
     staging_path: Option<String>,
     target_version: Option<String>,
+    signature: Option<String>,
 ) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
@@ -293,22 +303,32 @@ pub fn cmd_apply_in_process_update(
 
         eprintln!("[Downex OTA] Starting in-process atomic shadow swap with {} bytes", bytes.len());
 
-        // Pre-sync Windows Installed Apps registry DisplayVersion
+        // 1. Minisign Ed25519 signature check if provided
+        if let Some(ref sig) = signature {
+            let trimmed = sig.trim();
+            if !trimmed.is_empty() {
+                crate::ota::verify_minisign_signature(&bytes, trimmed)
+                    .map_err(|e| format!("OTA integrity check failed: {}", e))?;
+                eprintln!("[Downex OTA] Cryptographic Minisign signature verified.");
+            }
+        }
+
+        // 2. Pre-sync Windows Installed Apps registry DisplayVersion
         if let Some(ref ver) = target_version {
             sync_windows_installed_version(ver);
         }
 
-        // 1. Sanity check: payload must not be trivial
+        // 3. Sanity check: payload must not be trivial
         if bytes.len() < 1024 * 512 {
             return Err("Invalid update payload: binary size is unexpectedly small".to_string());
         }
 
-        // 2. Validate Windows PE signature (MZ header)
+        // 4. Validate Windows PE signature (MZ header)
         if bytes.len() < 2 || bytes[0] != b'M' || bytes[1] != b'Z' {
             return Err("Invalid update payload: missing Windows executable PE header (MZ)".to_string());
         }
 
-        // 3. Resolve currently executing file path
+        // 5. Resolve currently executing file path
         let current_exe = std::env::current_exe()
             .map_err(|e| format!("Could not resolve current executable path: {}", e))?;
 
@@ -332,7 +352,7 @@ pub fn cmd_apply_in_process_update(
             let _ = std::fs::remove_file(&old_exe);
         }
 
-        // 4. Stage verified binary into temporary staging file first
+        // 6. Stage verified binary into temporary staging file first
         {
             let mut file = std::fs::File::create(&tmp_exe)
                 .map_err(|e| format!("Could not create staging update file: {}", e))?;
@@ -342,7 +362,7 @@ pub fn cmd_apply_in_process_update(
                 .map_err(|e| format!("Could not flush update payload to disk: {}", e))?;
         }
 
-        // 5. In-Process NTFS Atomic Shadow Swap:
+        // 7. In-Process NTFS Atomic Shadow Swap:
         // Rename running .exe -> .exe.old
         std::fs::rename(&current_exe, &old_exe)
             .map_err(|e| {
@@ -363,21 +383,34 @@ pub fn cmd_apply_in_process_update(
             let _ = std::fs::remove_file(path_str);
         }
 
-        eprintln!("[Downex OTA] NTFS Atomic Swap successful! Spawning detached watchdog...");
+        eprintln!("[Downex OTA] NTFS Atomic Swap successful! Spawning self-healing watchdog...");
 
-        // 6. Spawn clean detached Windows launcher:
-        //    a) Waits 1s for the current PID to completely terminate (releasing the single-instance mutex)
-        //    b) Starts the new executable with foreground flags
+        // 8. Spawn Resilient Self-Healing Watchdog Supervisor:
+        //    a) Waits for old PID to exit
+        //    b) Starts new binary
+        //    c) Monitors for 6 seconds
+        //    d) If new process crashes within 6 seconds, restores .old and restarts with --rollback-recovery
         let pid = std::process::id();
-        let exe_path = current_exe.to_string_lossy().to_string();
+        let exe_str = current_exe.to_string_lossy().replace('\'', "''");
+        let old_str = old_exe.to_string_lossy().replace('\'', "''");
 
-        let restart_cmd = format!(
-            "timeout /t 1 /nobreak >nul & start \"\" \"{}\" --restarted-after-update --foreground",
-            exe_path
+        let watchdog_script = format!(
+            "$oldPid = {pid}; \
+             $exe = '{exe}'; \
+             $old = '{old}'; \
+             for ($i=0; $i -lt 50; $i++) {{ if (-not (Get-Process -Id $oldPid -ErrorAction SilentlyContinue)) {{ break }}; Start-Sleep -Milliseconds 100 }}; \
+             $p = Start-Process -FilePath $exe -ArgumentList '--restarted-after-update --foreground' -PassThru; \
+             if (-not $p) {{ Move-Item -Path $old -Destination $exe -Force; Start-Process -FilePath $exe -ArgumentList '--rollback-recovery'; exit }}; \
+             $crashed = $false; \
+             for ($j=0; $j -lt 12; $j++) {{ Start-Sleep -Milliseconds 500; if ($p.HasExited) {{ $crashed = $true; break }} }}; \
+             if ($crashed) {{ Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue; Start-Sleep -Milliseconds 300; Move-Item -Path $old -Destination $exe -Force; Start-Process -FilePath $exe -ArgumentList '--rollback-recovery' }}",
+            pid = pid,
+            exe = exe_str,
+            old = old_str
         );
 
-        let spawn_result = std::process::Command::new("cmd.exe")
-            .args(["/c", &restart_cmd])
+        let spawn_result = std::process::Command::new("powershell.exe")
+            .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-NonInteractive", "-Command", &watchdog_script])
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
@@ -386,7 +419,7 @@ pub fn cmd_apply_in_process_update(
 
         match spawn_result {
             Ok(_) => {
-                eprintln!("[Downex OTA] Restart launcher spawned for PID {}. Terminating current process.", pid);
+                eprintln!("[Downex OTA] Self-healing watchdog spawned for PID {}. Terminating current process.", pid);
                 for (_label, window) in app.webview_windows() {
                     let _ = window.hide();
                 }
@@ -399,16 +432,16 @@ pub fn cmd_apply_in_process_update(
                 Ok(())
             }
             Err(e) => {
-                // Rollback if detached launcher couldn't spawn
+                // Rollback if detached supervisor couldn't spawn
                 let _ = std::fs::remove_file(&current_exe);
                 let _ = std::fs::rename(&old_exe, &current_exe);
-                Err(format!("Could not spawn restart watcher: {}. Restored previous version.", e))
+                Err(format!("Could not spawn restart supervisor: {}. Restored previous version.", e))
             }
         }
     }
     #[cfg(not(target_os = "windows"))]
     {
-        let _ = (app, binary_bytes, staging_path, target_version);
+        let _ = (app, binary_bytes, staging_path, target_version, signature);
         Err("In-process atomic swap is supported on Windows".to_string())
     }
 }

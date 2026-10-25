@@ -60,10 +60,32 @@
     const title = videoDetails.title || document.title.replace(' - YouTube', '');
     const formats = [];
 
+    function resolveFormatUrl(fmt) {
+      if (fmt.url) return fmt.url;
+      const cipher = fmt.signatureCipher || fmt.cipher;
+      if (cipher) {
+        try {
+          const params = new URLSearchParams(cipher);
+          const url = params.get('url');
+          if (url) {
+            const sig = params.get('s') || params.get('sig') || params.get('signature');
+            const sp = params.get('sp') || 'sig';
+            if (sig) {
+              const sep = url.includes('?') ? '&' : '?';
+              return `${url}${sep}${sp}=${encodeURIComponent(sig)}`;
+            }
+            return url;
+          }
+        } catch (_) {}
+      }
+      return null;
+    }
+
     // Progressive Formats (Video + Audio combined)
     if (streaming.formats) {
       for (const fmt of streaming.formats) {
-        if (fmt.url) {
+        const url = resolveFormatUrl(fmt);
+        if (url) {
           formats.push({
             itag: fmt.itag,
             quality: fmt.qualityLabel || `${fmt.height}p`,
@@ -71,7 +93,7 @@
             mimeType: fmt.mimeType,
             hasAudio: true,
             hasVideo: true,
-            url: fmt.url,
+            url,
             isAdaptive: false,
           });
         }
@@ -86,15 +108,16 @@
       for (const fmt of streaming.adaptiveFormats) {
         const isAudio = fmt.mimeType && fmt.mimeType.startsWith('audio/');
         const isVideo = fmt.mimeType && fmt.mimeType.startsWith('video/');
+        const url = resolveFormatUrl(fmt);
 
-        if (isAudio && fmt.url) {
+        if (isAudio && url) {
           if (fmt.bitrate > bestAudioBitrate) {
             bestAudioBitrate = fmt.bitrate;
-            bestAudioUrl = fmt.url;
+            bestAudioUrl = url;
           }
         }
 
-        if (isVideo && fmt.url) {
+        if (isVideo && url) {
           formats.push({
             itag: fmt.itag,
             quality: fmt.qualityLabel || `${fmt.height}p`,
@@ -102,7 +125,7 @@
             mimeType: fmt.mimeType,
             hasAudio: false,
             hasVideo: true,
-            url: fmt.url,
+            url,
             isAdaptive: true,
           });
         }

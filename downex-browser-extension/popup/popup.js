@@ -45,6 +45,28 @@ document.addEventListener('DOMContentLoaded', async () => {
     return `${val.toFixed(i === 0 ? 0 : 2)} ${units[i]}`;
   }
 
+  let popupAuthToken = null;
+  async function getPopupAuthToken() {
+    if (popupAuthToken) return popupAuthToken;
+    try {
+      const stored = await chrome.storage.local.get(['downex_auth_token']);
+      if (stored && stored.downex_auth_token) {
+        popupAuthToken = stored.downex_auth_token;
+        return popupAuthToken;
+      }
+    } catch (_) {}
+    try {
+      const resp = await new Promise((r) => {
+        chrome.runtime.sendMessage({ type: 'GET_BRIDGE_TOKEN' }, (res) => r(res));
+      });
+      if (resp && resp.token) {
+        popupAuthToken = resp.token;
+        return popupAuthToken;
+      }
+    } catch (_) {}
+    return null;
+  }
+
   // 1. Load config
   chrome.storage.local.get(['config'], (result) => {
     if (result.config) {
@@ -104,9 +126,14 @@ document.addEventListener('DOMContentLoaded', async () => {
 
             // Query active tasks and speed
             try {
+              const token = await getPopupAuthToken();
+              const headers = { 'Accept': 'application/json' };
+              if (token) headers['Authorization'] = `Bearer ${token}`;
+
               const statusResp = await fetch('http://127.0.0.1:18888/api/status', {
                 method: 'GET',
                 cache: 'no-store',
+                headers,
               });
               if (statusResp.ok) {
                 const sJson = await statusResp.json();
@@ -239,9 +266,13 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     probeTimeout = setTimeout(async () => {
       try {
+        const token = await getPopupAuthToken();
+        const headers = { 'Content-Type': 'application/json' };
+        if (token) headers['Authorization'] = `Bearer ${token}`;
+
         const resp = await fetch('http://127.0.0.1:18888/api/probe', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers,
           body: JSON.stringify({ url: trimmed }),
         });
 

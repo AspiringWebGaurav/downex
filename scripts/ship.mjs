@@ -78,7 +78,7 @@ if (!GPHOST_API_KEY) {
   process.exit(1);
 }
 
-const GPHOST_FOLDER = process.env.GPHOST_FOLDER || 'downex';
+const GPHOST_FOLDER = process.env.GPHOST_FOLDER || 'downex-dynamic-binaries';
 const GPHOST_APP_SLUG = process.env.GPHOST_APP_SLUG || 'downex';
 
 console.log('\n===============================================================');
@@ -216,6 +216,7 @@ try {
       // Locate immutable base file
       const baseFile = allGPHostFiles.find(
         (f) =>
+          f.folder === `${GPHOST_FOLDER}/base` ||
           f.slug === 'downex-base' ||
           f.slug === 'downex-app' ||
           f.filename?.includes('base') ||

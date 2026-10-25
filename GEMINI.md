@@ -78,6 +78,11 @@ Downex is an independent, multi-process desktop download manager consisting of:
   node scripts/test-vault-e2e.mjs <passphrase>
   ```
 
+- **Verify REA (Reverse Engineer Anything) MCP Health:**
+  ```bash
+  npm run rea:doctor
+  ```
+
 ---
 
 ## 🔐 Step 3: Vault Maintenance & Zero-Leak Rules
@@ -96,4 +101,12 @@ Downex is an independent, multi-process desktop download manager consisting of:
 
 - **NEVER PUSH WITHOUT USER PERMISSION:** Agents, scripts, and workflows must **NEVER** execute `git push`, publish branches, or push tags to GitHub/remote repositories without explicit, direct user permission in the active session.
 - Always require the user to explicitly command or confirm a push before running `git push`.
+
+---
+
+## 🔬 Step 5: Terminology Rule — "REA" Definition
+
+- **CRITICAL DEFINITION:** When the user writes **"REA"** in capital letters, it **ALWAYS** refers to **Reverse Engineering** / **Reverse Engineer Anything** (`morluto/rea`, `rea-agents`, binary analysis, disassemblies, or reverse engineering reference material).
+- **NEVER** interpret all-caps **"REA"** as React or the frontend React framework. (The frontend UI framework is referred to as "React" with standard capitalization).
+
 

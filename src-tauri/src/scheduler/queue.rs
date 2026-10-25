@@ -114,6 +114,8 @@ impl QueueManager {
             queue_id: queue.clone(),
             speed_bytes_sec: 0,
             error_message: None,
+            checksum: None,
+            media_type: None,
             created_at: now,
             updated_at: now,
         };

@@ -4,7 +4,7 @@
  * NTFS atomic swap, and rollback recovery.
  */
 
-import { checkUpdates, writeUpdateStagingFile, applyInProcessUpdate, setTrayIcon } from './tauriService';
+import { checkUpdates, writeUpdateStagingFile, applyInProcessUpdate, setTrayIcon, verifyUpdateSignature } from './tauriService';
 import { unpackOtaPayload } from './otaContainer';
 import { ReleaseManifest } from '../types/download';
 import { cleanVersion, compareSemver } from '../utils/version';
@@ -226,10 +226,20 @@ class UpdateService {
     this.notify({ state: 'verifying' });
 
     try {
-      // 1. Decrypt and authenticate payload using WebCrypto AES-GCM
+      // 1. Minisign Ed25519 cryptographic signature verification
+      const signature = this.status.manifest?.signature;
+      if (signature && signature.trim().length > 0) {
+        const rawBytes = new Uint8Array(rawBuffer);
+        const valid = await verifyUpdateSignature(rawBytes, signature.trim());
+        if (!valid) {
+          throw new Error('Ed25519 signature verification failed! Update rejected for security.');
+        }
+      }
+
+      // 2. Decrypt and authenticate payload using WebCrypto AES-GCM
       const unpacked = await unpackOtaPayload(rawBuffer);
 
-      // 2. Write verified executable into temporary staging directory
+      // 3. Write verified executable into temporary staging directory
       const stagingFilename = `downex-v${targetVersion}.staged.exe`;
       const stagedPath = await writeUpdateStagingFile(stagingFilename, unpacked.payload);
 
@@ -271,6 +281,7 @@ class UpdateService {
       await applyInProcessUpdate({
         stagingPath: this.stagedBinaryPath,
         targetVersion,
+        signature: this.status.manifest?.signature || undefined,
       });
 
       this.notify({ state: 'restarting' });

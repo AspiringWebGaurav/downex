@@ -8,8 +8,9 @@
   "migrationSOP": {
     "step1": "Clone repository: git clone https://github.com/AspiringWebGaurav/downex.git",
     "step2": "Restore private workspace assets: npm run vault:unpack (Enter master password when prompted)",
-    "step3": "Install dependencies: npm install",
-    "step4": "Launch development environment: npm run dev"
+    "step3": "Install dependencies: npm install (installs all project tooling, Tauri CLI, and REA toolchain)",
+    "step4": "Verify REA MCP health: npm run rea:doctor",
+    "step5": "Launch development environment: npm run dev"
   },
   "securityProtocol": {
     "vaultContainer": "downex-vault.enc",
@@ -21,7 +22,8 @@
       "recovery": "Successful unpack resets attempts to 0 and removes sidecar"
     },
     "zeroPlainSecretsRule": "Never commit unencrypted .env.local, .tauri/*.key, or reference/ to version control.",
-    "gitPushPermissionRule": "NEVER execute git push, publish branches, or push tags to remote repositories without explicit user permission."
+    "gitPushPermissionRule": "NEVER execute git push, publish branches, or push tags to remote repositories without explicit user permission.",
+    "reaDefinitionRule": "When the user writes 'REA' in all-caps, it strictly means Reverse Engineering / Reverse Engineer Anything (morluto/rea, rea-agents), NEVER React."
   },
   "components": {
     "desktopApp": {
@@ -65,15 +67,15 @@
             "state.rs": "Transfer state machine"
           },
           "bridge": {
-            "nativeHost.rs": "Chrome Native Messaging stdio protocol handler",
-            "httpServer.rs": "Local fallback WebSocket/HTTP bridge for non-native extension targets"
+            "native_host.rs": "Chrome Native Messaging stdio protocol handler",
+            "http_server.rs": "Air-gapped local loopback bridge with token auth, origin whitelisting, and path traversal protection"
           },
           "db": {
-            "mod.rs": "SQLite WAL database manager for download tasks, queues, and segments",
-            "schema.rs": "SQLite table creation statements and pragmas"
+            "mod.rs": "SQLite WAL database manager with atomic pragma user_version migrations",
+            "schema.rs": "SQLite table creation statements, migrations, and pragma definitions"
           },
           "ota": {
-            "mod.rs": "In-process binary updater, SHA-256 validator, and NTFS atomic shadow swap"
+            "mod.rs": "Minisign Ed25519 cryptographic verifier, in-process updater, and self-healing watchdog"
           },
           "scheduler": {
             "queue.rs": "Concurrency queues with tokio semaphore limits"
@@ -83,27 +85,27 @@
       }
     },
     "browserExtension": {
-      "description": "Manifest V3 / V2 WebExtension for Chrome, Edge, Brave, and Firefox",
+      "description": "Manifest V3 WebExtension for Chrome, Edge, Brave, and Chromium browsers",
       "manifest": "downex-browser-extension/manifest.json",
       "nativeMessagingHost": "downex-browser-extension/com.downex.host.json",
       "files": {
-        "background.js": "Extension service worker, download listener, and native messaging pipe",
-        "content.js": "DOM media sniffer and shadow-DOM floating download pill",
-        "pageHook.js": "In-page XHR/Fetch hook intercepting DASH (.mpd), HLS (.m3u8), and YouTube streams",
-        "installHost.bat": "Windows registry installer for Google Chrome and Chromium native host registration"
+        "background.js": "Extension service worker, token handshake, download listener, and loopback bridge",
+        "content.js": "DOM media sniffer, shadow-DOM floating pill, and gated click listener with Alt bypass",
+        "page-hook.js": "In-page XHR/Fetch hook intercepting DASH (.mpd), HLS (.m3u8), and YouTube cipher streams",
+        "install-host.bat": "Windows registry installer for Google Chrome and Chromium native host registration"
       }
     },
     "scripts": {
       "vault.mjs": "AES-256-GCM + scrypt project vault packager, unpacker, and hacker defense manager",
-      "testVaultE2e.mjs": "Full automated test suite for vault packing, defense lifecycle, and sandbox restore",
+      "test-vault-e2e.mjs": "Full automated test suite for vault packing, defense lifecycle, and sandbox restore",
       "ship.mjs": "In-process OTA release compiler, container packager, Ed25519 signer, and GPHost publisher",
-      "buildBase.mjs": "Immutable Base v0.0.0 NSIS installer builder",
-      "decryptVault.ps1": "Windows PowerShell helper launcher for vault:unpack"
+      "build-base.mjs": "Immutable Base v0.0.0 NSIS installer and standalone executable builder",
+      "decrypt-vault.ps1": "Windows PowerShell helper launcher for vault:unpack"
     }
   },
   "otaPipeline": {
     "appSlug": "downex",
-    "gphostFolder": "downex",
+    "gphostFolder": "downex-dynamic-binaries",
     "apiBase": "https://gphost.eu.cc",
     "triggerCommand": "npm run ship <target_version> -m '<release_notes>'",
     "currentBaseVersion": "0.0.0",
@@ -113,8 +115,8 @@
       "3. Compile native Windows binary (tauri build --no-bundle)",
       "4. Encrypt binary into AES-256-GCM OTA container (Magic: DWNX_OTA)",
       "5. Generate Minisign Ed25519 cryptographic signature (.tauri/downex.key)",
-      "6. Stream container to Cloudflare R2 on GPHost (folder: downex, noShareLink: true)",
-      "7. Identify and safeguard Base 0.0.0 installer; archive previous version to downex/OLD/",
+      "6. Stream container to Cloudflare R2 on GPHost (folder: downex-dynamic-binaries, noShareLink: true)",
+      "7. Identify and safeguard Base 0.0.0 installer in downex-dynamic-binaries/base/; archive previous version to downex-dynamic-binaries/OLD/",
       "8. Publish atomic release manifest: POST /api/v1/releases/downex/publish",
       "9. Smoke test live HTTP 200 manifest and container endpoints",
       "10. Revert local repository back to immutable base version 0.0.0"

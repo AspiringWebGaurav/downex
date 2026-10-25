@@ -52,6 +52,50 @@ pub struct ExtensionHttpBridge {
     queue_manager: Arc<QueueManager>,
     db: DatabaseManager,
     port: u16,
+    auth_token: String,
+}
+
+fn is_allowed_origin(origin: &str) -> bool {
+    let o = origin.trim();
+    o.starts_with("chrome-extension://")
+        || o.starts_with("moz-extension://")
+        || o.starts_with("edge-extension://")
+        || o == "tauri://localhost"
+        || o == "http://localhost:1420"
+        || o == "http://127.0.0.1:1420"
+        || o == "null"
+}
+
+fn sanitize_destination_folder(folder: Option<String>, default_dir: &str, show_dialog: bool) -> Result<String, String> {
+    if !show_dialog {
+        // Silent automated download: enforce default downloads directory
+        return Ok(default_dir.to_string());
+    }
+
+    let raw = match folder {
+        Some(f) if !f.trim().is_empty() => f.trim().to_string(),
+        _ => return Ok(default_dir.to_string()),
+    };
+
+    if raw.contains("..") || raw.starts_with('.') {
+        return Err("Path traversal detected in destination folder".to_string());
+    }
+
+    let p = std::path::Path::new(&raw);
+    if !p.is_absolute() {
+        return Err("Destination folder must be an absolute path".to_string());
+    }
+
+    let lower = raw.to_lowercase();
+    if lower.contains("\\windows\\") || lower.ends_with("\\windows")
+        || lower.contains("\\system32")
+        || lower.contains("\\start menu\\programs\\startup")
+        || lower.contains("\\startup")
+    {
+        return Err("Writing to system-critical directories via bridge is forbidden".to_string());
+    }
+
+    Ok(raw)
 }
 
 impl ExtensionHttpBridge {
@@ -60,12 +104,14 @@ impl ExtensionHttpBridge {
         queue_manager: Arc<QueueManager>,
         db: DatabaseManager,
         port: u16,
+        auth_token: String,
     ) -> Self {
         Self {
             app_handle,
             queue_manager,
             db,
             port,
+            auth_token,
         }
     }
 
@@ -142,25 +188,58 @@ impl ExtensionHttpBridge {
         let method = parts.next().unwrap_or("GET");
         let path = parts.next().unwrap_or("/");
 
-        // Parse content-length
+        // Parse content-length, origin, and authorization headers
         let mut content_length = 0usize;
+        let mut origin_header: Option<String> = None;
+        let mut auth_header: Option<String> = None;
+
         for line in lines {
             let lower = line.to_lowercase();
             if lower.starts_with("content-length:") {
                 if let Some(val) = line.split(':').nth(1) {
                     content_length = val.trim().parse().unwrap_or(0);
                 }
+            } else if lower.starts_with("origin:") {
+                if let Some(val) = line.splitn(2, ':').nth(1) {
+                    origin_header = Some(val.trim().to_string());
+                }
+            } else if lower.starts_with("authorization:") {
+                if let Some(val) = line.splitn(2, ':').nth(1) {
+                    auth_header = Some(val.trim().to_string());
+                }
+            } else if lower.starts_with("x-downex-token:") {
+                if let Some(val) = line.splitn(2, ':').nth(1) {
+                    auth_header = Some(val.trim().to_string());
+                }
             }
         }
 
+        // Strict Cross-Origin Security Check: Block untrusted web domains (CSRF Shield)
+        if let Some(ref origin) = origin_header {
+            if !is_allowed_origin(origin) {
+                eprintln!("[Downex Security] Blocked untrusted cross-origin request from: {}", origin);
+                let response = "HTTP/1.1 403 Forbidden\r\n\
+Content-Type: application/json; charset=utf-8\r\n\
+Connection: close\r\n\r\n\
+{\"success\":false,\"error\":\"Cross-origin request from untrusted origin blocked\"}";
+                socket.write_all(response.as_bytes()).await?;
+                return Ok(());
+            }
+        }
+
+        let allow_origin = origin_header.as_deref().unwrap_or("tauri://localhost");
+
         // Handle CORS preflight
         if method == "OPTIONS" {
-            let response = "HTTP/1.1 204 No Content\r\n\
-Access-Control-Allow-Origin: *\r\n\
+            let response = format!(
+                "HTTP/1.1 204 No Content\r\n\
+Access-Control-Allow-Origin: {}\r\n\
 Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n\
-Access-Control-Allow-Headers: Content-Type, Authorization, X-Requested-With\r\n\
+Access-Control-Allow-Headers: Content-Type, Authorization, X-Requested-With, X-Downex-Token\r\n\
 Access-Control-Max-Age: 86400\r\n\
-Content-Length: 0\r\n\r\n";
+Content-Length: 0\r\n\r\n",
+                allow_origin
+            );
             socket.write_all(response.as_bytes()).await?;
             return Ok(());
         }
@@ -181,6 +260,19 @@ Content-Length: 0\r\n\r\n";
 
         let body_str = String::from_utf8_lossy(&body_bytes);
 
+        let is_authorized = if let Some(ref auth) = auth_header {
+            let token = auth.strip_prefix("Bearer ").unwrap_or(auth).trim();
+            token == self.auth_token
+        } else {
+            false
+        };
+
+        let default_dir = if let Ok(u) = std::env::var("USERPROFILE") {
+            format!("{}\\Downloads\\Downex", u)
+        } else {
+            "Downloads".to_string()
+        };
+
         // Routing
         let (status_code, response_json) = match (method, path) {
             ("GET", "/api/ping") => (
@@ -192,6 +284,23 @@ Content-Length: 0\r\n\r\n";
                         "version": env!("CARGO_PKG_VERSION"),
                         "status": "ready"
                     }
+                }),
+            ),
+            ("GET", "/api/handshake") => (
+                200,
+                serde_json::json!({
+                    "success": true,
+                    "data": {
+                        "token": self.auth_token,
+                        "version": env!("CARGO_PKG_VERSION")
+                    }
+                }),
+            ),
+            ("GET", "/api/status") if !is_authorized => (
+                401,
+                serde_json::json!({
+                    "success": false,
+                    "error": "Unauthorized: valid Downex bridge authentication token required"
                 }),
             ),
             ("GET", "/api/status") => {
@@ -218,6 +327,13 @@ Content-Length: 0\r\n\r\n";
                     }),
                 )
             }
+            ("POST", "/api/probe") if !is_authorized => (
+                401,
+                serde_json::json!({
+                    "success": false,
+                    "error": "Unauthorized: valid Downex bridge authentication token required"
+                }),
+            ),
             ("POST", "/api/probe") => {
                 match serde_json::from_str::<ExtensionProbeRequest>(&body_str) {
                     Ok(req) => {
@@ -268,9 +384,42 @@ Content-Length: 0\r\n\r\n";
                     ),
                 }
             }
+            ("POST", "/api/download") if !is_authorized => (
+                401,
+                serde_json::json!({
+                    "success": false,
+                    "error": "Unauthorized: valid Downex bridge authentication token required"
+                }),
+            ),
             ("POST", "/api/download") => {
                 match serde_json::from_str::<ExtensionDownloadRequest>(&body_str) {
                     Ok(req) => {
+                        let should_show_dialog = req.show_dialog.unwrap_or(true);
+                        let safe_dest = match sanitize_destination_folder(req.destination_folder, &default_dir, should_show_dialog) {
+                            Ok(d) => d,
+                            Err(e) => {
+                                return {
+                                    let err_json = serde_json::json!({ "success": false, "error": e });
+                                    let err_body = serde_json::to_string(&err_json)?;
+                                    let headers = format!(
+                                        "HTTP/1.1 400 Bad Request\r\n\
+Content-Type: application/json; charset=utf-8\r\n\
+Access-Control-Allow-Origin: {}\r\n\
+Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n\
+Access-Control-Allow-Headers: Content-Type, Authorization, X-Requested-With, X-Downex-Token\r\n\
+Content-Length: {}\r\n\
+Connection: close\r\n\r\n",
+                                        allow_origin,
+                                        err_body.len()
+                                    );
+                                    socket.write_all(headers.as_bytes()).await?;
+                                    socket.write_all(err_body.as_bytes()).await?;
+                                    socket.flush().await?;
+                                    Ok(())
+                                };
+                            }
+                        };
+
                         let mut custom_headers = HashMap::new();
                         if let Some(ref cookie) = req.cookies {
                             if !cookie.trim().is_empty() {
@@ -294,7 +443,6 @@ Content-Length: 0\r\n\r\n";
                             Some(custom_headers)
                         };
 
-                        let should_show_dialog = req.show_dialog.unwrap_or(true);
                         if should_show_dialog && self.app_handle.is_some() {
                             // FAST PATH: Resolve immediate filename from extension or URL to eliminate popup delay
                             let initial_filename = req.filename.clone().unwrap_or_else(|| {
@@ -362,7 +510,7 @@ Content-Length: 0\r\n\r\n";
                                 .queue_manager
                                 .create_task(
                                     req.url,
-                                    req.destination_folder,
+                                    Some(safe_dest),
                                     req.queue_id,
                                     headers_opt,
                                     start_immediately,
@@ -400,10 +548,16 @@ Content-Length: 0\r\n\r\n";
                     ),
                 }
             }
+            ("POST", "/api/download-adaptive") if !is_authorized => (
+                401,
+                serde_json::json!({
+                    "success": false,
+                    "error": "Unauthorized: valid Downex bridge authentication token required"
+                }),
+            ),
             ("POST", "/api/download-adaptive") => {
                 match serde_json::from_str::<ExtensionAdaptiveRequest>(&body_str) {
                     Ok(req) => {
-                        // Enqueue adaptive download
                         let mut custom_headers = HashMap::new();
                         if let Some(cookie) = req.cookies {
                             if !cookie.trim().is_empty() {
@@ -437,7 +591,7 @@ Content-Length: 0\r\n\r\n";
                             .queue_manager
                             .create_task(
                                 req.video_url,
-                                None,
+                                Some(default_dir.clone()),
                                 Some("adaptive_media".to_string()),
                                 headers_opt.clone(),
                                 start_immediately,
@@ -452,7 +606,7 @@ Content-Length: 0\r\n\r\n";
                                 .queue_manager
                                 .create_task(
                                     audio_url,
-                                    None,
+                                    Some(default_dir),
                                     Some("adaptive_media".to_string()),
                                     headers_opt,
                                     start_immediately,
@@ -509,6 +663,8 @@ Content-Length: 0\r\n\r\n";
             200 => "OK",
             204 => "No Content",
             400 => "Bad Request",
+            401 => "Unauthorized",
+            403 => "Forbidden",
             404 => "Not Found",
             _ => "Internal Server Error",
         };
@@ -516,13 +672,14 @@ Content-Length: 0\r\n\r\n";
         let response_headers = format!(
             "HTTP/1.1 {} {}\r\n\
 Content-Type: application/json; charset=utf-8\r\n\
-Access-Control-Allow-Origin: *\r\n\
+Access-Control-Allow-Origin: {}\r\n\
 Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n\
-Access-Control-Allow-Headers: Content-Type, Authorization, X-Requested-With\r\n\
+Access-Control-Allow-Headers: Content-Type, Authorization, X-Requested-With, X-Downex-Token\r\n\
 Content-Length: {}\r\n\
 Connection: close\r\n\r\n",
             status_code,
             status_text,
+            allow_origin,
             response_body.len()
         );
 

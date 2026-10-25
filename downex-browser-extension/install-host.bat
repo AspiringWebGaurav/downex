@@ -19,6 +19,13 @@ if not exist "%TARGET_EXE%" (
 for %%F in ("%TARGET_EXE%") do set "FULL_EXE=%%~fF"
 set "ESCAPED_EXE=%FULL_EXE:\=\\%"
 
+set "EXT_ID=%~1"
+if "%EXT_ID%"=="" (
+    echo [Downex] Tip: You can pass your Extension ID as argument: install-host.bat ^<EXTENSION_ID^>
+    set /p "EXT_ID=Enter Extension ID from chrome://extensions (leave blank to skip): "
+)
+if "%EXT_ID%"=="" set "EXT_ID=kdhfnfdfcgehgbndojlglkgnflfpgofn"
+
 echo [Downex] Updating %MANIFEST_PATH% with target: %FULL_EXE%
 (
   echo {
@@ -27,7 +34,7 @@ echo [Downex] Updating %MANIFEST_PATH% with target: %FULL_EXE%
   echo   "path": "%ESCAPED_EXE%",
   echo   "type": "stdio",
   echo   "allowed_origins": [
-  echo     "chrome-extension://*/*"
+  echo     "chrome-extension://%EXT_ID%/"
   echo   ]
   echo }
 ) > "%MANIFEST_PATH%"

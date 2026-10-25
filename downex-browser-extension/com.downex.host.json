@@ -1,9 +1,9 @@
 {
   "name": "com.downex.host",
   "description": "Downex Download Accelerator Native Host Bridge",
-  "path": "C:\\GITHUB\\downex\\src-tauri\\target\\release\\Downex.exe",
+  "path": "%LOCALAPPDATA%\\Programs\\Downex\\Downex.exe",
   "type": "stdio",
   "allowed_origins": [
-    "chrome-extension://*/*"
+    "chrome-extension://kdhfnfdfcgehgbndojlglkgnflfpgofn/"
   ]
 }

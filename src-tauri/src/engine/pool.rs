@@ -120,6 +120,7 @@ impl DownloadEnginePool {
         let telemetry_handle = tauri::async_runtime::spawn(async move {
             let mut last_bytes = initial_downloaded;
             let mut last_time = Instant::now();
+            let mut last_checkpoint_time = Instant::now();
             let mut smoothed_speed = 0.0f64;
             let mut persistent_eta: Option<u64> = None;
 
@@ -142,6 +143,28 @@ impl DownloadEnginePool {
                                 speed_bytes_sec: 0,
                                 is_active: s.is_active.load(Ordering::Relaxed),
                             });
+                        }
+
+                        // Periodic 2-second segment checkpoint to SQLite (ensures crash & update resilience)
+                        if last_checkpoint_time.elapsed() >= Duration::from_secs(2) {
+                            last_checkpoint_time = Instant::now();
+                            let mut records = Vec::new();
+                            for s in segs.iter() {
+                                records.push(SegmentRecord {
+                                    id: None,
+                                    download_id: p_task_id.clone(),
+                                    segment_index: s.index,
+                                    range_start: s.range_start,
+                                    range_end: s.range_end.load(Ordering::Relaxed),
+                                    downloaded: s.downloaded.load(Ordering::Relaxed),
+                                    status: if s.is_active.load(Ordering::Relaxed) {
+                                        "downloading".to_string()
+                                    } else {
+                                        "idle".to_string()
+                                    },
+                                });
+                            }
+                            let _ = p_db.save_segments(&p_task_id, &records);
                         }
 
                         p_total_downloaded.store(current_total, Ordering::Relaxed);

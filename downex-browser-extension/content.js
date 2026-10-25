@@ -31,6 +31,35 @@ let currentVideoUrl = location.href;
 // WeakMap tracking attached video players (enables garbage collection on DOM removal)
 const attachedPlayers = new WeakMap();
 
+// Engine connection state & configuration tracking
+let isEngineAlive = false;
+let extensionConfig = {
+  interceptDownloads: true,
+  enableMediaGrabber: true,
+};
+
+try {
+  chrome.storage.local.get(['config', 'engineAlive'], (result) => {
+    if (result && result.config) {
+      extensionConfig = { ...extensionConfig, ...result.config };
+    }
+    if (result && typeof result.engineAlive === 'boolean') {
+      isEngineAlive = result.engineAlive;
+    }
+  });
+
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area === 'local') {
+      if (changes.config && changes.config.newValue) {
+        extensionConfig = { ...extensionConfig, ...changes.config.newValue };
+      }
+      if (changes.engineAlive && typeof changes.engineAlive.newValue === 'boolean') {
+        isEngineAlive = changes.engineAlive.newValue;
+      }
+    }
+  });
+} catch (_) {}
+
 /* =========================================================================
    1. PAGE HOOK LISTENER & METADATA DISPATCH
    ========================================================================= */
@@ -495,6 +524,12 @@ const DIRECT_DOWNLOAD_EXTENSIONS = new Set([
 ]);
 
 document.addEventListener('click', (event) => {
+  // 1. Bypass download manager if user holds Alt key (Standard IDM suppression shortcut)
+  if (event.altKey) return;
+
+  // 2. Safety Gate: If desktop engine is offline or user disabled interception, allow native browser download
+  if (!isEngineAlive || !extensionConfig.interceptDownloads) return;
+
   const anchor = event.target.closest('a');
   if (!anchor || !anchor.href) return;
 

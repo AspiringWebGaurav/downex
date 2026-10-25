@@ -29,11 +29,78 @@ let engineStatusCache = {
   version: null,
 };
 
+let cachedAuthToken = null;
+
 // Tab media metadata cache (tabId -> { count, quality, title })
 const tabMediaMap = new Map();
 
 /* =========================================================================
-   1. LIFECYCLE MANAGEMENT: INSTALLATION, STARTUP & CONTEXT MENUS
+   1. BRIDGE SECURITY & TOKEN HANDSHAKE
+   ========================================================================= */
+
+async function getBridgeToken(forceRefresh = false) {
+  if (cachedAuthToken && !forceRefresh) {
+    return cachedAuthToken;
+  }
+
+  // 1. Check local extension storage
+  if (!forceRefresh) {
+    try {
+      const stored = await chrome.storage.local.get(['downex_auth_token']);
+      if (stored && stored.downex_auth_token) {
+        cachedAuthToken = stored.downex_auth_token;
+        return cachedAuthToken;
+      }
+    } catch (_) {}
+  }
+
+  // 2. Query /api/handshake on loopback
+  try {
+    const ctrl = new AbortController();
+    const timeout = setTimeout(() => ctrl.abort(), 1200);
+    const resp = await fetch(`${DOWNEX_BRIDGE_URL}/api/handshake`, {
+      method: 'GET',
+      headers: { 'Accept': 'application/json' },
+      signal: ctrl.signal,
+    });
+    clearTimeout(timeout);
+
+    if (resp.ok) {
+      const data = await resp.json();
+      if (data && data.success && data.token) {
+        cachedAuthToken = data.token;
+        chrome.storage.local.set({ downex_auth_token: cachedAuthToken });
+        return cachedAuthToken;
+      }
+    }
+  } catch (err) {
+    // Desktop engine may not be running yet
+  }
+
+  // 3. Fallback to Native Messaging Host if available
+  try {
+    const nativeResp = await new Promise((resolve) => {
+      if (chrome.runtime.sendNativeMessage) {
+        chrome.runtime.sendNativeMessage('com.downex.host', { action: 'get_auth_token' }, (res) => {
+          if (chrome.runtime.lastError) resolve(null);
+          else resolve(res);
+        });
+      } else {
+        resolve(null);
+      }
+    });
+    if (nativeResp && nativeResp.success && nativeResp.token) {
+      cachedAuthToken = nativeResp.token;
+      chrome.storage.local.set({ downex_auth_token: cachedAuthToken });
+      return cachedAuthToken;
+    }
+  } catch (_) {}
+
+  return cachedAuthToken;
+}
+
+/* =========================================================================
+   2. LIFECYCLE MANAGEMENT: INSTALLATION, STARTUP & CONTEXT MENUS
    ========================================================================= */
 
 function setupContextMenus() {
@@ -79,7 +146,7 @@ chrome.runtime.onStartup.addListener(() => {
 });
 
 /* =========================================================================
-   2. CONTEXT MENU ACTIONS
+   3. CONTEXT MENU ACTIONS
    ========================================================================= */
 
 chrome.contextMenus.onClicked.addListener(async (info, tab) => {
@@ -101,7 +168,7 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
 });
 
 /* =========================================================================
-   3. ENGINE PING & STATUS HEARTBEAT WITH FAST CACHING
+   4. ENGINE PING & STATUS HEARTBEAT WITH FAST CACHING
    ========================================================================= */
 
 async function pingDownexEngine(force = false) {
@@ -121,16 +188,23 @@ async function pingDownexEngine(force = false) {
 
     if (resp.ok) {
       const data = await resp.json();
+      const alive = data && data.success === true;
       engineStatusCache = {
-        isAlive: data && data.success === true,
+        isAlive: alive,
         lastChecked: now,
         version: data?.data?.version || '0.0.0',
       };
+      chrome.storage.local.set({ engineAlive: alive });
+      if (alive && !cachedAuthToken) {
+        getBridgeToken().catch(() => {});
+      }
     } else {
       engineStatusCache = { isAlive: false, lastChecked: now, version: null };
+      chrome.storage.local.set({ engineAlive: false });
     }
   } catch (err) {
     engineStatusCache = { isAlive: false, lastChecked: now, version: null };
+    chrome.storage.local.set({ engineAlive: false });
   }
 
   return engineStatusCache.isAlive;
@@ -314,10 +388,32 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   // 6. Get Desktop Engine Status Details
   if (message.type === 'GET_ENGINE_DETAILS') {
-    fetch(`${DOWNEX_BRIDGE_URL}/api/status`)
-      .then((r) => r.json())
-      .then((data) => sendResponse({ success: true, data: data.data }))
-      .catch((err) => sendResponse({ success: false, error: err.message }));
+    (async () => {
+      try {
+        const token = await getBridgeToken();
+        const headers = { 'Accept': 'application/json' };
+        if (token) headers['Authorization'] = `Bearer ${token}`;
+
+        let r = await fetch(`${DOWNEX_BRIDGE_URL}/api/status`, { headers });
+        if (r.status === 401) {
+          const freshToken = await getBridgeToken(true);
+          if (freshToken) headers['Authorization'] = `Bearer ${freshToken}`;
+          r = await fetch(`${DOWNEX_BRIDGE_URL}/api/status`, { headers });
+        }
+        const data = await r.json();
+        sendResponse({ success: true, data: data.data });
+      } catch (err) {
+        sendResponse({ success: false, error: err.message });
+      }
+    })();
+    return true;
+  }
+
+  // 7. Get Active Bridge Token
+  if (message.type === 'GET_BRIDGE_TOKEN') {
+    getBridgeToken(!!message.forceRefresh).then((token) => {
+      sendResponse({ token });
+    });
     return true;
   }
 });
@@ -357,11 +453,28 @@ chrome.tabs.onActivated.addListener((activeInfo) => {
 
 async function sendDownloadRequest(payload) {
   try {
-    const resp = await fetch(`${DOWNEX_BRIDGE_URL}/api/download`, {
+    const token = await getBridgeToken();
+    const headers = { 'Content-Type': 'application/json' };
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+
+    let resp = await fetch(`${DOWNEX_BRIDGE_URL}/api/download`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify(payload),
     });
+
+    if (resp.status === 401) {
+      const freshToken = await getBridgeToken(true);
+      if (freshToken) {
+        headers['Authorization'] = `Bearer ${freshToken}`;
+        resp = await fetch(`${DOWNEX_BRIDGE_URL}/api/download`, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify(payload),
+        });
+      }
+    }
+
     const data = await resp.json();
     return data && data.success === true;
   } catch (err) {
@@ -372,11 +485,28 @@ async function sendDownloadRequest(payload) {
 
 async function sendAdaptiveMediaRequest(payload) {
   try {
-    const resp = await fetch(`${DOWNEX_BRIDGE_URL}/api/download-adaptive`, {
+    const token = await getBridgeToken();
+    const headers = { 'Content-Type': 'application/json' };
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+
+    let resp = await fetch(`${DOWNEX_BRIDGE_URL}/api/download-adaptive`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify(payload),
     });
+
+    if (resp.status === 401) {
+      const freshToken = await getBridgeToken(true);
+      if (freshToken) {
+        headers['Authorization'] = `Bearer ${freshToken}`;
+        resp = await fetch(`${DOWNEX_BRIDGE_URL}/api/download-adaptive`, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify(payload),
+        });
+      }
+    }
+
     return await resp.json();
   } catch (err) {
     console.error('[Downex] Failed to send adaptive media:', err);

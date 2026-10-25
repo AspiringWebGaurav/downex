@@ -69,12 +69,35 @@ pub fn run() {
                 http_client: client,
             });
 
-            // Start extension HTTP loopback bridge on 127.0.0.1:18888
+            // Initialize or load local secure bridge authentication token
+            let token_path = app_data_dir.join("bridge.token");
+            let auth_token = if token_path.exists() {
+                std::fs::read_to_string(&token_path)
+                    .unwrap_or_default()
+                    .trim()
+                    .to_string()
+            } else {
+                String::new()
+            };
+            let auth_token = if auth_token.len() >= 32 {
+                auth_token
+            } else {
+                let new_token = format!(
+                    "{}{}",
+                    uuid::Uuid::new_v4().simple(),
+                    uuid::Uuid::new_v4().simple()
+                );
+                let _ = std::fs::write(&token_path, &new_token);
+                new_token
+            };
+
+            // Start extension HTTP loopback bridge on 127.0.0.1:18888 with token auth
             let bridge = Arc::new(bridge::ExtensionHttpBridge::new(
                 Some(app.handle().clone()),
                 queue_manager.clone(),
                 db.clone(),
                 18888,
+                auth_token,
             ));
             bridge.start();
 
@@ -114,8 +137,11 @@ pub fn run() {
             let running_version = app.package_info().version.to_string();
             commands::sync_windows_installed_version(&running_version);
 
-            // Clean up any superseded .exe.old from previous atomic swap
-            let _ = commands::cmd_clean_superseded_old_binaries();
+            // Delay clean up of superseded .exe.old by 60 seconds of healthy uptime so watchdog can roll back if needed
+            std::thread::spawn(|| {
+                std::thread::sleep(std::time::Duration::from_secs(60));
+                let _ = commands::cmd_clean_superseded_old_binaries();
+            });
 
             Ok(())
         })
@@ -129,6 +155,7 @@ pub fn run() {
             cmd_get_resolved_version,
             cmd_sync_windows_installed_version,
             cmd_write_update_staging_file,
+            cmd_verify_update_signature,
             cmd_apply_in_process_update,
             cmd_clean_superseded_old_binaries,
             cmd_minimize_to_background,
