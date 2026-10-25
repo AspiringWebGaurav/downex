@@ -173,12 +173,8 @@ pub fn setup_system_tray<R: Runtime>(app: &AppHandle<R>) -> Result<TrayIcon<R>, 
                     }
                     let _ = refresh_tray_menu(app);
                 }
-                TrayIconEvent::Click {
-                    button: MouseButton::Right,
-                    button_state: MouseButtonState::Down | MouseButtonState::Up,
-                    ..
-                } => {
-                    // Right click: dynamically rebuild menu before Windows displays context popup
+                TrayIconEvent::Enter { .. } => {
+                    // Rebuild menu on mouse hover so dynamic options are completely up-to-date before any click
                     let _ = refresh_tray_menu(app);
                 }
                 _ => {}
@@ -218,6 +214,7 @@ pub fn create_or_show_main_window<R: Runtime>(app: &AppHandle<R>) -> Result<taur
             .decorations(false)
             .transparent(false)
             .shadow(true)
+            .visible(true)
             .center();
 
         let window = builder.build()?;

@@ -22,6 +22,7 @@ pub async fn cmd_probe_url(
 
 #[tauri::command]
 pub async fn cmd_add_download(
+    app: AppHandle,
     url: String,
     destination_folder: Option<String>,
     queue_id: Option<String>,
@@ -30,7 +31,7 @@ pub async fn cmd_add_download(
     custom_filename: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<DownloadRecord, String> {
-    state
+    let res = state
         .queue_manager
         .create_task(
             url,
@@ -41,22 +42,30 @@ pub async fn cmd_add_download(
             custom_filename,
         )
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    let _ = crate::tray::refresh_tray_menu(&app);
+    Ok(res)
 }
 
 #[tauri::command]
-pub async fn cmd_pause_download(id: String, state: State<'_, AppState>) -> Result<bool, String> {
-    Ok(state.queue_manager.pause_task(&id))
+pub async fn cmd_pause_download(app: AppHandle, id: String, state: State<'_, AppState>) -> Result<bool, String> {
+    let res = state.queue_manager.pause_task(&id);
+    let _ = crate::tray::refresh_tray_menu(&app);
+    Ok(res)
 }
 
 #[tauri::command]
-pub async fn cmd_start_queue(state: State<'_, AppState>) -> Result<usize, String> {
-    Ok(state.queue_manager.start_queue().await)
+pub async fn cmd_start_queue(app: AppHandle, state: State<'_, AppState>) -> Result<usize, String> {
+    let res = state.queue_manager.start_queue().await;
+    let _ = crate::tray::refresh_tray_menu(&app);
+    Ok(res)
 }
 
 #[tauri::command]
-pub fn cmd_pause_queue(state: State<'_, AppState>) -> Result<bool, String> {
-    Ok(state.queue_manager.pause_queue())
+pub fn cmd_pause_queue(app: AppHandle, state: State<'_, AppState>) -> Result<bool, String> {
+    let res = state.queue_manager.pause_queue();
+    let _ = crate::tray::refresh_tray_menu(&app);
+    Ok(res)
 }
 
 #[tauri::command]
@@ -65,18 +74,24 @@ pub fn cmd_is_queue_running(state: State<'_, AppState>) -> Result<bool, String> 
 }
 
 #[tauri::command]
-pub fn cmd_queue_download(id: String, state: State<'_, AppState>) -> Result<bool, String> {
-    Ok(state.queue_manager.queue_download(&id))
+pub fn cmd_queue_download(app: AppHandle, id: String, state: State<'_, AppState>) -> Result<bool, String> {
+    let res = state.queue_manager.queue_download(&id);
+    let _ = crate::tray::refresh_tray_menu(&app);
+    Ok(res)
 }
 
 #[tauri::command]
-pub async fn cmd_resume_download(id: String, state: State<'_, AppState>) -> Result<bool, String> {
-    Ok(state.queue_manager.resume_task(&id).await)
+pub async fn cmd_resume_download(app: AppHandle, id: String, state: State<'_, AppState>) -> Result<bool, String> {
+    let res = state.queue_manager.resume_task(&id).await;
+    let _ = crate::tray::refresh_tray_menu(&app);
+    Ok(res)
 }
 
 #[tauri::command]
-pub async fn cmd_cancel_download(id: String, delete_file: bool, state: State<'_, AppState>) -> Result<bool, String> {
-    Ok(state.queue_manager.cancel_task(&id, delete_file))
+pub async fn cmd_cancel_download(app: AppHandle, id: String, delete_file: bool, state: State<'_, AppState>) -> Result<bool, String> {
+    let res = state.queue_manager.cancel_task(&id, delete_file);
+    let _ = crate::tray::refresh_tray_menu(&app);
+    Ok(res)
 }
 
 #[tauri::command]

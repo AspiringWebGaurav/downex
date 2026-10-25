@@ -380,11 +380,22 @@ try {
     });
     if (probeRes.ok) {
       const liveManifest = await probeRes.json();
-      const downloadUrl = liveManifest.url;
+      const downloadUrl = liveManifest.url || liveManifest.platforms?.['windows-x86_64']?.url;
       if (downloadUrl) {
-        const binProbe = await fetch(downloadUrl, { method: 'HEAD', headers: { 'User-Agent': 'curl/8.4.0' } });
-        if (binProbe.ok) {
-          console.log(`  ✓ Smoke test passed: Live download operational at ${downloadUrl} (HTTP ${binProbe.status})`);
+        try {
+          const controller = new AbortController();
+          const binProbe = await fetch(downloadUrl, {
+            method: 'GET',
+            headers: { 'User-Agent': 'curl/8.4.0', Range: 'bytes=0-1024' },
+            signal: controller.signal,
+          });
+          controller.abort();
+          if (binProbe.ok || binProbe.status === 206) {
+            console.log(`  ✓ Smoke test passed: Live download operational at ${downloadUrl} (HTTP ${binProbe.status})`);
+          }
+        } catch (probeFetchErr) {
+          if (probeFetchErr.name !== 'AbortError') throw probeFetchErr;
+          console.log(`  ✓ Smoke test passed: Live download reachable at ${downloadUrl}`);
         }
       }
     }

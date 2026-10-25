@@ -1,6 +1,12 @@
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlatformInfo {
+    pub signature: Option<String>,
+    pub url: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReleaseManifest {
     pub version: String,
     pub notes: Option<String>,
@@ -8,6 +14,7 @@ pub struct ReleaseManifest {
     pub url: Option<String>,
     pub size: Option<u64>,
     pub signature: Option<String>,
+    pub platforms: Option<std::collections::HashMap<String, PlatformInfo>>,
 }
 
 pub async fn check_latest_release(
@@ -30,7 +37,17 @@ pub async fn check_latest_release(
     }
 
     if res.status().is_success() {
-        let manifest: ReleaseManifest = res.json().await?;
+        let mut manifest: ReleaseManifest = res.json().await?;
+        if manifest.url.is_none() {
+            if let Some(ref platforms) = manifest.platforms {
+                if let Some(target) = platforms.get("windows-x86_64") {
+                    manifest.url = target.url.clone();
+                    if manifest.signature.is_none() {
+                        manifest.signature = target.signature.clone();
+                    }
+                }
+            }
+        }
         if is_newer_version(&manifest.version, current_version) {
             return Ok(Some(manifest));
         }

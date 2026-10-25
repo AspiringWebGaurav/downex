@@ -38,10 +38,24 @@ pub fn run() {
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
             let _ = crate::tray::create_or_show_main_window(app);
         }))
+        .on_window_event(|window, event| {
+            match event {
+                tauri::WindowEvent::CloseRequested { api, .. } => {
+                    api.prevent_close();
+                    let _ = window.hide();
+                    if window.label() == "main" {
+                        let _ = crate::tray::refresh_tray_menu(window.app_handle());
+                    }
+                }
+                tauri::WindowEvent::Focused(true) => {
+                    if window.label() == "main" {
+                        let _ = crate::tray::refresh_tray_menu(window.app_handle());
+                    }
+                }
+                _ => {}
+            }
+        })
         .setup(move |app| {
-            // Setup system tray
-            let _ = tray::setup_system_tray(app.handle());
-
             // Initialize SQLite DB
             let app_data_dir = app
                 .path()
@@ -68,6 +82,17 @@ pub fn run() {
                 queue_manager: queue_manager.clone(),
                 http_client: client,
             });
+
+            // Setup system tray AFTER AppState is managed so dynamic stats are accessible
+            let _ = tray::setup_system_tray(app.handle());
+
+            // Ensure main downloader window is displayed and focused on initial launch
+            if let Some(main_win) = app.get_webview_window("main") {
+                let _ = main_win.show();
+                let _ = main_win.unminimize();
+                let _ = main_win.set_focus();
+                let _ = crate::tray::refresh_tray_menu(app.handle());
+            }
 
             // Initialize or load local secure bridge authentication token
             let token_path = app_data_dir.join("bridge.token");
@@ -105,10 +130,17 @@ pub fn run() {
             let app_handle = app.handle().clone();
             let db_handle = db.clone();
             tauri::async_runtime::spawn(async move {
+                let mut last_tray_refresh = std::time::Instant::now();
                 while let Some(progress) = progress_rx.recv().await {
                     let is_completed = progress.status == "completed";
                     let task_id = progress.task_id.clone();
                     let _ = app_handle.emit("download-progress", &progress);
+
+                    // Throttle tray refresh to max 1 update per 500ms or immediately on completion
+                    if is_completed || last_tray_refresh.elapsed() >= std::time::Duration::from_millis(500) {
+                        let _ = crate::tray::refresh_tray_menu(&app_handle);
+                        last_tray_refresh = std::time::Instant::now();
+                    }
 
                     if is_completed {
                         if let Ok(Some(record)) = db_handle.get_download(&task_id) {

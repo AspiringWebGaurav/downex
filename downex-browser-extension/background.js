@@ -67,8 +67,9 @@ async function getBridgeToken(forceRefresh = false) {
 
     if (resp.ok) {
       const data = await resp.json();
-      if (data && data.success && data.token) {
-        cachedAuthToken = data.token;
+      const token = data?.token || data?.data?.token;
+      if (data && data.success && token) {
+        cachedAuthToken = token;
         chrome.storage.local.set({ downex_auth_token: cachedAuthToken });
         return cachedAuthToken;
       }
@@ -179,7 +180,7 @@ async function pingDownexEngine(force = false) {
 
   try {
     const ctrl = new AbortController();
-    const timeout = setTimeout(() => ctrl.abort(), 600); // 600ms fast abort
+    const timeout = setTimeout(() => ctrl.abort(), 2500); // Robust 2.5s abort to handle load on slower processors
     const resp = await fetch(`${DOWNEX_BRIDGE_URL}/api/ping`, {
       method: 'GET',
       signal: ctrl.signal,

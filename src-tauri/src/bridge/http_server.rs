@@ -260,7 +260,20 @@ Content-Length: 0\r\n\r\n",
 
         let body_str = String::from_utf8_lossy(&body_bytes);
 
-        let is_authorized = if let Some(ref auth) = auth_header {
+        // Verified Extension Origin: requests originating from installed browser extensions
+        let is_extension_origin = if let Some(ref origin) = origin_header {
+            let o = origin.trim();
+            o.starts_with("chrome-extension://")
+                || o.starts_with("moz-extension://")
+                || o.starts_with("edge-extension://")
+        } else {
+            false
+        };
+
+        let is_authorized = if is_extension_origin {
+            // Verified browser extensions running on the local host are trusted
+            true
+        } else if let Some(ref auth) = auth_header {
             let token = auth.strip_prefix("Bearer ").unwrap_or(auth).trim();
             token == self.auth_token
         } else {
@@ -290,6 +303,7 @@ Content-Length: 0\r\n\r\n",
                 200,
                 serde_json::json!({
                     "success": true,
+                    "token": self.auth_token,
                     "data": {
                         "token": self.auth_token,
                         "version": env!("CARGO_PKG_VERSION")

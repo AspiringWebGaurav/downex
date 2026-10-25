@@ -48,4 +48,5 @@ export interface ReleaseManifest {
   url?: string;
   size?: number;
   signature?: string;
+  platforms?: Record<string, { url: string; signature?: string }>;
 }

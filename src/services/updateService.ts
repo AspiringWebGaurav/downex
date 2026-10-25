@@ -148,7 +148,8 @@ class UpdateService {
    */
   public async downloadUpdate(): Promise<boolean> {
     const { manifest, targetVersion } = this.status;
-    if (!manifest || !manifest.url || !targetVersion) {
+    const downloadUrl = manifest?.url || manifest?.platforms?.['windows-x86_64']?.url;
+    if (!manifest || !downloadUrl || !targetVersion) {
       this.notify({ state: 'error', errorMessage: 'No update manifest available to download' });
       return false;
     }
@@ -162,7 +163,7 @@ class UpdateService {
 
     try {
       // 1. Stream download container from GPHost Cloudflare R2
-      const response = await fetch(manifest.url, {
+      const response = await fetch(downloadUrl, {
         headers: { 'Cache-Control': 'no-cache' },
       });
 
@@ -227,7 +228,7 @@ class UpdateService {
 
     try {
       // 1. Minisign Ed25519 cryptographic signature verification
-      const signature = this.status.manifest?.signature;
+      const signature = this.status.manifest?.signature || this.status.manifest?.platforms?.['windows-x86_64']?.signature;
       if (signature && signature.trim().length > 0) {
         const rawBytes = new Uint8Array(rawBuffer);
         const valid = await verifyUpdateSignature(rawBytes, signature.trim());

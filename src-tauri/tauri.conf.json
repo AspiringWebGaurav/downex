@@ -24,17 +24,47 @@
         "shadow": true,
         "center": true,
         "resizable": true,
+        "visible": true
+      },
+      {
+        "label": "download_dialog",
+        "title": "Downex - Download File Info",
+        "width": 540,
+        "height": 440,
+        "decorations": false,
+        "transparent": false,
+        "shadow": true,
+        "center": true,
+        "resizable": false,
+        "alwaysOnTop": true,
+        "visible": false
+      },
+      {
+        "label": "download_complete",
+        "title": "Downex - Download Complete",
+        "width": 500,
+        "height": 340,
+        "decorations": false,
+        "transparent": false,
+        "shadow": true,
+        "center": true,
+        "resizable": false,
+        "alwaysOnTop": true,
         "visible": false
       }
     ],
     "security": {
       "csp": null,
-      "capabilities": ["default"]
+      "capabilities": [
+        "default"
+      ]
     }
   },
   "bundle": {
     "active": true,
-    "targets": ["nsis"],
+    "targets": [
+      "nsis"
+    ],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
