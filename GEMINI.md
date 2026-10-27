@@ -109,4 +109,16 @@ Downex is an independent, multi-process desktop download manager consisting of:
 - **CRITICAL DEFINITION:** When the user writes **"REA"** in capital letters, it **ALWAYS** refers to **Reverse Engineering** / **Reverse Engineer Anything** (`morluto/rea`, `rea-agents`, binary analysis, disassemblies, or reverse engineering reference material).
 - **NEVER** interpret all-caps **"REA"** as React or the frontend React framework. (The frontend UI framework is referred to as "React" with standard capitalization).
 
+---
+
+## 📦 Step 6: Strict Sequential Versioning & Binary Hygiene Rules
+
+- **Strict Sequential Semver:** Never use arbitrary or jumping version orders (e.g., jumping from `0.0.0` directly to `0.1.0`). Release versions must strictly follow monotonic sequential patch numbers:
+  - **Base App:** `0.0.0` (immutable base installer).
+  - **First OTA Update:** `0.0.1`.
+  - **Next OTA Update:** `0.0.2` (then `0.0.3`, `0.0.4`, etc.).
+- **Binary Hygiene:**
+  - Only keep the immutable base installer (`0.0.0`), the latest browser companion extension (`downex-extension`), and the single active target OTA release (e.g., `0.0.1`) on GPHost and in release catalogs.
+  - Purge all stale, intermediate, or out-of-order binaries from storage.
+
 
