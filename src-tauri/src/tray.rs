@@ -1,7 +1,7 @@
 use tauri::image::Image;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
-use tauri::{AppHandle, Manager, Runtime};
+use tauri::{AppHandle, Emitter, Manager, Runtime};
 
 /// Dynamically constructs the tray context menu reflecting real-time window & download state (IDM / REA pattern)
 pub fn build_dynamic_tray_menu<R: Runtime>(app: &AppHandle<R>) -> Result<Menu<R>, Box<dyn std::error::Error>> {
@@ -11,8 +11,8 @@ pub fn build_dynamic_tray_menu<R: Runtime>(app: &AppHandle<R>) -> Result<Menu<R>
         false
     };
 
-    // Query active & paused downloads for dynamic IDM-style actions
-    let (active_count, paused_count) = if let Some(state) = app.try_state::<crate::AppState>() {
+    // Query active, paused, and total downloads for dynamic IDM-style actions
+    let (active_count, paused_count, total_count) = if let Some(state) = app.try_state::<crate::AppState>() {
         let downloads = state.db.get_all_downloads().unwrap_or_default();
         let active = downloads
             .iter()
@@ -22,20 +22,29 @@ pub fn build_dynamic_tray_menu<R: Runtime>(app: &AppHandle<R>) -> Result<Menu<R>
             .iter()
             .filter(|d| d.status == "paused" || d.status == "queued" || d.status == "failed")
             .count();
-        (active, paused)
+        let total = downloads.len();
+        (active, paused, total)
     } else {
-        (0, 0)
+        (0, 0, 0)
     };
 
     let menu = Menu::new(app)?;
 
-    // 1. Live status banner (disabled header)
+    // 1. Header: Application & Version Title (disabled)
+    let version = crate::version::resolve_installed_version(app, None);
+    let header_title = format!("Downex v{}", version);
+    let header_item = MenuItem::with_id(app, "header_title", &header_title, false, None::<&str>)?;
+    menu.append(&header_item)?;
+
+    // 2. Real-time Status Banner (disabled)
     let status_text = if active_count > 0 {
-        format!("Downex: Downloading ({} active)", active_count)
+        format!("⬇ Downloading ({} active)", active_count)
     } else if paused_count > 0 {
-        format!("Downex: {} Paused", paused_count)
+        format!("⏸ Paused ({} tasks)", paused_count)
+    } else if total_count > 0 {
+        format!("✔ All {} downloads finished", total_count)
     } else {
-        "Downex Core: Ready".to_string()
+        "● Downex Core: Ready".to_string()
     };
     let status_item = MenuItem::with_id(app, "status", &status_text, false, None::<&str>)?;
     menu.append(&status_item)?;
@@ -43,9 +52,7 @@ pub fn build_dynamic_tray_menu<R: Runtime>(app: &AppHandle<R>) -> Result<Menu<R>
     let sep1 = PredefinedMenuItem::separator(app)?;
     menu.append(&sep1)?;
 
-    // 2. Pure dynamic window toggle:
-    // If app is already showing -> "Hide Downex"
-    // If app is hidden / minimized -> "Show Downex"
+    // 3. Dynamic window toggle: "Show Downex" or "Hide Downex"
     let toggle_label = if is_showing {
         "Hide Downex"
     } else {
@@ -54,37 +61,48 @@ pub fn build_dynamic_tray_menu<R: Runtime>(app: &AppHandle<R>) -> Result<Menu<R>
     let toggle_item = MenuItem::with_id(app, "toggle_window", toggle_label, true, None::<&str>)?;
     menu.append(&toggle_item)?;
 
-    // 3. Quick action: Add download link
-    let new_dl_item = MenuItem::with_id(app, "new_download", "+ Add Download URL...", true, None::<&str>)?;
+    // 4. Quick Action: Add Download URL
+    let new_dl_item = MenuItem::with_id(app, "new_download", "+ Add Download URL... (Ctrl+N)", true, None::<&str>)?;
     menu.append(&new_dl_item)?;
 
     let sep2 = PredefinedMenuItem::separator(app)?;
     menu.append(&sep2)?;
 
-    // 4. Batch Queue Controls (Dynamic counts & enablement)
-    if active_count > 0 {
-        let pause_label = format!("Pause All Downloads ({})", active_count);
-        let pause_item = MenuItem::with_id(app, "pause_all", &pause_label, true, None::<&str>)?;
-        menu.append(&pause_item)?;
+    // 5. Batch Queue Controls (Dynamic counts & enablement)
+    let pause_label = if active_count > 0 {
+        format!("⏸ Pause All Downloads ({})", active_count)
     } else {
-        let pause_item = MenuItem::with_id(app, "pause_all", "Pause All Downloads", false, None::<&str>)?;
-        menu.append(&pause_item)?;
-    }
+        "⏸ Pause All Downloads".to_string()
+    };
+    let pause_item = MenuItem::with_id(app, "pause_all", &pause_label, active_count > 0, None::<&str>)?;
+    menu.append(&pause_item)?;
 
-    if paused_count > 0 {
-        let resume_label = format!("Resume All Downloads ({})", paused_count);
-        let resume_item = MenuItem::with_id(app, "resume_all", &resume_label, true, None::<&str>)?;
-        menu.append(&resume_item)?;
+    let resume_label = if paused_count > 0 {
+        format!("▶ Resume All Downloads ({})", paused_count)
     } else {
-        let resume_item = MenuItem::with_id(app, "resume_all", "Resume All Downloads", false, None::<&str>)?;
-        menu.append(&resume_item)?;
-    }
+        "▶ Resume All Downloads".to_string()
+    };
+    let resume_item = MenuItem::with_id(app, "resume_all", &resume_label, paused_count > 0, None::<&str>)?;
+    menu.append(&resume_item)?;
 
     let sep3 = PredefinedMenuItem::separator(app)?;
     menu.append(&sep3)?;
 
-    // 5. Exit Downex
-    let quit_item = MenuItem::with_id(app, "quit", "Quit Downex", true, None::<&str>)?;
+    // 6. Productivity Tools & Quick Links
+    let open_dl_item = MenuItem::with_id(app, "open_downloads", "📁 Open Downloads Folder", true, None::<&str>)?;
+    menu.append(&open_dl_item)?;
+
+    let settings_item = MenuItem::with_id(app, "open_settings", "⚙ Settings", true, None::<&str>)?;
+    menu.append(&settings_item)?;
+
+    let updates_item = MenuItem::with_id(app, "check_updates", "🔄 Check for Updates...", true, None::<&str>)?;
+    menu.append(&updates_item)?;
+
+    let sep4 = PredefinedMenuItem::separator(app)?;
+    menu.append(&sep4)?;
+
+    // 7. Exit Application
+    let quit_item = MenuItem::with_id(app, "quit", "❌ Quit Downex", true, None::<&str>)?;
     menu.append(&quit_item)?;
 
     Ok(menu)
@@ -116,7 +134,14 @@ pub fn setup_system_tray<R: Runtime>(app: &AppHandle<R>) -> Result<TrayIcon<R>, 
                     let is_showing = window.is_visible().unwrap_or(false) && !window.is_minimized().unwrap_or(false);
                     if is_showing {
                         let _ = window.hide();
+                        #[cfg(target_os = "windows")]
+                        {
+                            crate::commands::set_process_priority_background(true);
+                            crate::commands::trim_process_working_set();
+                        }
                     } else {
+                        #[cfg(target_os = "windows")]
+                        crate::commands::set_process_priority_background(false);
                         let _ = window.show();
                         let _ = window.unminimize();
                         let _ = window.set_focus();
@@ -145,6 +170,36 @@ pub fn setup_system_tray<R: Runtime>(app: &AppHandle<R>) -> Result<TrayIcon<R>, 
                 }
                 let _ = refresh_tray_menu(app);
             }
+            "open_downloads" => {
+                if let Some(state) = app.try_state::<crate::AppState>() {
+                    let dir = state.queue_manager.get_default_download_directory();
+                    let _ = std::process::Command::new("explorer.exe").arg(&dir).spawn();
+                }
+            }
+            "open_settings" => {
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.show();
+                    let _ = window.unminimize();
+                    let _ = window.set_focus();
+                    let _ = app.emit("downex-navigate", "settings");
+                } else {
+                    let _ = create_or_show_main_window(app);
+                    let _ = app.emit("downex-navigate", "settings");
+                }
+                let _ = refresh_tray_menu(app);
+            }
+            "check_updates" => {
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.show();
+                    let _ = window.unminimize();
+                    let _ = window.set_focus();
+                    let _ = app.emit("downex-check-updates", ());
+                } else {
+                    let _ = create_or_show_main_window(app);
+                    let _ = app.emit("downex-check-updates", ());
+                }
+                let _ = refresh_tray_menu(app);
+            }
             "quit" => {
                 app.exit(0);
             }
@@ -158,12 +213,19 @@ pub fn setup_system_tray<R: Runtime>(app: &AppHandle<R>) -> Result<TrayIcon<R>, 
                     button_state: MouseButtonState::Up,
                     ..
                 } => {
-                    // Left click toggles window: If showing, minimize to tray. If hidden/minimized, show & focus.
+                    // Left click toggles window: If showing, minimize to tray with low RAM trimming. If hidden, show & focus.
                     if let Some(window) = app.get_webview_window("main") {
                         let is_showing = window.is_visible().unwrap_or(false) && !window.is_minimized().unwrap_or(false);
                         if is_showing {
                             let _ = window.hide();
+                            #[cfg(target_os = "windows")]
+                            {
+                                crate::commands::set_process_priority_background(true);
+                                crate::commands::trim_process_working_set();
+                            }
                         } else {
+                            #[cfg(target_os = "windows")]
+                            crate::commands::set_process_priority_background(false);
                             let _ = window.show();
                             let _ = window.unminimize();
                             let _ = window.set_focus();
@@ -171,10 +233,6 @@ pub fn setup_system_tray<R: Runtime>(app: &AppHandle<R>) -> Result<TrayIcon<R>, 
                     } else {
                         let _ = create_or_show_main_window(app);
                     }
-                    let _ = refresh_tray_menu(app);
-                }
-                TrayIconEvent::Enter { .. } => {
-                    // Rebuild menu on mouse hover so dynamic options are completely up-to-date before any click
                     let _ = refresh_tray_menu(app);
                 }
                 _ => {}
@@ -200,13 +258,20 @@ pub fn set_tray_icon_state<R: Runtime>(app: &AppHandle<R>, state: &str) -> Resul
 }
 
 pub fn create_or_show_main_window<R: Runtime>(app: &AppHandle<R>) -> Result<tauri::WebviewWindow<R>, Box<dyn std::error::Error>> {
+    #[cfg(target_os = "windows")]
+    crate::commands::set_process_priority_background(false);
+
     if let Some(window) = app.get_webview_window("main") {
+        if let Ok(icon) = Image::from_bytes(include_bytes!("../icons/128x128.png")) {
+            let _ = window.set_icon(icon);
+        }
         let _ = window.show();
         let _ = window.unminimize();
         let _ = window.set_focus();
         let _ = refresh_tray_menu(app);
         Ok(window)
     } else {
+        let icon_res = Image::from_bytes(include_bytes!("../icons/128x128.png"));
         let builder = tauri::WebviewWindowBuilder::new(app, "main", tauri::WebviewUrl::default())
             .title("Downex")
             .inner_size(960.0, 640.0)
@@ -218,6 +283,9 @@ pub fn create_or_show_main_window<R: Runtime>(app: &AppHandle<R>) -> Result<taur
             .center();
 
         let window = builder.build()?;
+        if let Ok(icon) = icon_res {
+            let _ = window.set_icon(icon);
+        }
         let _ = refresh_tray_menu(app);
         Ok(window)
     }

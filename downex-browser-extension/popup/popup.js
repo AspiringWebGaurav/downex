@@ -18,8 +18,13 @@ document.addEventListener('DOMContentLoaded', async () => {
   const pathPreview = document.getElementById('path-preview');
   const btnDownloadNow = document.getElementById('btn-download-now');
   const btnDownloadLater = document.getElementById('btn-download-later');
-  const toggleIntercept = document.getElementById('toggle-intercept');
   const toggleMedia = document.getElementById('toggle-media');
+  const toggleInPlayerPill = document.getElementById('toggle-in-player-pill');
+  const toggleQualityBadge = document.getElementById('toggle-quality-badge');
+  const toggleIntercept = document.getElementById('toggle-intercept');
+  const toggleAltBypass = document.getElementById('toggle-alt-bypass');
+  const videoSubSettings = document.getElementById('video-sub-settings');
+  const detectionStatusChip = document.getElementById('detection-status-chip');
   const btnScanLinks = document.getElementById('btn-scan-links');
   const linksBox = document.getElementById('links-box');
   const linksList = document.getElementById('links-list');
@@ -32,6 +37,28 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   let extractedLinks = [];
   let currentFilter = 'all';
+
+  function updateSettingsVisuals() {
+    const isVideoOn = toggleMedia ? toggleMedia.checked : true;
+    if (videoSubSettings) {
+      if (isVideoOn) {
+        videoSubSettings.classList.remove('is-disabled');
+      } else {
+        videoSubSettings.classList.add('is-disabled');
+      }
+    }
+    if (detectionStatusChip) {
+      if (isVideoOn) {
+        detectionStatusChip.className = 'chip-status chip-active';
+        detectionStatusChip.innerHTML = '<span class="chip-dot"></span>Video ON';
+        detectionStatusChip.title = 'Video and stream detection is currently active';
+      } else {
+        detectionStatusChip.className = 'chip-status chip-disabled';
+        detectionStatusChip.innerHTML = '<span class="chip-dot"></span>Video OFF';
+        detectionStatusChip.title = 'Video and stream detection is turned off';
+      }
+    }
+  }
 
   function formatBytes(bytes) {
     if (!bytes || bytes === 0) return '';
@@ -67,13 +94,34 @@ document.addEventListener('DOMContentLoaded', async () => {
     return null;
   }
 
-  // 1. Load config
-  chrome.storage.local.get(['config'], (result) => {
-    if (result.config) {
-      if (toggleIntercept) toggleIntercept.checked = result.config.interceptDownloads !== false;
-      if (toggleMedia) toggleMedia.checked = result.config.enableMediaGrabber !== false;
+  // 1. Instant Cache Hydration: Render initial state in 0ms before any network request
+  chrome.storage.local.get(
+    ['config', 'engineAlive', 'engineVersion', 'engineActiveCount', 'engineSpeed', 'downex_auth_token'],
+    (cached) => {
+      if (cached?.config) {
+        if (toggleMedia) toggleMedia.checked = cached.config.enableMediaGrabber !== false;
+        if (toggleInPlayerPill) toggleInPlayerPill.checked = cached.config.showInPlayerPill !== false;
+        if (toggleQualityBadge) toggleQualityBadge.checked = cached.config.showQualityBadge !== false;
+        if (toggleIntercept) toggleIntercept.checked = cached.config.interceptDownloads !== false;
+        if (toggleAltBypass) toggleAltBypass.checked = cached.config.altKeyBypass !== false;
+        updateSettingsVisuals();
+      }
+      if (cached?.downex_auth_token) {
+        popupAuthToken = cached.downex_auth_token;
+      }
+      // Instant visual state without waiting
+      if (cached?.engineAlive) {
+        if (statusBadge) statusBadge.className = 'status-badge status-connected';
+        if (statusText) {
+          const count = cached.engineActiveCount || 0;
+          const speed = cached.engineSpeed || 0;
+          statusText.textContent = count > 0
+            ? `Active (${count} • ${formatBytes(speed)}/s)`
+            : `Connected (v${cached.engineVersion || '0.0.0'})`;
+        }
+      }
     }
-  });
+  );
 
   // 2. Real-time Engine Connection Check & Real Refresh
   let isRefreshing = false;
@@ -82,35 +130,38 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (isRefreshing) return;
     isRefreshing = true;
 
-    // A. Visual Loading State on both Badge & Footer Button
-    if (statusBadge) {
-      statusBadge.className = 'status-badge status-checking';
-    }
-    if (statusText) {
-      statusText.textContent = 'Connecting...';
-    }
-    if (btnRefreshStatus) {
-      btnRefreshStatus.classList.remove('is-success', 'is-offline');
-      btnRefreshStatus.classList.add('is-refreshing');
-      btnRefreshStatus.disabled = true;
-    }
-    if (refreshLabel) {
-      refreshLabel.textContent = 'Checking...';
+    // Only show spinning/checking state if user explicitly clicked the Refresh button
+    if (isUserInitiated) {
+      if (statusBadge) {
+        statusBadge.className = 'status-badge status-checking';
+      }
+      if (statusText) {
+        statusText.textContent = 'Connecting...';
+      }
+      if (btnRefreshStatus) {
+        btnRefreshStatus.classList.remove('is-success', 'is-offline');
+        btnRefreshStatus.classList.add('is-refreshing');
+        btnRefreshStatus.disabled = true;
+      }
+      if (refreshLabel) {
+        refreshLabel.textContent = 'Checking...';
+      }
     }
 
-    // B. Minimum visual spinner duration (550ms) to ensure smooth UX perception
-    const minDelay = new Promise((resolve) => setTimeout(resolve, 550));
+    // Minimum visual delay applies ONLY when user manually clicks refresh (tactile feedback)
+    const minDelay = isUserInitiated
+      ? new Promise((resolve) => setTimeout(resolve, 300))
+      : Promise.resolve();
 
-    // C. Real network check & live sync
+    // Fast loopback check & live sync (< 1ms on local machine)
     const checkPromise = (async () => {
       let isAlive = false;
       let version = '0.0.0';
       let detailsData = null;
 
-      // Primary: Direct 0-latency loopback fetch with 1000ms abort
       try {
         const ctrl = new AbortController();
-        const tid = setTimeout(() => ctrl.abort(), 1000);
+        const tid = setTimeout(() => ctrl.abort(), 800);
         const resp = await fetch('http://127.0.0.1:18888/api/ping', {
           method: 'GET',
           cache: 'no-store',
@@ -123,30 +174,22 @@ document.addEventListener('DOMContentLoaded', async () => {
           if (res && res.success) {
             isAlive = true;
             version = res?.data?.version || '0.0.0';
-
-            // Query active tasks and speed
-            try {
-              const token = await getPopupAuthToken();
-              const headers = { 'Accept': 'application/json' };
-              if (token) headers['Authorization'] = `Bearer ${token}`;
-
-              const statusResp = await fetch('http://127.0.0.1:18888/api/status', {
-                method: 'GET',
-                cache: 'no-store',
-                headers,
-              });
-              if (statusResp.ok) {
-                const sJson = await statusResp.json();
-                if (sJson && sJson.success) {
-                  detailsData = sJson.data;
-                }
-              }
-            } catch (_) {}
+            if (res.token || res.data?.token) {
+              popupAuthToken = res.token || res.data?.token;
+              chrome.storage.local.set({ downex_auth_token: popupAuthToken });
+            }
+            if (res.data) {
+              detailsData = {
+                active_count: res.data.active_count || 0,
+                total_count: res.data.total_count || 0,
+                total_speed_bytes_sec: res.data.total_speed_bytes_sec || 0,
+              };
+            }
           }
         }
       } catch (_) {}
 
-      // Secondary fallback via extension background messaging bus
+      // Secondary fallback via background service worker messaging bus if direct fetch fails
       if (!isAlive && typeof chrome !== 'undefined' && chrome.runtime?.sendMessage) {
         try {
           const bgResponse = await new Promise((r) => {
@@ -159,12 +202,21 @@ document.addEventListener('DOMContentLoaded', async () => {
         } catch (_) {}
       }
 
+      // Persist latest state into storage for next instant popup launch
+      chrome.storage.local.set({
+        engineAlive: isAlive,
+        engineVersion: version,
+        engineActiveCount: detailsData?.active_count || 0,
+        engineSpeed: detailsData?.total_speed_bytes_sec || 0,
+        engineLastChecked: Date.now(),
+      });
+
       return { isAlive, version, detailsData };
     })();
 
     const [result] = await Promise.all([checkPromise, minDelay]);
 
-    // D. Re-scan clipboard or re-probe URL if user clicked refresh
+    // Re-scan clipboard or re-probe URL if user clicked refresh
     if (isUserInitiated) {
       const currentUrl = (urlInput?.value || '').trim();
       if (currentUrl) {
@@ -183,7 +235,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       }
     }
 
-    // E. Render Result with Visual Confirmation
+    // Render Result with Zero-Lag Visual Confirmation
     if (btnRefreshStatus) {
       btnRefreshStatus.classList.remove('is-refreshing');
       btnRefreshStatus.disabled = false;
@@ -211,7 +263,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       if (refreshLabel) refreshLabel.textContent = 'Offline';
     }
 
-    // Smoothly restore 'Refresh' text after confirmation
+    // Smoothly restore 'Refresh' button label
     setTimeout(() => {
       if (btnRefreshStatus) {
         btnRefreshStatus.classList.remove('is-success', 'is-offline');
@@ -220,29 +272,36 @@ document.addEventListener('DOMContentLoaded', async () => {
         refreshLabel.textContent = 'Refresh';
       }
       isRefreshing = false;
-    }, 1400);
+    }, 1200);
   }
 
-  // Initial check on popup open
+  // Initial non-blocking check on popup open (0ms delay!)
   checkEngineStatus(false);
 
   // Click listeners for manual refresh
   statusBadge?.addEventListener('click', () => checkEngineStatus(true));
   btnRefreshStatus?.addEventListener('click', () => checkEngineStatus(true));
 
-  // 3. Save Configuration on Toggle Changes
+  // 3. Save Configuration on Toggle Changes (Instant 0-lag storage update)
   function saveConfig() {
-    chrome.storage.local.set({
-      config: {
-        interceptDownloads: toggleIntercept ? toggleIntercept.checked : true,
-        enableMediaGrabber: toggleMedia ? toggleMedia.checked : true,
-      },
-    });
+    const newConfig = {
+      enableMediaGrabber: toggleMedia ? toggleMedia.checked : true,
+      showInPlayerPill: toggleInPlayerPill ? toggleInPlayerPill.checked : true,
+      showQualityBadge: toggleQualityBadge ? toggleQualityBadge.checked : true,
+      interceptDownloads: toggleIntercept ? toggleIntercept.checked : true,
+      altKeyBypass: toggleAltBypass ? toggleAltBypass.checked : true,
+    };
+    chrome.storage.local.set({ config: newConfig });
+    updateSettingsVisuals();
   }
-  toggleIntercept?.addEventListener('change', saveConfig);
-  toggleMedia?.addEventListener('change', saveConfig);
 
-  // 4. URL Probing & Auto-Categorization
+  toggleMedia?.addEventListener('change', saveConfig);
+  toggleInPlayerPill?.addEventListener('change', saveConfig);
+  toggleQualityBadge?.addEventListener('change', saveConfig);
+  toggleIntercept?.addEventListener('change', saveConfig);
+  toggleAltBypass?.addEventListener('change', saveConfig);
+
+  // 4. Fast Debounced URL Probing (160ms responsiveness)
   let probeTimeout = null;
 
   async function handleUrlInputChanged(newUrl) {
@@ -257,7 +316,6 @@ document.addEventListener('DOMContentLoaded', async () => {
       return;
     }
 
-    // Debounced probe to Downex Engine loopback
     clearTimeout(probeTimeout);
     if (fileSizeBadge) {
       fileSizeBadge.style.display = 'inline-block';
@@ -265,35 +323,52 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 
     probeTimeout = setTimeout(async () => {
-      try {
-        const token = await getPopupAuthToken();
-        const headers = { 'Content-Type': 'application/json' };
-        if (token) headers['Authorization'] = `Bearer ${token}`;
-
-        const resp = await fetch('http://127.0.0.1:18888/api/probe', {
-          method: 'POST',
-          headers,
-          body: JSON.stringify({ url: trimmed }),
-        });
-
-        if (resp.ok) {
-          const res = await resp.json();
-          if (res && res.success && res.data) {
-            if (fileSizeBadge) {
-              if (res.data.total_bytes) {
-                fileSizeBadge.textContent = `${formatBytes(res.data.total_bytes)}${res.data.supports_ranges ? ' • Multi-Stream' : ''}`;
-              } else {
-                fileSizeBadge.textContent = 'Stream';
-              }
+      // First attempt via background bus for maximum resilience & auth token handling
+      chrome.runtime.sendMessage({ type: 'PROBE_URL', url: trimmed }, (res) => {
+        if (res && res.success && res.data) {
+          if (fileSizeBadge) {
+            if (res.data.total_bytes) {
+              fileSizeBadge.textContent = `${formatBytes(res.data.total_bytes)}${res.data.supports_ranges ? ' • Multi-Stream' : ''}`;
+            } else {
+              fileSizeBadge.textContent = 'Stream';
             }
-            return;
           }
+        } else {
+          // Fallback direct loopback probe if background worker unavailable
+          (async () => {
+            try {
+              const token = await getPopupAuthToken();
+              const headers = { 'Content-Type': 'application/json' };
+              if (token) {
+                headers['Authorization'] = `Bearer ${token}`;
+                headers['X-Downex-Token'] = token;
+              }
+              const resp = await fetch('http://127.0.0.1:18888/api/probe', {
+                method: 'POST',
+                headers,
+                body: JSON.stringify({ url: trimmed }),
+              });
+              if (resp.ok) {
+                const json = await resp.json();
+                if (json && json.success && json.data) {
+                  if (fileSizeBadge) {
+                    if (json.data.total_bytes) {
+                      fileSizeBadge.textContent = `${formatBytes(json.data.total_bytes)}${json.data.supports_ranges ? ' • Multi-Stream' : ''}`;
+                    } else {
+                      fileSizeBadge.textContent = 'Stream';
+                    }
+                  }
+                  return;
+                }
+              }
+              if (fileSizeBadge) fileSizeBadge.style.display = 'none';
+            } catch {
+              if (fileSizeBadge) fileSizeBadge.style.display = 'none';
+            }
+          })();
         }
-        if (fileSizeBadge) fileSizeBadge.style.display = 'none';
-      } catch {
-        if (fileSizeBadge) fileSizeBadge.style.display = 'none';
-      }
-    }, 350);
+      });
+    }, 160);
   }
 
   urlInput?.addEventListener('input', (e) => handleUrlInputChanged(e.target.value));
@@ -315,19 +390,23 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   });
 
-  // 5. Zero-Click Smart Auto-Detect from Clipboard on Popup Open
-  try {
-    navigator.clipboard.readText().then((clipUrl) => {
-      const trimmed = (clipUrl || '').trim();
-      if (trimmed && (trimmed.startsWith('http://') || trimmed.startsWith('https://'))) {
-        if (urlInput && !urlInput.value) {
-          urlInput.value = trimmed;
-          handleUrlInputChanged(trimmed);
-          urlInput.select();
-        }
+  // 5. Zero-Click Smart Auto-Detect from Clipboard (deferred so popup window paints in 0ms)
+  setTimeout(() => {
+    try {
+      if (navigator.clipboard?.readText) {
+        navigator.clipboard.readText().then((clipUrl) => {
+          const trimmed = (clipUrl || '').trim();
+          if (trimmed && (trimmed.startsWith('http://') || trimmed.startsWith('https://'))) {
+            if (urlInput && !urlInput.value) {
+              urlInput.value = trimmed;
+              handleUrlInputChanged(trimmed);
+              urlInput.select();
+            }
+          }
+        }).catch(() => {});
       }
-    }).catch(() => {});
-  } catch {}
+    } catch {}
+  }, 10);
 
   // 6. Execute Download (Start Download vs Download Later)
   function submitDownload(downloadLater = false) {

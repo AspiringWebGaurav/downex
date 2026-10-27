@@ -8,9 +8,10 @@ import { NewDownloadModal } from './components/NewDownloadModal';
 import { useDownloadStore } from './stores/downloadStore';
 import { useAppVersionStore } from './stores/appVersionStore';
 import { UpdateModal } from './components/UpdateModal';
+import { UpdateNotification } from './components/UpdateNotification';
+import { PatchNotesModal } from './components/PatchNotesModal';
 import { SettingsView } from './components/SettingsView';
-import { onOpenNewDownloadModal, showDownloadDialog, isTauri } from './services/tauriService';
-import { getCurrentWindow } from '@tauri-apps/api/window';
+import { onOpenNewDownloadModal, showDownloadDialog, onNavigate, onCheckUpdatesFromTray, notifyDomReady } from './services/tauriService';
 import './App.css';
 
 export const App: React.FC = () => {
@@ -26,21 +27,37 @@ export const App: React.FC = () => {
   const setNewModalOpen = useDownloadStore((state) => state.setNewModalOpen);
   const openNewModalWithData = useDownloadStore((state) => state.openNewModalWithData);
   const selectedView = useDownloadStore((state) => state.selectedView);
+  const setSelectedView = useDownloadStore((state) => state.setSelectedView);
   const showTelemetryOnHome = useDownloadStore((state) => state.showTelemetryOnHome);
 
   useEffect(() => {
+    if (typeof window !== 'undefined') {
+      (window as any).__DOWNEX_VERSION_STORE__ = useAppVersionStore;
+      (window as any).__DOWNEX_DOWNLOAD_STORE__ = useDownloadStore;
+    }
     initVersion();
     loadItems();
     const unlisten = initListener();
 
-    // Show window gracefully after initial DOM render to prevent white flash
-    if (isTauri) {
-      getCurrentWindow().show().then(() => {
-        getCurrentWindow().setFocus();
-      }).catch(() => {});
-    }
+    // Re-check updates when window regains focus if > 30s elapsed (GPN pattern)
+    let lastFocusCheck = Date.now();
+    const handleFocus = () => {
+      const now = Date.now();
+      if (now - lastFocusCheck > 30000) {
+        lastFocusCheck = now;
+        useAppVersionStore.getState().checkForUpdates(true);
+      }
+    };
+    window.addEventListener('focus', handleFocus);
 
-    return () => unlisten();
+    // Notify native Rust backend that DOM is rendered: Rust reveals the window
+    // smoothly if interactive boot, or keeps window hidden if --background/--silent boot
+    notifyDomReady().catch(() => {});
+
+    return () => {
+      window.removeEventListener('focus', handleFocus);
+      unlisten();
+    };
   }, [initVersion, loadItems, initListener]);
 
   useEffect(() => {
@@ -83,12 +100,23 @@ export const App: React.FC = () => {
       showDownloadDialog();
     });
 
+    const unlistenNavigate = onNavigate((view) => {
+      if (view) setSelectedView(view);
+    });
+
+    const unlistenCheckUpdates = onCheckUpdatesFromTray(() => {
+      useAppVersionStore.getState().checkForUpdates(false);
+      useAppVersionStore.getState().openModal();
+    });
+
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('downex-open-new-download', handleBrowserOpen);
       unlistenTrayModal();
+      unlistenNavigate();
+      unlistenCheckUpdates();
     };
-  }, [setNewModalOpen, openNewModalWithData]);
+  }, [setNewModalOpen, openNewModalWithData, setSelectedView]);
 
   return (
     <div className="w-screen h-screen flex flex-col bg-white dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 overflow-hidden font-sans">
@@ -143,9 +171,11 @@ export const App: React.FC = () => {
         )}
       </div>
 
-      {/* Modals */}
+      {/* Modals & Floating Notifications */}
       <NewDownloadModal />
       <UpdateModal />
+      <UpdateNotification />
+      <PatchNotesModal />
     </div>
   );
 };

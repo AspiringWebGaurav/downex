@@ -143,10 +143,9 @@ if (noUpload) {
   process.exit(0);
 }
 
-console.log('\n[4/4] Uploading immutable base binary to GPHost Cloudflare R2...');
-const baseFilename = 'downex-base-0.0.0.exe';
+console.log('\n[4/4] Uploading immutable base binary and installer to GPHost Cloudflare R2...');
 
-try {
+async function uploadToGPHost(bytes, filename, slug, folder, noShareLink = true) {
   const initRes = await fetch('https://gphost.eu.cc/api/v1/upload', {
     method: 'POST',
     headers: {
@@ -155,12 +154,12 @@ try {
       'User-Agent': 'curl/8.4.0',
     },
     body: JSON.stringify({
-      filename: baseFilename,
-      byteSize: binaryBytes.length,
+      filename,
+      byteSize: bytes.length,
       mimeType: 'application/vnd.microsoft.portable-executable',
-      folder: `${GPHOST_FOLDER}/base`,
-      slug: 'downex-base',
-      noShareLink: true,
+      folder,
+      slug,
+      noShareLink,
       isPermanent: true,
       overwrite: true,
     }),
@@ -168,7 +167,7 @@ try {
 
   if (!initRes.ok) {
     const errText = await initRes.text();
-    throw new Error(`Upload initiation failed: HTTP ${initRes.status}: ${errText}`);
+    throw new Error(`Upload initiation failed for ${filename}: HTTP ${initRes.status}: ${errText}`);
   }
 
   const { uploadUrl, fileId, completeUrl } = await initRes.json();
@@ -176,11 +175,11 @@ try {
   const r2Res = await fetch(uploadUrl, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/vnd.microsoft.portable-executable' },
-    body: binaryBytes,
+    body: bytes,
   });
 
   if (!r2Res.ok) {
-    throw new Error(`Direct R2 upload failed: HTTP ${r2Res.status}`);
+    throw new Error(`Direct R2 upload failed for ${filename}: HTTP ${r2Res.status}`);
   }
 
   const compRes = await fetch(completeUrl || 'https://gphost.eu.cc/api/v1/complete-upload', {
@@ -192,23 +191,42 @@ try {
     },
     body: JSON.stringify({
       fileId,
-      noShareLink: true,
+      noShareLink,
       isPermanent: true,
     }),
   });
 
   if (!compRes.ok) {
     const compErr = await compRes.text();
-    throw new Error(`Upload completion failed: HTTP ${compRes.status}: ${compErr}`);
+    throw new Error(`Upload completion failed for ${filename}: HTTP ${compRes.status}: ${compErr}`);
   }
 
-  console.log(`  ✓ Base 0.0.0 binary uploaded successfully! (File ID: ${fileId})`);
+  return fileId;
+}
+
+try {
+  const baseFilename = 'downex-base-0.0.0.exe';
+  const baseFileId = await uploadToGPHost(binaryBytes, baseFilename, 'downex-base', `${GPHOST_FOLDER}/base`, true);
+  console.log(`  ✓ Standalone Base binary uploaded: ${baseFilename} (ID: ${baseFileId})`);
+
+  let installerFileId = null;
+  if (nsisInstallerPath && fs.existsSync(nsisInstallerPath)) {
+    const installerBytes = fs.readFileSync(nsisInstallerPath);
+    installerFileId = await uploadToGPHost(installerBytes, 'Downex-0.0.0-Setup.exe', 'downex-app', `${GPHOST_FOLDER}/base`, false);
+    console.log(`  ✓ NSIS Setup Installer uploaded: Downex-0.0.0-Setup.exe (ID: ${installerFileId}, Slug: downex-app)`);
+  }
+
   console.log('\n===============================================================');
-  console.log(' [SUCCESS] Permanent Base 0.0.0 Binary Established!');
-  console.log(`   - Local Archive: ${localBaseExe}`);
-  console.log(`   - GPHost File ID: ${fileId} (Slug: downex-base)`);
-  console.log(`   - SHA-256: ${sha256}`);
-  console.log('   - This binary is permanent and will NEVER be overwritten by OTA.');
+  console.log(' [SUCCESS] Permanent Immutable Base 0.0.0 Established!');
+  console.log(`   - Local Executable:     ${localBaseExe}`);
+  if (nsisInstallerPath && fs.existsSync(nsisInstallerPath)) {
+    console.log(`   - Local NSIS Setup:     ${path.join(baseDir, 'Downex-0.0.0-Setup.exe')}`);
+    console.log(`   - Public Installer URL: https://gphost.eu.cc/f/downex-app`);
+    console.log(`   - Direct CDN Hotlink:   https://gphost.eu.cc/raw/downex-app`);
+  }
+  console.log(`   - Base File ID:         ${baseFileId}`);
+  console.log(`   - Standalone SHA-256:   ${sha256}`);
+  console.log('   - This base is permanent and will NEVER be overwritten by OTA.');
   console.log('===============================================================\n');
 } catch (uploadErr) {
   console.error('\n[Error] GPHost base upload failed:', uploadErr.message);

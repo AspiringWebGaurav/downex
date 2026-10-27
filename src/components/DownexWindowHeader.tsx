@@ -74,7 +74,7 @@ export const DownexWindowHeader: React.FC = () => {
               <span>Restart</span>
             </button>
           </div>
-        ) : status.state === 'error' ? (
+        ) : status.state === 'error' && Boolean(status.isManualCheck) ? (
           <div className="flex items-center gap-1.5 px-2.5 h-6 rounded bg-rose-50 dark:bg-rose-950/40 border border-rose-300 dark:border-rose-800 text-[11px] font-mono text-rose-700 dark:text-rose-300">
             <AlertTriangle className="w-3 h-3 text-rose-600 shrink-0" />
             <span>Check failed</span>

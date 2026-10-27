@@ -22,10 +22,9 @@ import {
   onOpenDownloadInfoModal, 
   getDownloadDialogPayload,
   restoreManagerWindow,
-  DownloadInfoModalPayload,
-  isTauri
+  getClipboardText,
+  DownloadInfoModalPayload
 } from '../services/tauriService';
-import { getCurrentWindow } from '@tauri-apps/api/window';
 
 function formatBytes(bytes?: number): string {
   if (!bytes || bytes === 0) return 'Unknown size';
@@ -72,10 +71,6 @@ export const DownloadDialogWindow: React.FC = () => {
       document.documentElement.classList.add('dark');
     } else {
       document.documentElement.classList.remove('dark');
-    }
-
-    if (isTauri) {
-      getCurrentWindow().show().catch(() => {});
     }
   }, []);
 
@@ -148,23 +143,18 @@ export const DownloadDialogWindow: React.FC = () => {
     };
   }, [applyPayload]);
 
-  // If no URL loaded initially, attempt clipboard read
-  useEffect(() => {
-    if (!url && typeof navigator !== 'undefined' && navigator.clipboard && navigator.clipboard.readText) {
-      navigator.clipboard
-        .readText()
-        .then((clip) => {
-          const trimmed = (clip || '').trim();
-          if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
-            setUrl(trimmed);
-            const guess = trimmed.split('?')[0].split('/').pop() || 'download.bin';
-            applyFilename(guess);
-            probeServer(trimmed);
-          }
-        })
-        .catch(() => {});
-    }
-  }, [url, applyFilename]);
+  const handlePasteClipboard = useCallback(async () => {
+    try {
+      const clip = await getClipboardText();
+      const trimmed = (clip || '').trim();
+      if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
+        setUrl(trimmed);
+        const guess = trimmed.split('?')[0].split('/').pop() || 'download.bin';
+        applyFilename(guess);
+        probeServer(trimmed);
+      }
+    } catch {}
+  }, [applyFilename]);
 
   const probeServer = async (targetUrl: string) => {
     setIsProbing(true);
@@ -247,7 +237,9 @@ export const DownloadDialogWindow: React.FC = () => {
 
   const handleCopyUrl = () => {
     if (!url) return;
-    navigator.clipboard.writeText(url);
+    navigator.clipboard?.writeText?.(url)?.catch((err) => {
+      console.warn('Clipboard write notice:', err);
+    });
     setCopiedUrl(true);
     setTimeout(() => setCopiedUrl(false), 1500);
   };
@@ -402,14 +394,28 @@ export const DownloadDialogWindow: React.FC = () => {
             <label className="text-[11px] font-semibold text-zinc-700 dark:text-zinc-300">
               Source URL
             </label>
-            <button
-              type="button"
-              onClick={handleCopyUrl}
-              className="text-[11px] font-medium text-zinc-400 hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors flex items-center gap-1 cursor-pointer"
-            >
-              {copiedUrl ? <Check className="w-3 h-3 text-emerald-500" /> : <Copy className="w-3 h-3" />}
-              <span>{copiedUrl ? 'Copied' : 'Copy URL'}</span>
-            </button>
+            <div className="flex items-center gap-2">
+              {!url && (
+                <button
+                  type="button"
+                  onClick={handlePasteClipboard}
+                  className="text-[11px] font-medium text-emerald-600 dark:text-emerald-400 hover:underline transition-colors flex items-center gap-1 cursor-pointer"
+                >
+                  <Copy className="w-3 h-3" />
+                  <span>Paste from Clipboard</span>
+                </button>
+              )}
+              {url && (
+                <button
+                  type="button"
+                  onClick={handleCopyUrl}
+                  className="text-[11px] font-medium text-zinc-400 hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors flex items-center gap-1 cursor-pointer"
+                >
+                  {copiedUrl ? <Check className="w-3 h-3 text-emerald-500" /> : <Copy className="w-3 h-3" />}
+                  <span>{copiedUrl ? 'Copied' : 'Copy URL'}</span>
+                </button>
+              )}
+            </div>
           </div>
           <div className="px-3 py-1.5 min-h-[30px] rounded-lg bg-zinc-50/70 dark:bg-zinc-950/50 border border-zinc-200/80 dark:border-zinc-800/80 text-[11px] font-mono text-zinc-500 dark:text-zinc-400 truncate select-all flex items-center" title={url}>
             {url ? (originHost || url) : <span className="text-zinc-400 dark:text-zinc-500 italic font-sans text-xs">No URL provided</span>}

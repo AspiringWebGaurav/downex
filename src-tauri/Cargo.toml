@@ -23,7 +23,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["full"] }
 tokio-util = "0.7"
-reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls-native-roots"] }
+reqwest = { version = "0.12", features = ["json", "stream"] }
 rusqlite = { version = "0.32", features = ["bundled"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
@@ -34,6 +34,7 @@ futures-util = "0.3"
 winreg = "0.52"
 urlencoding = "2.1"
 minisign-verify = "0.2"
+base64 = "0.23.1"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = [
@@ -41,7 +42,9 @@ windows-sys = { version = "0.59", features = [
     "Win32_Storage_FileSystem",
     "Win32_System_Power",
     "Win32_UI_WindowsAndMessaging",
-    "Win32_System_DataExchange"
+    "Win32_System_DataExchange",
+    "Win32_System_Memory",
+    "Win32_UI_Shell"
 ] }
 
 [profile.release]

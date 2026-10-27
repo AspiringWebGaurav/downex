@@ -1,10 +1,27 @@
 /**
  * Downex — In-Process OTA Update Service
- * Implements reliable release discovery, binary streaming, AES-256-GCM verification,
- * NTFS atomic swap, and rollback recovery.
+ * 
+ * 1:1 Implementation derived from proven GPN architecture:
+ * - Dual-channel release discovery (Native Rust reqwest with curl/8.4.0 + web fallback)
+ * - Machine instance ID tracking
+ * - High-throughput binary download
+ * - Memory AES-256-GCM authenticated container unpacking + PE MZ header validation
+ * - Temporary staging file creation
+ * - NTFS atomic shadow swap with detached windowless self-healing watchdog
+ * - Strict lifecycle: If same version (up-to-date) on silent boot check -> NO SHOW!
+ *   If next version available -> automatically alerts user.
  */
 
-import { checkUpdates, writeUpdateStagingFile, applyInProcessUpdate, setTrayIcon, verifyUpdateSignature } from './tauriService';
+import {
+  fetchUpdateManifest,
+  downloadUpdateBinary,
+  writeUpdateStagingFile,
+  getStagedUpdate,
+  onOtaDownloadProgress,
+  applyInProcessUpdate,
+  setTrayIcon,
+  verifyUpdateSignature,
+} from './tauriService';
 import { unpackOtaPayload } from './otaContainer';
 import { ReleaseManifest } from '../types/download';
 import { cleanVersion, compareSemver } from '../utils/version';
@@ -35,6 +52,7 @@ export interface UpdateStatus {
   progress?: UpdateProgress;
   errorMessage?: string;
   stagedPath?: string;
+  isManualCheck?: boolean;
 }
 
 export type UpdateStatusListener = (status: UpdateStatus) => void;
@@ -48,6 +66,21 @@ class UpdateService {
   private listeners = new Set<UpdateStatusListener>();
   private stagedBinaryPath: string | null = null;
   private isBusy = false;
+  private pacingInterval: any = null;
+  private resetTimer: any = null;
+
+  private getOrCreateMachineId(): string {
+    try {
+      let id = localStorage.getItem('downex_machine_instance_id');
+      if (!id) {
+        id = 'dwnx-' + Math.random().toString(36).substring(2, 10) + '-' + Date.now().toString(36);
+        localStorage.setItem('downex_machine_instance_id', id);
+      }
+      return id;
+    } catch {
+      return 'dwnx-client';
+    }
+  }
 
   public subscribe(listener: UpdateStatusListener): () => void {
     this.listeners.add(listener);
@@ -55,7 +88,15 @@ class UpdateService {
     return () => this.listeners.delete(listener);
   }
 
-  private notify(updates: Partial<UpdateStatus>) {
+  public setStagedBinaryPath(path: string | null): void {
+    this.stagedBinaryPath = path;
+  }
+
+  public getStagedBinaryPath(): string | null {
+    return this.stagedBinaryPath;
+  }
+
+  public notify(updates: Partial<UpdateStatus>) {
     this.status = { ...this.status, ...updates };
 
     // Synchronize system tray icon with current update status
@@ -88,164 +129,403 @@ class UpdateService {
   }
 
   /**
-   * Check GPHost for the latest release manifest
+   * Check GPHost for the latest release manifest (Dual-channel: Native + Web fetch fallback)
    */
   public async checkForUpdates(silent = false): Promise<ReleaseManifest | null> {
     if (this.isBusy) return null;
 
-    if (!silent) {
-      this.notify({ state: 'checking', errorMessage: undefined });
+    const isManual = !silent;
+    if (isManual) {
+      this.notify({ state: 'checking', isManualCheck: true, errorMessage: undefined });
     }
 
     try {
-      const manifest = await checkUpdates();
+      const machineId = this.getOrCreateMachineId();
+      const manifestUrl = `https://gphost.eu.cc/api/v1/releases/downex/latest?target=windows-x86_64&arch=x86_64&current_version=${encodeURIComponent(
+        this.currentVersion
+      )}&machine_id=${encodeURIComponent(machineId)}&_t=${Date.now()}`;
 
-      if (manifest && compareSemver(manifest.version, this.currentVersion) > 0) {
-        this.notify({
-          state: 'available',
-          targetVersion: cleanVersion(manifest.version),
-          manifest,
-          errorMessage: undefined,
-        });
-        return manifest;
-      } else {
-        if (!silent) {
+      let rawManifest = '';
+      try {
+        rawManifest = await fetchUpdateManifest(manifestUrl);
+      } catch (fetchErr) {
+        console.warn('[Downex OTA] Manifest fetch error:', fetchErr);
+      }
+
+      if (!rawManifest) {
+        if (isManual) {
+          this.notify({ state: 'error', isManualCheck: true, errorMessage: 'Could not contact release server' });
+          setTimeout(() => {
+            if (this.status.state === 'error') this.notify({ state: 'idle', isManualCheck: false, errorMessage: undefined });
+          }, 4000);
+        } else {
+          this.notify({ state: 'idle', isManualCheck: false, manifest: null, errorMessage: undefined });
+        }
+        return null;
+      }
+
+      let data: any = null;
+      try {
+        data = JSON.parse(rawManifest);
+      } catch (parseErr) {
+        console.warn('[Downex OTA] Could not parse release manifest JSON:', parseErr);
+        if (isManual) {
+          this.notify({ state: 'error', isManualCheck: true, errorMessage: 'Invalid release manifest response' });
+        } else {
+          this.notify({ state: 'idle', isManualCheck: false, manifest: null, errorMessage: undefined });
+        }
+        return null;
+      }
+
+      if (data.no_release || !data.version) {
+        if (isManual) {
           this.notify({
             state: 'up-to-date',
+            isManualCheck: true,
             manifest: null,
             targetVersion: undefined,
             errorMessage: undefined,
           });
           setTimeout(() => {
-            if (this.status.state === 'up-to-date') {
-              this.notify({ state: 'idle' });
-            }
+            if (this.status.state === 'up-to-date') this.notify({ state: 'idle', isManualCheck: false });
           }, 3500);
         } else {
-          this.notify({ state: 'idle', manifest: null });
+          // GPN Rule: If same version on silent check, stay idle and show nothing!
+          this.notify({ state: 'idle', isManualCheck: false, manifest: null });
+        }
+        return null;
+      }
+
+      const targetPlatform = data.platforms?.['windows-x86_64'];
+      const downloadUrl = targetPlatform?.url || data.url;
+      const signature = targetPlatform?.signature || data.signature;
+      const notes = data.notes || '';
+      const pub_date = data.pub_date || '';
+      const remoteVersion = cleanVersion(data.version);
+
+      if (compareSemver(remoteVersion, this.currentVersion) > 0) {
+        const manifest: ReleaseManifest = {
+          version: remoteVersion,
+          notes,
+          pub_date,
+          url: downloadUrl,
+          signature,
+          size: data.size || targetPlatform?.size,
+          platforms: data.platforms,
+        };
+
+        // Check if an authenticated staged binary for this exact version already exists on disk
+        const stagedOnDisk = await getStagedUpdate(remoteVersion);
+        const activeStaged = stagedOnDisk || this.stagedBinaryPath;
+
+        if (activeStaged) {
+          this.stagedBinaryPath = activeStaged;
+          this.notify({
+            state: 'ready',
+            isManualCheck: isManual,
+            targetVersion: remoteVersion,
+            manifest,
+            stagedPath: activeStaged,
+            errorMessage: undefined,
+          });
+          return manifest;
+        }
+
+        this.notify({
+          state: 'available',
+          isManualCheck: isManual,
+          targetVersion: remoteVersion,
+          manifest,
+          errorMessage: undefined,
+        });
+        return manifest;
+      } else {
+        if (isManual) {
+          this.notify({
+            state: 'up-to-date',
+            isManualCheck: true,
+            manifest: null,
+            targetVersion: undefined,
+            errorMessage: undefined,
+          });
+          setTimeout(() => {
+            if (this.status.state === 'up-to-date') this.notify({ state: 'idle', isManualCheck: false });
+          }, 3500);
+        } else {
+          // GPN Rule: If same version on silent check, stay idle and show nothing!
+          this.notify({ state: 'idle', isManualCheck: false, manifest: null });
         }
         return null;
       }
     } catch (err: any) {
       console.warn('[Downex OTA] Update check failed:', err);
-      if (!silent) {
+      if (isManual) {
         this.notify({
           state: 'error',
+          isManualCheck: true,
           errorMessage: err?.message || 'Check failed',
         });
         setTimeout(() => {
           if (this.status.state === 'error') {
-            this.notify({ state: 'idle', errorMessage: undefined });
+            this.notify({ state: 'idle', isManualCheck: false, errorMessage: undefined });
           }
         }, 4000);
+      } else {
+        this.notify({ state: 'idle', isManualCheck: false, manifest: null, errorMessage: undefined });
       }
       return null;
     }
   }
 
   /**
-   * Asynchronously download, authenticate, and stage the update package
+   * Asynchronously download, authenticate, and stage the update package (1:1 with GPN)
    */
   public async downloadUpdate(): Promise<boolean> {
     const { manifest, targetVersion } = this.status;
-    const downloadUrl = manifest?.url || manifest?.platforms?.['windows-x86_64']?.url;
-    if (!manifest || !downloadUrl || !targetVersion) {
+    const rawDownloadUrl = manifest?.url || manifest?.platforms?.['windows-x86_64']?.url;
+    if (!manifest || !rawDownloadUrl || !targetVersion) {
       this.notify({ state: 'error', errorMessage: 'No update manifest available to download' });
       return false;
     }
 
+    // Fast-path: Check if already downloaded, authenticated, and staged on disk
+    const stagedOnDisk = await getStagedUpdate(targetVersion);
+    const existingStaged = stagedOnDisk || this.stagedBinaryPath;
+    if (existingStaged) {
+      this.stagedBinaryPath = existingStaged;
+      this.notify({
+        state: 'ready',
+        targetVersion,
+        manifest,
+        stagedPath: existingStaged,
+        errorMessage: undefined,
+      });
+      return true;
+    }
+
+    if (this.isBusy) {
+      console.warn('[Downex OTA] Download already in progress');
+      return false;
+    }
     this.isBusy = true;
+
+    if (this.resetTimer) {
+      clearTimeout(this.resetTimer);
+      this.resetTimer = null;
+    }
+
+    // Always append cache-busting timestamp to bypass stale CDN 307 redirects and force fresh presigned links (1:1 with GPN)
+    const downloadUrl = rawDownloadUrl.includes('?')
+      ? `${rawDownloadUrl}&_t=${Date.now()}`
+      : `${rawDownloadUrl}?_t=${Date.now()}`;
+
+    let expectedTotalBytes = manifest.size || 12711936;
+    let accumulatedBytes = 0;
+    let displayedPercentage = 1;
+    let streamedPercentage = 1;
+    let wireFinished = false;
+
+    // 1. Initialize UI state at 1%
     this.notify({
       state: 'downloading',
-      progress: { downloadedBytes: 0, totalBytes: manifest.size || 0, percentage: 0 },
+      progress: {
+        percentage: 1,
+        downloadedBytes: 0,
+        totalBytes: expectedTotalBytes,
+      },
       errorMessage: undefined,
     });
 
-    try {
-      // 1. Stream download container from GPHost Cloudflare R2
-      const response = await fetch(downloadUrl, {
-        headers: { 'Cache-Control': 'no-cache' },
-      });
+    // Hook up real-time stream chunk listener from native Rust
+    const unlistenProgress = onOtaDownloadProgress((data) => {
+      accumulatedBytes = data.downloaded;
+      if (data.total > 0) expectedTotalBytes = data.total;
+      streamedPercentage = Math.max(streamedPercentage, data.percentage);
+    });
 
-      if (!response.ok) {
-        throw new Error(`Failed to download update container: HTTP ${response.status}`);
-      }
+    // 2. Start adaptive pacing timer (35ms interval for responsive, fluid progression)
+    const pacingPromise = new Promise<void>((resolve) => {
+      if (this.pacingInterval) clearInterval(this.pacingInterval);
+      this.pacingInterval = setInterval(() => {
+        const wireRatio = expectedTotalBytes > 0 ? Math.min(1, accumulatedBytes / expectedTotalBytes) : 0;
+        const calculatedPct = Math.floor(wireRatio * 100);
+        const activePct = Math.max(streamedPercentage, calculatedPct);
 
-      const contentLength = Number(response.headers.get('Content-Length')) || manifest.size || 0;
-      const reader = response.body?.getReader();
+        let targetPct: number;
+        if (wireFinished) {
+          targetPct = 100;
+        } else {
+          // Keep pace with wire chunks in real time
+          targetPct = Math.min(99, Math.max(1, activePct));
+        }
 
-      if (!reader) {
-        // Fallback buffer
-        const buffer = await response.arrayBuffer();
-        return await this.verifyAndStage(buffer, targetVersion);
-      }
+        if (displayedPercentage < targetPct) {
+          const lag = targetPct - displayedPercentage;
+          const step = lag > 25 ? 5 : lag > 12 ? 3 : lag > 4 ? 2 : 1;
+          displayedPercentage = Math.min(targetPct, displayedPercentage + step);
+        }
 
-      let receivedBytes = 0;
-      const chunks: Uint8Array[] = [];
+        const displayedBytes = Math.min(expectedTotalBytes, Math.floor((displayedPercentage / 100) * expectedTotalBytes));
 
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        chunks.push(value);
-        receivedBytes += value.length;
-
-        const percentage = contentLength > 0 ? Math.min(100, Math.round((receivedBytes / contentLength) * 100)) : 50;
         this.notify({
           state: 'downloading',
           progress: {
-            downloadedBytes: receivedBytes,
-            totalBytes: contentLength,
-            percentage,
+            percentage: displayedPercentage,
+            downloadedBytes: displayedBytes,
+            totalBytes: expectedTotalBytes,
           },
         });
+
+        if (wireFinished && displayedPercentage >= 100) {
+          if (this.pacingInterval) clearInterval(this.pacingInterval);
+          this.pacingInterval = null;
+          resolve();
+        }
+      }, 35);
+    });
+
+    // 3. Execute wire download (Native Rust reqwest with curl/8.4.0 UA primary, web fetch secondary)
+    try {
+      let rawBytes: Uint8Array;
+      try {
+        rawBytes = await downloadUpdateBinary(downloadUrl);
+        accumulatedBytes = rawBytes.length;
+        expectedTotalBytes = rawBytes.length;
+        wireFinished = true;
+      } catch (nativeErr: any) {
+        console.warn('[Downex OTA] Native download binary notice, trying web fetch:', nativeErr);
+        let fetchRes: Response | null = null;
+        let lastErr: any = null;
+
+        for (let attempt = 1; attempt <= 2; attempt++) {
+          try {
+            const urlWithTs = downloadUrl.includes('?')
+              ? `${downloadUrl.split('&_t=')[0].split('?_t=')[0]}${downloadUrl.includes('&') ? '&' : '?'}cache_bust=${Date.now()}`
+              : `${downloadUrl}?cache_bust=${Date.now()}`;
+
+            const res = await fetch(urlWithTs);
+            if (!res.ok) {
+              throw new Error(`Server returned HTTP ${res.status}: ${res.statusText}`);
+            }
+            fetchRes = res;
+            break;
+          } catch (e: any) {
+            lastErr = e;
+            console.warn(`[Downex OTA] Fetch attempt ${attempt} notice:`, e?.message);
+            if (attempt < 2) {
+              await new Promise((r) => setTimeout(r, 600));
+            }
+          }
+        }
+
+        if (!fetchRes) {
+          throw lastErr || new Error('Failed to fetch update payload from server');
+        }
+
+        // Stream reader in fetch mode to avoid chunk freezing
+        const reader = fetchRes.body?.getReader();
+        if (reader) {
+          const contentLength = Number(fetchRes.headers.get('content-length')) || expectedTotalBytes;
+          expectedTotalBytes = contentLength;
+          const chunks: Uint8Array[] = [];
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            if (value) {
+              chunks.push(value);
+              accumulatedBytes += value.length;
+              if (expectedTotalBytes > 0) {
+                streamedPercentage = Math.min(99, Math.floor((accumulatedBytes / expectedTotalBytes) * 100));
+              }
+            }
+          }
+          const combined = new Uint8Array(accumulatedBytes);
+          let offset = 0;
+          for (const c of chunks) {
+            combined.set(c, offset);
+            offset += c.length;
+          }
+          rawBytes = combined;
+        } else {
+          const buf = await fetchRes.arrayBuffer();
+          rawBytes = new Uint8Array(buf);
+          accumulatedBytes = rawBytes.length;
+        }
+        wireFinished = true;
       }
 
-      // Concatenate chunks
-      const fullBuffer = new Uint8Array(receivedBytes);
-      let offset = 0;
-      for (const chunk of chunks) {
-        fullBuffer.set(chunk, offset);
-        offset += chunk.length;
-      }
+      // Wait for pacing timer to smoothly finish to 100%
+      await pacingPromise;
+      if (unlistenProgress) unlistenProgress();
 
-      return await this.verifyAndStage(fullBuffer.buffer as ArrayBuffer, targetVersion);
+      return await this.verifyAndStage(rawBytes.buffer as ArrayBuffer, targetVersion);
     } catch (err: any) {
-      console.error('[Downex OTA] Download failed:', err);
+      if (unlistenProgress) unlistenProgress();
+      if (this.pacingInterval) {
+        clearInterval(this.pacingInterval);
+        this.pacingInterval = null;
+      }
       this.isBusy = false;
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      console.error('[Downex OTA] Download failed:', errorMsg);
       this.notify({
         state: 'error',
-        errorMessage: err?.message || 'Download error',
+        errorMessage: `Download could not complete: ${errorMsg}. Existing installation is safe.`,
       });
+
+      if (this.resetTimer) clearTimeout(this.resetTimer);
       return false;
     }
   }
 
   /**
-   * Decrypt container and stage verified binary
+   * Decrypt container and stage verified binary (GPN-style robust AES-256-GCM verification)
    */
   private async verifyAndStage(rawBuffer: ArrayBuffer, targetVersion: string): Promise<boolean> {
-    this.notify({ state: 'verifying' });
+    this.notify({
+      state: 'verifying',
+      progress: {
+        percentage: 100,
+        downloadedBytes: rawBuffer.byteLength,
+        totalBytes: rawBuffer.byteLength,
+      },
+    });
 
     try {
-      // 1. Minisign Ed25519 cryptographic signature verification
-      const signature = this.status.manifest?.signature || this.status.manifest?.platforms?.['windows-x86_64']?.signature;
-      if (signature && signature.trim().length > 0) {
-        const rawBytes = new Uint8Array(rawBuffer);
-        const valid = await verifyUpdateSignature(rawBytes, signature.trim());
-        if (!valid) {
-          throw new Error('Ed25519 signature verification failed! Update rejected for security.');
+      // 1. Minisign Ed25519 / SHA-256 cryptographic signature verification
+      if (this.status.manifest?.signature) {
+        try {
+          let sigToVerify = this.status.manifest.signature.trim();
+          if (!sigToVerify.startsWith('untrusted comment') && !sigToVerify.includes('\n') && sigToVerify.length > 64) {
+            try {
+              const decoded = atob(sigToVerify);
+              if (decoded.includes('untrusted comment')) {
+                sigToVerify = decoded;
+              }
+            } catch (_) {}
+          }
+          await verifyUpdateSignature(new Uint8Array(rawBuffer), sigToVerify);
+          console.log('[Downex OTA] Cryptographic signature check passed.');
+        } catch (sigErr: any) {
+          throw new Error(`Signature verification failed: ${sigErr?.message || sigErr}`);
         }
       }
 
-      // 2. Decrypt and authenticate payload using WebCrypto AES-GCM
+      // 2. Decrypt and authenticate payload using WebCrypto AES-256-GCM
+      // unpackOtaPayload verifies Magic ("DWNX_OTA"), authenticates 128-bit tag,
+      // and verifies the PE MZ executable signature header (0x4D, 0x5A)
       const unpacked = await unpackOtaPayload(rawBuffer);
+      console.log(`[Downex OTA] Payload verified & decrypted: ${unpacked.payload.length} bytes.`);
 
-      // 3. Write verified executable into temporary staging directory
+      // 2. Write verified executable into temporary staging directory
       const stagingFilename = `downex-v${targetVersion}.staged.exe`;
       const stagedPath = await writeUpdateStagingFile(stagingFilename, unpacked.payload);
 
       this.stagedBinaryPath = stagedPath;
       this.isBusy = false;
+
+      // Brief visual pause at verifying for smooth UX (600ms, matches GPN)
+      await new Promise((r) => setTimeout(r, 600));
 
       this.notify({
         state: 'ready',
@@ -257,37 +537,68 @@ class UpdateService {
     } catch (err: any) {
       console.error('[Downex OTA] Verification failed:', err);
       this.isBusy = false;
+      const errorMsg = err instanceof Error ? err.message : String(err);
       this.notify({
         state: 'error',
-        errorMessage: err?.message || 'Verification failed',
+        errorMessage: `Verification failed: ${errorMsg}`,
       });
+
+      if (this.resetTimer) clearTimeout(this.resetTimer);
       return false;
     }
   }
 
   /**
-   * Perform in-process NTFS atomic swap and restart
+   * Perform in-process NTFS atomic swap and restart (GPN-style 1.5s visual hold before handoff)
    * Requires explicit user approval
    */
   public async installAndRestart(): Promise<void> {
+    if (this.resetTimer) {
+      clearTimeout(this.resetTimer);
+      this.resetTimer = null;
+    }
+
     const { targetVersion } = this.status;
     if (!this.stagedBinaryPath || !targetVersion) {
       this.notify({ state: 'error', errorMessage: 'No verified staged update available' });
       return;
     }
 
-    this.notify({ state: 'installing' });
-
     try {
+      this.notify({
+        state: 'restarting',
+        errorMessage: undefined,
+      });
+
+      // Save post-update celebration marker with release notes
+      try {
+        const manifestNotes =
+          this.status.manifest?.notes ||
+          (this.status.manifest as any)?.body ||
+          '';
+        localStorage.setItem(
+          'downex_recently_updated',
+          JSON.stringify({
+            targetVersion,
+            previousVersion: this.currentVersion,
+            notes: manifestNotes,
+            timestamp: Date.now(),
+          })
+        );
+      } catch {}
+
+      // Intentional calibrated pacing: hold restarting state for 1.5 seconds before handoff
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+
       await applyInProcessUpdate({
         stagingPath: this.stagedBinaryPath,
         targetVersion,
-        signature: this.status.manifest?.signature || undefined,
       });
-
-      this.notify({ state: 'restarting' });
     } catch (err: any) {
       console.error('[Downex OTA] In-process atomic swap failed:', err);
+      try {
+        localStorage.removeItem('downex_recently_updated');
+      } catch {}
       this.notify({
         state: 'error',
         errorMessage: `Installation failed: ${err?.message || err}`,

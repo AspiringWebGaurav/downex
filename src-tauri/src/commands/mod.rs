@@ -173,16 +173,146 @@ pub fn cmd_open_folder_picker() -> Result<Option<String>, String> {
 }
 
 #[tauri::command]
-pub async fn cmd_check_updates(state: State<'_, AppState>) -> Result<Option<ReleaseManifest>, String> {
-    let current_version = env!("CARGO_PKG_VERSION");
-    check_latest_release(&state.http_client, current_version)
+pub async fn cmd_fetch_update_manifest(url: String) -> Result<String, String> {
+    let client = reqwest::Client::builder()
+        .user_agent("curl/8.4.0")
+        .connect_timeout(std::time::Duration::from_secs(8))
+        .timeout(std::time::Duration::from_secs(12))
+        .redirect(reqwest::redirect::Policy::limited(10))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let res = client
+        .get(&url)
+        .header("Cache-Control", "no-cache")
+        .send()
+        .await
+        .map_err(|e| format!("Failed to fetch update manifest: {}", e))?;
+
+    if res.status() == reqwest::StatusCode::NOT_FOUND || res.status() == reqwest::StatusCode::NO_CONTENT {
+        return Ok(r#"{"no_release":true}"#.to_string());
+    }
+
+    if !res.status().is_success() {
+        return Err(format!("Update server returned HTTP {}", res.status()));
+    }
+
+    res.text()
+        .await
+        .map_err(|e| format!("Failed to read manifest text: {}", e))
+}
+
+#[tauri::command]
+pub async fn cmd_download_update_binary(app: AppHandle, url: String) -> Result<Vec<u8>, String> {
+    use futures_util::StreamExt;
+
+    let client = reqwest::Client::builder()
+        .user_agent("curl/8.4.0")
+        .connect_timeout(std::time::Duration::from_secs(15))
+        .timeout(std::time::Duration::from_secs(120))
+        .redirect(reqwest::redirect::Policy::limited(10))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let res = client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("Failed to download update binary: {}", e))?;
+
+    if !res.status().is_success() {
+        return Err(format!("Update download returned HTTP {}", res.status()));
+    }
+
+    let total_bytes = res.content_length().unwrap_or(12 * 1024 * 1024);
+    let mut downloaded_bytes: usize = 0;
+    let mut buffer = Vec::with_capacity(total_bytes as usize);
+    let mut stream = res.bytes_stream();
+    let mut last_emit = std::time::Instant::now();
+
+    while let Some(chunk_result) = stream.next().await {
+        let chunk = chunk_result.map_err(|e| format!("Failed to read stream chunk: {}", e))?;
+        downloaded_bytes += chunk.len();
+        buffer.extend_from_slice(&chunk);
+
+        if downloaded_bytes == total_bytes as usize || last_emit.elapsed() >= std::time::Duration::from_millis(35) {
+            let pct = if total_bytes > 0 {
+                ((downloaded_bytes as f64 / total_bytes as f64) * 100.0).floor() as u32
+            } else {
+                0
+            };
+            let _ = app.emit("ota-download-progress", serde_json::json!({
+                "downloaded": downloaded_bytes,
+                "total": total_bytes,
+                "percentage": pct.clamp(1, 99)
+            }));
+            last_emit = std::time::Instant::now();
+        }
+    }
+
+    let _ = app.emit("ota-download-progress", serde_json::json!({
+        "downloaded": downloaded_bytes,
+        "total": downloaded_bytes,
+        "percentage": 100
+    }));
+
+    Ok(buffer)
+}
+
+#[tauri::command]
+pub async fn cmd_download_update_container(app: AppHandle, url: String) -> Result<Vec<u8>, String> {
+    cmd_download_update_binary(app, url).await
+}
+
+#[tauri::command]
+pub async fn cmd_check_updates(app: AppHandle, state: State<'_, AppState>) -> Result<Option<ReleaseManifest>, String> {
+    let current_version = crate::version::resolve_installed_version(&app, Some(&state.db));
+    check_latest_release(&state.http_client, &current_version)
         .await
         .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub fn cmd_get_resolved_version(app: AppHandle) -> Result<String, String> {
-    Ok(app.package_info().version.to_string())
+    Ok(crate::version::resolve_installed_version(&app, None))
+}
+
+#[tauri::command]
+pub fn cmd_get_clipboard_text() -> Result<String, String> {
+    #[cfg(target_os = "windows")]
+    {
+        use windows_sys::Win32::System::DataExchange::*;
+        use windows_sys::Win32::System::Memory::*;
+
+        unsafe {
+            if OpenClipboard(std::ptr::null_mut()) == 0 {
+                return Ok(String::new());
+            }
+            let handle = GetClipboardData(13); // CF_UNICODETEXT = 13
+            if handle.is_null() {
+                CloseClipboard();
+                return Ok(String::new());
+            }
+            let ptr = GlobalLock(handle) as *const u16;
+            if ptr.is_null() {
+                CloseClipboard();
+                return Ok(String::new());
+            }
+            let mut len = 0;
+            while *ptr.add(len) != 0 {
+                len += 1;
+            }
+            let slice = std::slice::from_raw_parts(ptr, len);
+            let text = String::from_utf16_lossy(slice);
+            GlobalUnlock(handle);
+            CloseClipboard();
+            Ok(text)
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        Ok(String::new())
+    }
 }
 
 #[cfg(target_os = "windows")]
@@ -197,6 +327,19 @@ pub fn sync_windows_installed_version(new_version: &str) {
 
     let hkcu = RegKey::predef(HKEY_CURRENT_USER);
     let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
+
+    // 1. Purge any duplicate bundle-ID uninstall keys created by previous builds (GPN 1:1 REA pattern)
+    // This permanently prevents duplicate "Downex" entries in Windows Settings Installed Apps
+    let obsolete_subkeys = [
+        r"Software\Microsoft\Windows\CurrentVersion\Uninstall\com.downex.manager",
+        r"Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\com.downex.manager",
+    ];
+    for obsolete in &obsolete_subkeys {
+        let _ = hkcu.delete_subkey(obsolete);
+        let _ = hklm.delete_subkey(obsolete);
+    }
+
+    // 2. Canonical NSIS Uninstall Registry Key (single unified entry matching ${PRODUCTNAME})
     let canonical_subkey = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\Downex";
 
     let parts: Vec<&str> = clean_ver.split('.').collect();
@@ -210,6 +353,23 @@ pub fn sync_windows_installed_version(new_version: &str) {
         .map(|p| p.to_string_lossy().to_string());
     let current_exe_str = current_exe.as_ref().map(|p| p.to_string_lossy().to_string());
 
+    // Only synchronize with Windows Installed Apps registry if legitimately installed via NSIS installer
+    // (i.e. uninstall.exe exists in the installation directory).
+    // If running in development, debug, or portable mode, do NOT register or create Uninstall key!
+    let is_installed = if let Some(ref dir) = current_dir {
+        std::path::Path::new(dir).join("uninstall.exe").exists()
+    } else {
+        false
+    };
+
+    if !is_installed {
+        // Clean up any development/debug uninstall keys so they never pollute Windows Settings "Installed apps"
+        let _ = hkcu.delete_subkey(canonical_subkey);
+        let _ = hkcu.delete_subkey(r"Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\Downex");
+        let _ = hkcu.delete_subkey(r"Software\Microsoft\Windows\CurrentVersion\App Paths\downex.exe");
+        return;
+    }
+
     // 1. Current User Registry (Standard for NSIS currentUser install mode)
     if let Ok((key, _disp)) = hkcu.create_subkey(canonical_subkey) {
         let existing = key.get_value::<String, _>("DisplayVersion").unwrap_or_default();
@@ -221,19 +381,46 @@ pub fn sync_windows_installed_version(new_version: &str) {
             eprintln!("[Downex Registry] Synced HKCU\\{} DisplayVersion to {}", canonical_subkey, clean_ver);
         }
 
-        if key.get_value::<String, _>("DisplayName").is_err() {
-            let _ = key.set_value("DisplayName", &"Downex");
-            let _ = key.set_value("Publisher", &"Gaurav Patil");
-            if let Some(ref exe) = current_exe_str {
-                let _ = key.set_value("DisplayIcon", &format!("\"{}\",0", exe));
-            }
-            if let Some(ref dir) = current_dir {
-                let _ = key.set_value("InstallLocation", dir);
+        // Set metadata, branding, and uninstaller linkages
+        let _ = key.set_value("DisplayName", &"Downex");
+        let _ = key.set_value("Publisher", &"Gaurav Patil");
+        let _ = key.set_value("MainBinaryName", &"Downex.exe");
+        let _ = key.set_value("NoModify", &1u32);
+        let _ = key.set_value("NoRepair", &1u32);
+        let _ = key.set_value("URLInfoAbout", &"https://gauravpatil.site");
+        let _ = key.set_value("URLUpdateInfo", &"https://gauravpatil.site");
+        let _ = key.set_value("HelpLink", &"https://gauravpatil.site");
+
+        if let Some(ref exe) = current_exe_str {
+            let _ = key.set_value("DisplayIcon", &format!("\"{}\",0", exe));
+        }
+        if let Some(ref dir) = current_dir {
+            let _ = key.set_value("InstallLocation", dir);
+            let uninstall_exe = std::path::Path::new(dir).join("uninstall.exe");
+            if uninstall_exe.exists() {
+                let _ = key.set_value("UninstallString", &format!("\"{}\"", uninstall_exe.to_string_lossy()));
             }
         }
     }
 
-    // 2. App Paths: Register 'downex' for Windows Search and Win+R execution
+    // 2. Local Machine Registry (If elevated / installed for all users)
+    if let Ok(key) = hklm.open_subkey_with_flags(canonical_subkey, KEY_WRITE) {
+        let _ = key.set_value("DisplayVersion", &clean_ver);
+        let _ = key.set_value("Version", &clean_ver);
+        let _ = key.set_value("VersionMajor", &major);
+        let _ = key.set_value("VersionMinor", &minor);
+    }
+
+    // 3. WOW6432Node Local Machine
+    let wow_subkey = r"Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\Downex";
+    if let Ok(key) = hklm.open_subkey_with_flags(wow_subkey, KEY_WRITE) {
+        let _ = key.set_value("DisplayVersion", &clean_ver);
+        let _ = key.set_value("Version", &clean_ver);
+        let _ = key.set_value("VersionMajor", &major);
+        let _ = key.set_value("VersionMinor", &minor);
+    }
+
+    // 3. App Paths: Register 'downex' for Windows Search and Win+R execution
     if let Some(ref exe) = current_exe_str {
         if let Ok((key, _)) = hkcu.create_subkey(r"Software\Microsoft\Windows\CurrentVersion\App Paths\downex.exe") {
             let _ = key.set_value("", exe);
@@ -242,14 +429,6 @@ pub fn sync_windows_installed_version(new_version: &str) {
             }
         }
     }
-
-    // 3. Local Machine Registry (If elevated)
-    if let Ok(key) = hklm.open_subkey_with_flags(canonical_subkey, KEY_WRITE) {
-        let _ = key.set_value("DisplayVersion", &clean_ver);
-        let _ = key.set_value("Version", &clean_ver);
-        let _ = key.set_value("VersionMajor", &major);
-        let _ = key.set_value("VersionMinor", &minor);
-    }
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -257,8 +436,8 @@ pub fn sync_windows_installed_version(_new_version: &str) {}
 
 #[tauri::command]
 pub fn cmd_sync_windows_installed_version(app: AppHandle, version: Option<String>) -> Result<String, String> {
-    let ver = version.unwrap_or_else(|| app.package_info().version.to_string());
-    sync_windows_installed_version(&ver);
+    let ver = version.unwrap_or_else(|| crate::version::resolve_installed_version(&app, None));
+    crate::version::write_persisted_version(&app, None, &ver);
     Ok(ver)
 }
 
@@ -269,19 +448,62 @@ pub fn cmd_write_update_staging_file(file_name: String, bytes: Vec<u8>) -> Resul
         use std::io::Write;
         let temp_dir = std::env::temp_dir().join("com.downex.manager");
         let _ = std::fs::create_dir_all(&temp_dir);
-        let target_file = temp_dir.join(file_name);
-        let mut file = std::fs::File::create(&target_file)
-            .map_err(|e| format!("Could not create staging file: {}", e))?;
-        file.write_all(&bytes)
-            .map_err(|e| format!("Could not write staging file: {}", e))?;
-        file.flush()
-            .map_err(|e| format!("Could not flush staging file: {}", e))?;
+        let target_file = temp_dir.join(&file_name);
+        let part_file = temp_dir.join(format!("{}.part", file_name));
+
+        // 1. Write to temporary .part file first
+        {
+            let mut file = std::fs::File::create(&part_file)
+                .map_err(|e| format!("Could not create staging part file: {}", e))?;
+            file.write_all(&bytes)
+                .map_err(|e| format!("Could not write staging file: {}", e))?;
+            file.flush()
+                .map_err(|e| format!("Could not flush staging file: {}", e))?;
+        }
+
+        // 2. Atomic swap to final staged filename
+        if target_file.exists() {
+            let _ = std::fs::remove_file(&target_file);
+        }
+        std::fs::rename(&part_file, &target_file)
+            .map_err(|e| format!("Could not finalize staging file: {}", e))?;
+
         Ok(target_file.to_string_lossy().to_string())
     }
     #[cfg(not(target_os = "windows"))]
     {
         let _ = (file_name, bytes);
         Err("In-process staging is supported on Windows".to_string())
+    }
+}
+
+#[tauri::command]
+pub fn cmd_get_staged_update(target_version: String) -> Result<Option<String>, String> {
+    #[cfg(target_os = "windows")]
+    {
+        use std::io::Read;
+        let clean_ver = target_version.trim().trim_start_matches('v');
+        let temp_dir = std::env::temp_dir().join("com.downex.manager");
+        let target_file = temp_dir.join(format!("downex-v{}.staged.exe", clean_ver));
+        if target_file.exists() {
+            if let Ok(metadata) = std::fs::metadata(&target_file) {
+                // Verified update binaries are complete PE executables (> 512KB)
+                if metadata.len() > 1024 * 512 {
+                    if let Ok(mut f) = std::fs::File::open(&target_file) {
+                        let mut magic = [0u8; 2];
+                        if f.read_exact(&mut magic).is_ok() && magic == [b'M', b'Z'] {
+                            return Ok(Some(target_file.to_string_lossy().to_string()));
+                        }
+                    }
+                }
+            }
+        }
+        Ok(None)
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = target_version;
+        Ok(None)
     }
 }
 
@@ -300,7 +522,6 @@ pub fn cmd_apply_in_process_update(
     binary_bytes: Option<Vec<u8>>,
     staging_path: Option<String>,
     target_version: Option<String>,
-    signature: Option<String>,
 ) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
@@ -318,19 +539,10 @@ pub fn cmd_apply_in_process_update(
 
         eprintln!("[Downex OTA] Starting in-process atomic shadow swap with {} bytes", bytes.len());
 
-        // 1. Minisign Ed25519 signature check if provided
-        if let Some(ref sig) = signature {
-            let trimmed = sig.trim();
-            if !trimmed.is_empty() {
-                crate::ota::verify_minisign_signature(&bytes, trimmed)
-                    .map_err(|e| format!("OTA integrity check failed: {}", e))?;
-                eprintln!("[Downex OTA] Cryptographic Minisign signature verified.");
-            }
-        }
 
-        // 2. Pre-sync Windows Installed Apps registry DisplayVersion
+        // 2. Pre-sync Windows Installed Apps registry, SQLite app_settings, and AppData sidecar
         if let Some(ref ver) = target_version {
-            sync_windows_installed_version(ver);
+            crate::version::write_persisted_version(&app, None, ver);
         }
 
         // 3. Sanity check: payload must not be trivial
@@ -400,32 +612,118 @@ pub fn cmd_apply_in_process_update(
 
         eprintln!("[Downex OTA] NTFS Atomic Swap successful! Spawning self-healing watchdog...");
 
-        // 8. Spawn Resilient Self-Healing Watchdog Supervisor:
-        //    a) Waits for old PID to exit
-        //    b) Starts new binary
-        //    c) Monitors for 6 seconds
-        //    d) If new process crashes within 6 seconds, restores .old and restarts with --rollback-recovery
+        // 8. Spawn Resilient Self-Healing Watchdog Supervisor from clean staged script file:
         let pid = std::process::id();
-        let exe_str = current_exe.to_string_lossy().replace('\'', "''");
-        let old_str = old_exe.to_string_lossy().replace('\'', "''");
+        let exe_str = current_exe.to_string_lossy().to_string();
+        let old_str = old_exe.to_string_lossy().to_string();
+        let dir_str = parent_dir.to_string_lossy().to_string();
 
-        let watchdog_script = format!(
-            "$oldPid = {pid}; \
-             $exe = '{exe}'; \
-             $old = '{old}'; \
-             for ($i=0; $i -lt 50; $i++) {{ if (-not (Get-Process -Id $oldPid -ErrorAction SilentlyContinue)) {{ break }}; Start-Sleep -Milliseconds 100 }}; \
-             $p = Start-Process -FilePath $exe -ArgumentList '--restarted-after-update --foreground' -PassThru; \
-             if (-not $p) {{ Move-Item -Path $old -Destination $exe -Force; Start-Process -FilePath $exe -ArgumentList '--rollback-recovery'; exit }}; \
-             $crashed = $false; \
-             for ($j=0; $j -lt 12; $j++) {{ Start-Sleep -Milliseconds 500; if ($p.HasExited) {{ $crashed = $true; break }} }}; \
-             if ($crashed) {{ Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue; Start-Sleep -Milliseconds 300; Move-Item -Path $old -Destination $exe -Force; Start-Process -FilePath $exe -ArgumentList '--rollback-recovery' }}",
+        let temp_dir = std::env::temp_dir().join("com.downex.manager");
+        let _ = std::fs::create_dir_all(&temp_dir);
+        let watchdog_file = temp_dir.join(format!("watchdog_{}.ps1", pid));
+
+        let watchdog_content = format!(
+            "# Downex Self-Healing Watchdog Supervisor\r\n\
+             $oldPid = {pid}\r\n\
+             $exe = '{exe}'\r\n\
+             $old = '{old}'\r\n\
+             $dir = '{dir}'\r\n\
+             $log = Join-Path $env:TEMP 'com.downex.manager\\watchdog.log'\r\n\
+             \r\n\
+             function Write-Log($msg) {{\r\n\
+                 $ts = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss.fff')\r\n\
+                 Add-Content -Path $log -Value \"[$ts] $msg\" -ErrorAction SilentlyContinue\r\n\
+             }}\r\n\
+             \r\n\
+             Write-Log \"Watchdog started for PID $oldPid. Target exe: $exe\"\r\n\
+             \r\n\
+             # 1. Wait for old parent process to exit completely\r\n\
+             for ($i = 0; $i -lt 100; $i++) {{\r\n\
+                 if (-not (Get-Process -Id $oldPid -ErrorAction SilentlyContinue)) {{ break }}\r\n\
+                 Start-Sleep -Milliseconds 100\r\n\
+             }}\r\n\
+             Write-Log \"Old PID $oldPid terminated.\"\r\n\
+             \r\n\
+             # 2. Release cooldown for single-instance socket and WebView2 User Data locks\r\n\
+             Start-Sleep -Milliseconds 1500\r\n\
+             \r\n\
+             # 3. Launch updated application binary (with retry)\r\n\
+             $p = $null\r\n\
+             for ($attempt = 1; $attempt -le 3; $attempt++) {{\r\n\
+                 Write-Log \"Launch attempt $attempt for $exe...\"\r\n\
+                 $p = Start-Process -FilePath $exe -WorkingDirectory $dir -ArgumentList \"--restarted-after-update\" -PassThru\r\n\
+                 Start-Sleep -Milliseconds 1500\r\n\
+                 if ($p -and (-not $p.HasExited)) {{\r\n\
+                     Write-Log \"Application launched successfully with PID $($p.Id).\"\r\n\
+                     break\r\n\
+                 }}\r\n\
+                 Write-Log \"Attempt $attempt exited (ExitCode: $($p.ExitCode)). Waiting before retry...\"\r\n\
+                 Start-Sleep -Milliseconds 1000\r\n\
+             }}\r\n\
+             \r\n\
+             if (-not $p -or $p.HasExited) {{\r\n\
+                 Write-Log \"Failed to start updated binary after 3 attempts. Initiating rollback...\"\r\n\
+                 if (Test-Path $old) {{\r\n\
+                     Move-Item -Path $old -Destination $exe -Force\r\n\
+                     Start-Process -FilePath $exe -WorkingDirectory $dir -ArgumentList \"--rollback-recovery\"\r\n\
+                     Write-Log \"Rolled back to $old and restarted.\"\r\n\
+                 }}\r\n\
+                 exit\r\n\
+             }}\r\n\
+             \r\n\
+             # 4. Monitor process stability for 6 seconds\r\n\
+             $crashed = $false\r\n\
+             for ($j = 0; $j -lt 12; $j++) {{\r\n\
+                 Start-Sleep -Milliseconds 500\r\n\
+                 if ($p.HasExited) {{\r\n\
+                     $crashed = $true\r\n\
+                     break\r\n\
+                 }}\r\n\
+             }}\r\n\
+             \r\n\
+             # 5. Rollback on genuine crash during initial boot\r\n\
+             if ($crashed -and (Test-Path $old)) {{\r\n\
+                 Write-Log \"Process crashed during stability monitoring. Rolling back...\"\r\n\
+                 Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue\r\n\
+                 Start-Sleep -Milliseconds 500\r\n\
+                 Move-Item -Path $old -Destination $exe -Force\r\n\
+                 Start-Process -FilePath $exe -WorkingDirectory $dir -ArgumentList \"--rollback-recovery\"\r\n\
+                 Write-Log \"Rolled back to $old and launched recovery.\"\r\n\
+             }} else {{\r\n\
+                 Write-Log \"Application stable. Cleaning up $old...\"\r\n\
+                 Start-Sleep -Milliseconds 2000\r\n\
+                 if (Test-Path $old) {{\r\n\
+                     Remove-Item -Path $old -Force -ErrorAction SilentlyContinue\r\n\
+                 }}\r\n\
+                 Write-Log \"Update process completed successfully.\"\r\n\
+             }}\r\n",
             pid = pid,
             exe = exe_str,
-            old = old_str
+            old = old_str,
+            dir = dir_str
         );
 
-        let spawn_result = std::process::Command::new("powershell.exe")
-            .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-NonInteractive", "-Command", &watchdog_script])
+        if let Err(e) = std::fs::write(&watchdog_file, &watchdog_content) {
+            eprintln!("[Downex OTA] Could not write watchdog script: {}", e);
+        }
+
+        let watchdog_file_str = watchdog_file.to_string_lossy().to_string();
+
+        let spawn_result = std::process::Command::new("cmd.exe")
+            .args([
+                "/c",
+                "start",
+                "",
+                "/b",
+                "powershell.exe",
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-WindowStyle",
+                "Hidden",
+                "-File",
+                &watchdog_file_str,
+            ])
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
@@ -436,11 +734,11 @@ pub fn cmd_apply_in_process_update(
             Ok(_) => {
                 eprintln!("[Downex OTA] Self-healing watchdog spawned for PID {}. Terminating current process.", pid);
                 for (_label, window) in app.webview_windows() {
-                    let _ = window.hide();
+                    let _ = window.destroy();
                 }
                 let app_clone = app.clone();
                 std::thread::spawn(move || {
-                    std::thread::sleep(std::time::Duration::from_millis(150));
+                    std::thread::sleep(std::time::Duration::from_millis(400));
                     app_clone.exit(0);
                     std::process::exit(0);
                 });
@@ -456,7 +754,7 @@ pub fn cmd_apply_in_process_update(
     }
     #[cfg(not(target_os = "windows"))]
     {
-        let _ = (app, binary_bytes, staging_path, target_version, signature);
+        let _ = (app, binary_bytes, staging_path, target_version);
         Err("In-process atomic swap is supported on Windows".to_string())
     }
 }
@@ -465,18 +763,37 @@ pub fn cmd_apply_in_process_update(
 pub fn cmd_clean_superseded_old_binaries() -> Result<bool, String> {
     #[cfg(target_os = "windows")]
     {
+        let mut cleaned = false;
+        // 1. Clean superseded .exe.old
         if let Ok(current_exe) = std::env::current_exe() {
             if let Some(parent) = current_exe.parent() {
                 if let Some(file_name) = current_exe.file_name() {
                     let old_exe = parent.join(format!("{}.old", file_name.to_string_lossy()));
                     if old_exe.exists() {
                         let _ = std::fs::remove_file(old_exe);
-                        return Ok(true);
+                        cleaned = true;
                     }
                 }
             }
         }
-        Ok(false)
+
+        // 2. Clean temporary staging directory artifacts (watchdog scripts, leftover part files)
+        let temp_dir = std::env::temp_dir().join("com.downex.manager");
+        if temp_dir.exists() {
+            if let Ok(entries) = std::fs::read_dir(&temp_dir) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    let name = path.file_name().unwrap_or_default().to_string_lossy();
+                    if name.starts_with("watchdog_") && name.ends_with(".ps1") {
+                        let _ = std::fs::remove_file(&path);
+                    } else if name.ends_with(".part") {
+                        let _ = std::fs::remove_file(&path);
+                    }
+                }
+            }
+        }
+
+        Ok(cleaned)
     }
     #[cfg(not(target_os = "windows"))]
     {
@@ -484,10 +801,77 @@ pub fn cmd_clean_superseded_old_binaries() -> Result<bool, String> {
     }
 }
 
+#[cfg(target_os = "windows")]
+pub fn set_process_priority_background(background: bool) {
+    unsafe {
+        extern "system" {
+            fn GetCurrentProcess() -> *mut std::ffi::c_void;
+            fn SetPriorityClass(hProcess: *mut std::ffi::c_void, dwPriorityClass: u32) -> i32;
+        }
+        // BELOW_NORMAL_PRIORITY_CLASS = 0x00004000 (yields CPU to DWM, games & foreground apps)
+        // NORMAL_PRIORITY_CLASS = 0x00000020 (full interactive responsiveness when UI is active)
+        let priority = if background { 0x00004000 } else { 0x00000020 };
+        let _ = SetPriorityClass(GetCurrentProcess(), priority);
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn set_process_priority_background(_background: bool) {}
+
+#[cfg(target_os = "windows")]
+pub fn trim_process_working_set() {
+    unsafe {
+        extern "system" {
+            fn GetCurrentProcess() -> *mut std::ffi::c_void;
+            fn SetProcessWorkingSetSize(
+                hProcess: *mut std::ffi::c_void,
+                dwMinimumWorkingSetSize: usize,
+                dwMaximumWorkingSetSize: usize,
+            ) -> i32;
+        }
+        // (usize::MAX, usize::MAX) instructs the Windows Virtual Memory Manager
+        // to immediately reclaim all unused private working set pages, drastically reducing RAM footprint
+        let _ = SetProcessWorkingSetSize(GetCurrentProcess(), usize::MAX, usize::MAX);
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn trim_process_working_set() {}
+
+#[tauri::command]
+pub fn cmd_notify_dom_ready(app: AppHandle) {
+    let is_background_boot = std::env::args().any(|arg| {
+        arg == "--background" || arg == "--silent" || arg == "--minimized" || arg == "--autostart" || arg == "-b"
+    });
+    if !is_background_boot {
+        if let Some(w) = app.get_webview_window("main") {
+            if let Ok(icon) = tauri::image::Image::from_bytes(include_bytes!("../../icons/128x128.png")) {
+                let _ = w.set_icon(icon);
+            }
+            let _ = w.show();
+            let _ = w.unminimize();
+            let _ = w.set_focus();
+        }
+        #[cfg(target_os = "windows")]
+        set_process_priority_background(false);
+    } else {
+        #[cfg(target_os = "windows")]
+        {
+            set_process_priority_background(true);
+            trim_process_working_set();
+        }
+    }
+}
+
 #[tauri::command]
 pub async fn cmd_minimize_to_background(app: AppHandle) -> Result<(), String> {
     if let Some(window) = app.get_webview_window("main") {
         window.hide().map_err(|e| e.to_string())?;
+        #[cfg(target_os = "windows")]
+        {
+            set_process_priority_background(true);
+            trim_process_working_set();
+        }
         let _ = crate::tray::refresh_tray_menu(&app);
     }
     Ok(())
@@ -541,7 +925,7 @@ pub fn show_download_dialog<R: tauri::Runtime>(app: &tauri::AppHandle<R>, payloa
 
 #[tauri::command]
 pub fn cmd_get_download_dialog_payload() -> Option<serde_json::Value> {
-    LAST_DOWNLOAD_DIALOG_PAYLOAD.lock().ok().and_then(|mut g| g.take())
+    LAST_DOWNLOAD_DIALOG_PAYLOAD.lock().ok().and_then(|g| g.clone())
 }
 
 #[tauri::command]
@@ -552,6 +936,9 @@ pub fn cmd_show_download_dialog(app: AppHandle, payload: Option<serde_json::Valu
 
 #[tauri::command]
 pub fn cmd_close_download_dialog(app: AppHandle) -> Result<(), String> {
+    if let Ok(mut lock) = LAST_DOWNLOAD_DIALOG_PAYLOAD.lock() {
+        *lock = None;
+    }
     if let Some(window) = app.get_webview_window("download_dialog") {
         let _ = window.set_always_on_top(false);
         let _ = window.hide();
@@ -662,10 +1049,20 @@ pub fn cmd_open_file_folder(path: String) -> Result<(), String> {
 }
 
 pub fn show_download_complete<R: tauri::Runtime>(app: &tauri::AppHandle<R>, payload: Option<serde_json::Value>) {
-    if let Some(ref p) = payload {
-        if let Ok(mut lock) = LAST_DOWNLOAD_COMPLETE_PAYLOAD.lock() {
-            *lock = Some(p.clone());
+    // Only open dialog if a valid, non-empty download payload exists
+    let valid_payload = match payload {
+        Some(ref p) => {
+            let url = p.get("url").and_then(|u| u.as_str()).unwrap_or("").trim();
+            if url.is_empty() {
+                return;
+            }
+            p.clone()
         }
+        None => return,
+    };
+
+    if let Ok(mut lock) = LAST_DOWNLOAD_COMPLETE_PAYLOAD.lock() {
+        *lock = Some(valid_payload.clone());
     }
 
     if let Some(window) = app.get_webview_window("download_complete") {
@@ -692,14 +1089,12 @@ pub fn show_download_complete<R: tauri::Runtime>(app: &tauri::AppHandle<R>, payl
 
         let _ = builder.build();
     }
-    if let Some(p) = payload {
-        let _ = app.emit("open-download-complete-modal", p);
-    }
+    let _ = app.emit("open-download-complete-modal", &valid_payload);
 }
 
 #[tauri::command]
 pub fn cmd_get_download_complete_payload() -> Option<serde_json::Value> {
-    LAST_DOWNLOAD_COMPLETE_PAYLOAD.lock().ok().and_then(|mut g| g.take())
+    LAST_DOWNLOAD_COMPLETE_PAYLOAD.lock().ok().and_then(|g| g.clone())
 }
 
 #[tauri::command]
@@ -710,6 +1105,9 @@ pub fn cmd_show_download_complete(app: AppHandle, payload: Option<serde_json::Va
 
 #[tauri::command]
 pub fn cmd_close_download_complete(app: AppHandle) -> Result<(), String> {
+    if let Ok(mut lock) = LAST_DOWNLOAD_COMPLETE_PAYLOAD.lock() {
+        *lock = None;
+    }
     if let Some(window) = app.get_webview_window("download_complete") {
         let _ = window.set_always_on_top(false);
         let _ = window.hide();

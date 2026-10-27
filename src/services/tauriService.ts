@@ -1,8 +1,19 @@
-import { invoke } from '@tauri-apps/api/core';
+import { invoke, isTauri as coreIsTauri } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { DownloadItem, DownloadProgressEvent, ReleaseManifest } from '../types/download';
 
-export const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
+export function isTauriEnv(): boolean {
+  if (typeof window === 'undefined') return false;
+  return Boolean(
+    (window as any).isTauri ||
+    (typeof coreIsTauri === 'function' && coreIsTauri()) ||
+    '__TAURI_INTERNALS__' in window ||
+    '__TAURI__' in window ||
+    (window.location && window.location.origin && window.location.origin.includes('tauri.localhost'))
+  );
+}
+
+export const isTauri = isTauriEnv();
 
 export interface ProbeResult {
   url: string;
@@ -30,6 +41,29 @@ export async function probeUrl(url: string, headers?: Record<string, string>): P
     return null;
   }
 }
+// Local browser mock state for browser preview / Playwright testing
+let mockDownloads: DownloadItem[] = [];
+let mockQueueRunning = false;
+
+function loadMockDownloads(): DownloadItem[] {
+  if (typeof window === 'undefined') return mockDownloads;
+  try {
+    const raw = sessionStorage.getItem('downex_mock_downloads');
+    if (raw) {
+      mockDownloads = JSON.parse(raw);
+    }
+  } catch {}
+  return mockDownloads;
+}
+
+function saveMockDownloads(items: DownloadItem[]) {
+  mockDownloads = items;
+  if (typeof window !== 'undefined') {
+    try {
+      sessionStorage.setItem('downex_mock_downloads', JSON.stringify(items));
+    } catch {}
+  }
+}
 
 export async function addDownload(
   url: string,
@@ -40,21 +74,33 @@ export async function addDownload(
   customFilename?: string,
 ): Promise<DownloadItem> {
   if (!isTauri) {
-    // Mock browser preview
-    const name = customFilename || url.split('/').pop() || 'file.bin';
-    return {
-      id: 'mock-' + Date.now(),
+    // Mock browser preview with persistent local storage
+    const name = customFilename || url.split('/').pop()?.split('?')[0] || 'file.bin';
+    const folder = destinationFolder || (typeof localStorage !== 'undefined' ? localStorage.getItem('downex_default_dir') : null) || 'C:\\Downloads\\Downex';
+    const dest = folder.endsWith('\\') ? folder + name : `${folder}\\${name}`;
+    const newItem: DownloadItem = {
+      id: 'mock-' + Date.now() + '-' + Math.random().toString(36).substring(2, 7),
       url,
       filename: name,
-      destination_path: 'C:\\Downloads\\' + name,
+      destination_path: dest,
       total_bytes: 104857600,
-      downloaded_bytes: 0,
-      status: startImmediately ? 'downloading' : 'paused',
-      queue_id: 'default',
-      speed_bytes_sec: 15728640,
+      downloaded_bytes: startImmediately ? 26214400 : 0,
+      status: startImmediately ? 'downloading' : 'queued',
+      queue_id: queueId || 'default',
+      speed_bytes_sec: startImmediately ? 15728640 : 0,
+      eta_seconds: startImmediately ? 5 : null,
       created_at: Date.now(),
       updated_at: Date.now(),
+      segments: [
+        { index: 0, start: 0, end: 26214400, downloaded: 13107200, speed_bytes_sec: 3932160, is_active: startImmediately },
+        { index: 1, start: 26214400, end: 52428800, downloaded: 6553600, speed_bytes_sec: 3932160, is_active: startImmediately },
+        { index: 2, start: 52428800, end: 78643200, downloaded: 3276800, speed_bytes_sec: 3932160, is_active: startImmediately },
+        { index: 3, start: 78643200, end: 104857600, downloaded: 3276800, speed_bytes_sec: 3932160, is_active: startImmediately },
+      ],
     };
+    const current = loadMockDownloads();
+    saveMockDownloads([newItem, ...current]);
+    return newItem;
   }
   return await invoke('cmd_add_download', {
     url,
@@ -67,73 +113,224 @@ export async function addDownload(
 }
 
 export async function pauseDownload(id: string): Promise<boolean> {
-  if (!isTauri) return true;
+  if (!isTauri) {
+    const list = loadMockDownloads().map((item) =>
+      item.id === id ? { ...item, status: 'paused' as const, speed_bytes_sec: 0 } : item
+    );
+    saveMockDownloads(list);
+    return true;
+  }
   return await invoke('cmd_pause_download', { id });
 }
 
 export async function resumeDownload(id: string): Promise<boolean> {
-  if (!isTauri) return true;
+  if (!isTauri) {
+    const list = loadMockDownloads().map((item) =>
+      item.id === id ? { ...item, status: 'downloading' as const, speed_bytes_sec: 10485760 } : item
+    );
+    saveMockDownloads(list);
+    return true;
+  }
   return await invoke('cmd_resume_download', { id });
 }
 
 export async function cancelDownload(id: string, deleteFile = false): Promise<boolean> {
-  if (!isTauri) return true;
+  if (!isTauri) {
+    const list = loadMockDownloads().filter((item) => item.id !== id);
+    saveMockDownloads(list);
+    return true;
+  }
   return await invoke('cmd_cancel_download', { id, deleteFile });
 }
 
 export async function startQueue(): Promise<number> {
-  if (!isTauri) return 0;
+  if (!isTauri) {
+    mockQueueRunning = true;
+    const list = loadMockDownloads().map((item) =>
+      item.status === 'queued' ? { ...item, status: 'downloading' as const, speed_bytes_sec: 12582912 } : item
+    );
+    saveMockDownloads(list);
+    return 1;
+  }
   return await invoke<number>('cmd_start_queue');
 }
 
 export async function pauseQueue(): Promise<boolean> {
-  if (!isTauri) return true;
+  if (!isTauri) {
+    mockQueueRunning = false;
+    return true;
+  }
   return await invoke<boolean>('cmd_pause_queue');
 }
 
 export async function isQueueRunning(): Promise<boolean> {
-  if (!isTauri) return false;
+  if (!isTauri) return mockQueueRunning;
   return await invoke<boolean>('cmd_is_queue_running');
 }
 
 export async function queueDownload(id: string): Promise<boolean> {
-  if (!isTauri) return true;
+  if (!isTauri) {
+    const list = loadMockDownloads().map((item) =>
+      item.id === id ? { ...item, status: 'queued' as const, speed_bytes_sec: 0 } : item
+    );
+    saveMockDownloads(list);
+    return true;
+  }
   return await invoke<boolean>('cmd_queue_download', { id });
 }
 
 export async function getDownloads(): Promise<DownloadItem[]> {
-  if (!isTauri) return [];
+  if (!isTauri) return loadMockDownloads();
   return await invoke('cmd_get_downloads');
 }
 
 export async function getDefaultDownloadDir(): Promise<string> {
-  if (!isTauri) return 'C:\\Downloads\\Downex';
+  if (!isTauri) {
+    try {
+      return localStorage.getItem('downex_default_dir') || 'C:\\Downloads\\Downex';
+    } catch {
+      return 'C:\\Downloads\\Downex';
+    }
+  }
   return await invoke<string>('cmd_get_default_download_dir');
 }
 
 export async function setDefaultDownloadDir(newDir: string): Promise<string> {
-  if (!isTauri) return newDir;
+  if (!isTauri) {
+    try {
+      localStorage.setItem('downex_default_dir', newDir);
+    } catch {}
+    return newDir;
+  }
   return await invoke<string>('cmd_set_default_download_dir', { newDir });
 }
 
 export async function getMaxSegments(): Promise<number> {
-  if (!isTauri) return 32;
+  if (!isTauri) {
+    try {
+      const v = localStorage.getItem('downex_max_segments');
+      return v ? parseInt(v, 10) : 32;
+    } catch {
+      return 32;
+    }
+  }
   return await invoke<number>('cmd_get_max_segments');
 }
 
 export async function setMaxSegments(count: number): Promise<number> {
-  if (!isTauri) return count;
+  if (!isTauri) {
+    try {
+      localStorage.setItem('downex_max_segments', String(count));
+    } catch {}
+    return count;
+  }
   return await invoke<number>('cmd_set_max_segments', { count });
 }
 
 export async function changeDownloadDestination(id: string, newFolder: string): Promise<boolean> {
-  if (!isTauri) return true;
+  if (!isTauri) {
+    const list = loadMockDownloads().map((item) => {
+      if (item.id === id) {
+        const dest = newFolder.endsWith('\\') ? newFolder + item.filename : `${newFolder}\\${item.filename}`;
+        return { ...item, destination_path: dest };
+      }
+      return item;
+    });
+    saveMockDownloads(list);
+    return true;
+  }
   return await invoke<boolean>('cmd_change_download_destination', { id, newFolder });
 }
 
 export async function openFolderPicker(): Promise<string | null> {
-  if (!isTauri) return null;
+  if (!isTauri) return 'D:\\Downloads\\CustomDownexFolder';
   return await invoke<string | null>('cmd_open_folder_picker');
+}
+
+export async function fetchUpdateManifest(url: string): Promise<string> {
+  // Always try native Rust command first if in Tauri or invoke is available
+  try {
+    return await invoke<string>('cmd_fetch_update_manifest', { url });
+  } catch (nativeErr) {
+    console.warn('[Downex OTA] Native cmd_fetch_update_manifest notice:', nativeErr);
+    // Secondary native fallback: try cmd_check_updates
+    try {
+      const manifestObj = await invoke<any>('cmd_check_updates');
+      if (manifestObj) {
+        return JSON.stringify(manifestObj);
+      }
+      return JSON.stringify({ no_release: true });
+    } catch {}
+
+    // Fallback for browser preview / mock mode: try Vite proxy first
+    try {
+      const fetchUrl = url.startsWith('https://gphost.eu.cc')
+        ? url.replace('https://gphost.eu.cc', '')
+        : url;
+      const res = await fetch(fetchUrl);
+      if (res.ok) return await res.text();
+      if (res.status === 404 || res.status === 204) return JSON.stringify({ no_release: true });
+    } catch {}
+
+    // Secondary fallback: direct URL
+    try {
+      const res = await fetch(url);
+      if (res.ok) return await res.text();
+      if (res.status === 404 || res.status === 204) return JSON.stringify({ no_release: true });
+    } catch {}
+
+    return JSON.stringify({ no_release: true });
+  }
+}
+
+export async function downloadUpdateBinary(url: string): Promise<Uint8Array> {
+  try {
+    const bytes = await invoke<number[]>('cmd_download_update_binary', { url });
+    return new Uint8Array(bytes);
+  } catch (nativeErr) {
+    console.warn('[Downex OTA] Native download binary notice:', nativeErr);
+    try {
+      const bytes = await invoke<number[]>('cmd_download_update_container', { url });
+      return new Uint8Array(bytes);
+    } catch {}
+
+    const fetchUrl = url.startsWith('https://gphost.eu.cc')
+      ? url.replace('https://gphost.eu.cc', '')
+      : url;
+    try {
+      const res = await fetch(fetchUrl);
+      if (res.ok) {
+        const buf = await res.arrayBuffer();
+        return new Uint8Array(buf);
+      }
+    } catch {}
+
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const buf = await res.arrayBuffer();
+    return new Uint8Array(buf);
+  }
+}
+
+export async function getClipboardText(): Promise<string> {
+  if (isTauriEnv() || isTauri) {
+    try {
+      return await invoke<string>('cmd_get_clipboard_text');
+    } catch {
+      return '';
+    }
+  }
+  // In pure browser dev preview outside Tauri: never prompt for clipboard unless in normal browser
+  if (typeof window !== 'undefined' && window.location && !window.location.origin.includes('tauri.localhost')) {
+    if (typeof navigator !== 'undefined' && navigator.clipboard && navigator.clipboard.readText) {
+      try {
+        return await navigator.clipboard.readText();
+      } catch {
+        return '';
+      }
+    }
+  }
+  return '';
 }
 
 export async function checkUpdates(): Promise<ReleaseManifest | null> {
@@ -142,7 +339,13 @@ export async function checkUpdates(): Promise<ReleaseManifest | null> {
 }
 
 export async function getResolvedVersion(): Promise<string> {
-  if (!isTauri) return '0.0.0';
+  if (!isTauri) {
+    try {
+      return localStorage.getItem('downex_persisted_version') || '0.0.0';
+    } catch {
+      return '0.0.0';
+    }
+  }
   try {
     return await invoke<string>('cmd_get_resolved_version');
   } catch {
@@ -151,6 +354,11 @@ export async function getResolvedVersion(): Promise<string> {
 }
 
 export async function syncWindowsInstalledVersion(version?: string): Promise<string> {
+  if (version) {
+    try {
+      localStorage.setItem('downex_persisted_version', version);
+    } catch {}
+  }
   if (!isTauri) return version || '0.0.0';
   return await invoke<string>('cmd_sync_windows_installed_version', { version });
 }
@@ -161,6 +369,41 @@ export async function writeUpdateStagingFile(fileName: string, bytes: Uint8Array
     fileName,
     bytes: Array.from(bytes),
   });
+}
+
+export async function getStagedUpdate(targetVersion: string): Promise<string | null> {
+  if (!isTauri) return null;
+  try {
+    return await invoke<string | null>('cmd_get_staged_update', { targetVersion });
+  } catch (err) {
+    console.warn('[Downex OTA] cmd_get_staged_update notice:', err);
+    return null;
+  }
+}
+
+export function onOtaDownloadProgress(
+  callback: (progress: { downloaded: number; total: number; percentage: number }) => void
+): () => void {
+  if (!isTauri) return () => {};
+  let unlistenFn: (() => void) | undefined;
+  listen<{ downloaded: number; total: number; percentage: number }>('ota-download-progress', (e) => {
+    callback(e.payload);
+  }).then((un) => {
+    unlistenFn = un;
+  });
+  return () => {
+    if (unlistenFn) unlistenFn();
+  };
+}
+
+export async function downloadUpdateContainer(url: string): Promise<Uint8Array> {
+  if (!isTauri) {
+    const res = await fetch(url);
+    const buf = await res.arrayBuffer();
+    return new Uint8Array(buf);
+  }
+  const bytes = await invoke<number[]>('cmd_download_update_container', { url });
+  return new Uint8Array(bytes);
 }
 
 export async function verifyUpdateSignature(containerBytes: Uint8Array, signature: string): Promise<boolean> {
@@ -175,18 +418,29 @@ export async function applyInProcessUpdate(options: {
   binaryBytes?: Uint8Array;
   stagingPath?: string;
   targetVersion?: string;
-  signature?: string;
 }): Promise<void> {
+  if (options.targetVersion) {
+    try {
+      localStorage.setItem('downex_persisted_version', options.targetVersion);
+    } catch {}
+  }
   if (!isTauri) {
-    alert(`[Mock Mode] Applied in-process update to ${options.targetVersion}!`);
+    console.log(`[Mock Mode] Applied in-process update to ${options.targetVersion}!`);
     return;
   }
   await invoke('cmd_apply_in_process_update', {
     binaryBytes: options.binaryBytes ? Array.from(options.binaryBytes) : null,
     stagingPath: options.stagingPath || null,
     targetVersion: options.targetVersion || null,
-    signature: options.signature || null,
   });
+}
+
+export async function notifyDomReady(): Promise<void> {
+  if (isTauri) {
+    try {
+      await invoke('cmd_notify_dom_ready');
+    } catch {}
+  }
 }
 
 export async function cleanSupersededOldBinaries(): Promise<boolean> {
@@ -357,7 +611,12 @@ export async function closeDownloadDialog(): Promise<void> {
 }
 
 export async function getDownloadDialogPayload(): Promise<DownloadInfoModalPayload | null> {
-  if (!isTauri) return null;
+  if (!isTauri) {
+    if (typeof window !== 'undefined' && (window as any).__DOWNEX_MOCK_DIALOG_PAYLOAD__) {
+      return (window as any).__DOWNEX_MOCK_DIALOG_PAYLOAD__;
+    }
+    return null;
+  }
   try {
     return await invoke<DownloadInfoModalPayload | null>('cmd_get_download_dialog_payload');
   } catch {
@@ -451,7 +710,12 @@ export async function closeDownloadCompleteDialog(): Promise<void> {
 }
 
 export async function getDownloadCompletePayload(): Promise<DownloadCompletePayload | null> {
-  if (!isTauri) return null;
+  if (!isTauri) {
+    if (typeof window !== 'undefined' && (window as any).__DOWNEX_MOCK_COMPLETE_PAYLOAD__) {
+      return (window as any).__DOWNEX_MOCK_COMPLETE_PAYLOAD__;
+    }
+    return null;
+  }
   return await invoke<DownloadCompletePayload | null>('cmd_get_download_complete_payload');
 }
 
@@ -485,6 +749,92 @@ export function onDownloadCompleted(callback: (payload: DownloadCompletePayload)
   };
 }
 
+export function onOpenDownloadCompleteModal(callback: (payload: DownloadCompletePayload) => void): () => void {
+  if (!isTauri) return () => {};
+  let isCancelled = false;
+  let unlistenFn: (() => void) | null = null;
 
+  listen<DownloadCompletePayload>('open-download-complete-modal', (e) => {
+    if (!isCancelled && e.payload) {
+      callback(e.payload);
+    }
+  })
+    .then((fn) => {
+      if (isCancelled) {
+        fn();
+      } else {
+        unlistenFn = fn;
+      }
+    })
+    .catch((err) => {
+      console.error('[Downex] Error listening to open-download-complete-modal:', err);
+    });
 
+  return () => {
+    isCancelled = true;
+    if (unlistenFn) {
+      unlistenFn();
+      unlistenFn = null;
+    }
+  };
+}
 
+export function onNavigate(callback: (view: string) => void): () => void {
+  if (!isTauri) return () => {};
+  let isCancelled = false;
+  let unlistenFn: (() => void) | null = null;
+
+  listen<string>('downex-navigate', (e) => {
+    if (!isCancelled && e.payload) {
+      callback(e.payload);
+    }
+  })
+    .then((fn) => {
+      if (isCancelled) {
+        fn();
+      } else {
+        unlistenFn = fn;
+      }
+    })
+    .catch((err) => {
+      console.error('[Downex] Error listening to downex-navigate:', err);
+    });
+
+  return () => {
+    isCancelled = true;
+    if (unlistenFn) {
+      unlistenFn();
+      unlistenFn = null;
+    }
+  };
+}
+
+export function onCheckUpdatesFromTray(callback: () => void): () => void {
+  if (!isTauri) return () => {};
+  let isCancelled = false;
+  let unlistenFn: (() => void) | null = null;
+
+  listen('downex-check-updates', () => {
+    if (!isCancelled) {
+      callback();
+    }
+  })
+    .then((fn) => {
+      if (isCancelled) {
+        fn();
+      } else {
+        unlistenFn = fn;
+      }
+    })
+    .catch((err) => {
+      console.error('[Downex] Error listening to downex-check-updates:', err);
+    });
+
+  return () => {
+    isCancelled = true;
+    if (unlistenFn) {
+      unlistenFn();
+      unlistenFn = null;
+    }
+  };
+}

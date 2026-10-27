@@ -17,6 +17,9 @@ const CACHE_TTL_MS = 5000;
 const DEFAULT_CONFIG = {
   interceptDownloads: true,
   enableMediaGrabber: true,
+  showInPlayerPill: true,
+  showQualityBadge: true,
+  altKeyBypass: true,
   showNotifications: false,
   minFileSizeForIntercept: 1048576, // 1MB minimum
   ignoredExtensions: ['html', 'htm', 'php', 'asp', 'jsp', 'json', 'xml', 'js', 'css', 'torrent'],
@@ -54,11 +57,11 @@ async function getBridgeToken(forceRefresh = false) {
     } catch (_) {}
   }
 
-  // 2. Query /api/handshake on loopback
+  // 2. Query /api/ping or /api/handshake on loopback (< 1ms)
   try {
     const ctrl = new AbortController();
     const timeout = setTimeout(() => ctrl.abort(), 1200);
-    const resp = await fetch(`${DOWNEX_BRIDGE_URL}/api/handshake`, {
+    const resp = await fetch(`${DOWNEX_BRIDGE_URL}/api/ping`, {
       method: 'GET',
       headers: { 'Accept': 'application/json' },
       signal: ctrl.signal,
@@ -78,7 +81,29 @@ async function getBridgeToken(forceRefresh = false) {
     // Desktop engine may not be running yet
   }
 
-  // 3. Fallback to Native Messaging Host if available
+  // 3. Fallback to /api/handshake
+  try {
+    const ctrl = new AbortController();
+    const timeout = setTimeout(() => ctrl.abort(), 1200);
+    const resp = await fetch(`${DOWNEX_BRIDGE_URL}/api/handshake`, {
+      method: 'GET',
+      headers: { 'Accept': 'application/json' },
+      signal: ctrl.signal,
+    });
+    clearTimeout(timeout);
+
+    if (resp.ok) {
+      const data = await resp.json();
+      const token = data?.token || data?.data?.token;
+      if (data && data.success && token) {
+        cachedAuthToken = token;
+        chrome.storage.local.set({ downex_auth_token: cachedAuthToken });
+        return cachedAuthToken;
+      }
+    }
+  } catch (_) {}
+
+  // 4. Fallback to Native Messaging Host if registered
   try {
     const nativeResp = await new Promise((resolve) => {
       if (chrome.runtime.sendNativeMessage) {
@@ -104,7 +129,17 @@ async function getBridgeToken(forceRefresh = false) {
    2. LIFECYCLE MANAGEMENT: INSTALLATION, STARTUP & CONTEXT MENUS
    ========================================================================= */
 
-function setupContextMenus() {
+async function setupContextMenus(overrideConfig) {
+  let cfg = overrideConfig;
+  if (!cfg) {
+    try {
+      const res = await chrome.storage.local.get(['config']);
+      cfg = res?.config ? { ...DEFAULT_CONFIG, ...res.config } : DEFAULT_CONFIG;
+    } catch (_) {
+      cfg = DEFAULT_CONFIG;
+    }
+  }
+
   chrome.contextMenus.removeAll(() => {
     chrome.contextMenus.create({
       id: 'downex-download-link',
@@ -112,11 +147,13 @@ function setupContextMenus() {
       contexts: ['link'],
     });
 
-    chrome.contextMenus.create({
-      id: 'downex-download-media',
-      title: 'Download Media with Downex',
-      contexts: ['video', 'audio', 'image'],
-    });
+    if (cfg.enableMediaGrabber !== false) {
+      chrome.contextMenus.create({
+        id: 'downex-download-media',
+        title: 'Download Media with Downex',
+        contexts: ['video', 'audio', 'image'],
+      });
+    }
 
     chrome.contextMenus.create({
       id: 'downex-grab-page-links',
@@ -126,17 +163,38 @@ function setupContextMenus() {
   });
 }
 
+// Lifecycle: Storage change listener (Dynamic real-time reactivity without refresh)
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === 'local' && changes.config) {
+    const newCfg = changes.config.newValue || {};
+    const oldCfg = changes.config.oldValue || {};
+
+    if (newCfg.enableMediaGrabber !== oldCfg.enableMediaGrabber) {
+      setupContextMenus(newCfg);
+    }
+
+    // If media grabber or quality badge is turned OFF, clear all tab badges immediately
+    if (newCfg.enableMediaGrabber === false || newCfg.showQualityBadge === false) {
+      tabMediaMap.clear();
+      chrome.tabs.query({}, (tabs) => {
+        if (tabs) {
+          for (const tab of tabs) {
+            chrome.action.setBadgeText({ text: '', tabId: tab.id });
+          }
+        }
+      });
+    }
+  }
+});
+
 // Lifecycle: Fresh Install or Unpacked Extension Reload in Dev Mode
 chrome.runtime.onInstalled.addListener((details) => {
   chrome.storage.local.get(['config'], (result) => {
-    if (!result.config) {
-      chrome.storage.local.set({ config: DEFAULT_CONFIG });
-    } else {
-      chrome.storage.local.set({ config: { ...DEFAULT_CONFIG, ...result.config } });
-    }
+    const fullConfig = result?.config ? { ...DEFAULT_CONFIG, ...result.config } : DEFAULT_CONFIG;
+    chrome.storage.local.set({ config: fullConfig });
+    setupContextMenus(fullConfig);
   });
 
-  setupContextMenus();
   refreshEngineStatus(true);
 });
 
@@ -190,15 +248,30 @@ async function pingDownexEngine(force = false) {
     if (resp.ok) {
       const data = await resp.json();
       const alive = data && data.success === true;
+      const version = data?.data?.version || '0.0.0';
+      const token = data?.token || data?.data?.token;
+
+      if (token) {
+        cachedAuthToken = token;
+      }
+
       engineStatusCache = {
         isAlive: alive,
         lastChecked: now,
-        version: data?.data?.version || '0.0.0',
+        version: version,
       };
-      chrome.storage.local.set({ engineAlive: alive });
-      if (alive && !cachedAuthToken) {
-        getBridgeToken().catch(() => {});
+
+      const storagePayload = {
+        engineAlive: alive,
+        engineVersion: version,
+        engineActiveCount: data?.data?.active_count || 0,
+        engineSpeed: data?.data?.total_speed_bytes_sec || 0,
+        engineLastChecked: now,
+      };
+      if (token) {
+        storagePayload.downex_auth_token = token;
       }
+      chrome.storage.local.set(storagePayload);
     } else {
       engineStatusCache = { isAlive: false, lastChecked: now, version: null };
       chrome.storage.local.set({ engineAlive: false });
@@ -364,11 +437,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   // 4. Media Detected by Content Script on a Tab
   if (message.type === 'MEDIA_DETECTED') {
-    const tabId = sender.tab?.id;
-    if (tabId && message.data) {
-      tabMediaMap.set(tabId, message.data);
-      updateTabBadge(tabId, message.data);
-    }
+    chrome.storage.local.get(['config'], (res) => {
+      const cfg = res?.config || DEFAULT_CONFIG;
+      if (cfg.enableMediaGrabber === false || cfg.showQualityBadge === false) {
+        return;
+      }
+      const tabId = sender.tab?.id;
+      if (tabId && message.data) {
+        tabMediaMap.set(tabId, message.data);
+        updateTabBadge(tabId, message.data);
+      }
+    });
     sendResponse({ received: true });
     return false;
   }
@@ -417,6 +496,45 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     });
     return true;
   }
+
+  // 8. Robust Loopback Probe URL (Proxies through background to avoid CORS & handle auth retries)
+  if (message.type === 'PROBE_URL') {
+    (async () => {
+      try {
+        const token = await getBridgeToken();
+        const headers = { 'Content-Type': 'application/json' };
+        if (token) {
+          headers['Authorization'] = `Bearer ${token}`;
+          headers['X-Downex-Token'] = token;
+        }
+
+        let resp = await fetch(`${DOWNEX_BRIDGE_URL}/api/probe`, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ url: message.url, referer: message.referer }),
+        });
+
+        if (resp.status === 401) {
+          const freshToken = await getBridgeToken(true);
+          if (freshToken) {
+            headers['Authorization'] = `Bearer ${freshToken}`;
+            headers['X-Downex-Token'] = freshToken;
+            resp = await fetch(`${DOWNEX_BRIDGE_URL}/api/probe`, {
+              method: 'POST',
+              headers,
+              body: JSON.stringify({ url: message.url, referer: message.referer }),
+            });
+          }
+        }
+
+        const data = await resp.json();
+        sendResponse(data);
+      } catch (err) {
+        sendResponse({ success: false, error: err.message });
+      }
+    })();
+    return true;
+  }
 });
 
 // Update Action Badge per Tab (shows HD/4K/count)
@@ -456,7 +574,10 @@ async function sendDownloadRequest(payload) {
   try {
     const token = await getBridgeToken();
     const headers = { 'Content-Type': 'application/json' };
-    if (token) headers['Authorization'] = `Bearer ${token}`;
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+      headers['X-Downex-Token'] = token;
+    }
 
     let resp = await fetch(`${DOWNEX_BRIDGE_URL}/api/download`, {
       method: 'POST',
@@ -468,6 +589,7 @@ async function sendDownloadRequest(payload) {
       const freshToken = await getBridgeToken(true);
       if (freshToken) {
         headers['Authorization'] = `Bearer ${freshToken}`;
+        headers['X-Downex-Token'] = freshToken;
         resp = await fetch(`${DOWNEX_BRIDGE_URL}/api/download`, {
           method: 'POST',
           headers,
@@ -488,7 +610,10 @@ async function sendAdaptiveMediaRequest(payload) {
   try {
     const token = await getBridgeToken();
     const headers = { 'Content-Type': 'application/json' };
-    if (token) headers['Authorization'] = `Bearer ${token}`;
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+      headers['X-Downex-Token'] = token;
+    }
 
     let resp = await fetch(`${DOWNEX_BRIDGE_URL}/api/download-adaptive`, {
       method: 'POST',
@@ -500,6 +625,7 @@ async function sendAdaptiveMediaRequest(payload) {
       const freshToken = await getBridgeToken(true);
       if (freshToken) {
         headers['Authorization'] = `Bearer ${freshToken}`;
+        headers['X-Downex-Token'] = freshToken;
         resp = await fetch(`${DOWNEX_BRIDGE_URL}/api/download-adaptive`, {
           method: 'POST',
           headers,

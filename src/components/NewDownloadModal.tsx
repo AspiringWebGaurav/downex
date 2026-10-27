@@ -19,7 +19,8 @@ import {
   openFolderPicker, 
   probeUrl, 
   restoreManagerWindow, 
-  hideMainWindow 
+  hideMainWindow,
+  getClipboardText
 } from '../services/tauriService';
 
 function formatBytes(bytes?: number): string {
@@ -100,9 +101,16 @@ export const NewDownloadModal: React.FC<{ isStandalone?: boolean }> = ({ isStand
         setSupportsRanges(initialModalData.supports_ranges ?? true);
         setIsProbing(false);
       } else {
-        if (typeof navigator !== 'undefined' && navigator.clipboard && navigator.clipboard.readText) {
-          navigator.clipboard
-            .readText()
+        const isClipboardWatchEnabled = (() => {
+          try {
+            return localStorage.getItem('downex_clipboard_watch') !== 'false';
+          } catch {
+            return true;
+          }
+        })();
+
+        if (isClipboardWatchEnabled) {
+          getClipboardText()
             .then((clip) => {
               const trimmed = (clip || '').trim();
               if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
@@ -164,8 +172,6 @@ export const NewDownloadModal: React.FC<{ isStandalone?: boolean }> = ({ isStand
     };
   }, [url, initialModalData]);
 
-  if (!isNewModalOpen) return null;
-
   const handleBrowseFolder = async () => {
     try {
       const selected = await openFolderPicker();
@@ -184,6 +190,19 @@ export const NewDownloadModal: React.FC<{ isStandalone?: boolean }> = ({ isStand
     }
     setNewModalOpen(false);
   };
+
+  // Keyboard navigation: Escape closes modal
+  useEffect(() => {
+    if (!isNewModalOpen) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        handleCloseModal();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isNewModalOpen, isStandalone]);
 
   const handleCreateDownload = async (startImmediately: boolean) => {
     if (!url.trim()) return;
@@ -226,7 +245,9 @@ export const NewDownloadModal: React.FC<{ isStandalone?: boolean }> = ({ isStand
 
   const handleCopyUrl = () => {
     if (!url) return;
-    navigator.clipboard.writeText(url);
+    navigator.clipboard?.writeText?.(url)?.catch((err) => {
+      console.warn('Clipboard write notice:', err);
+    });
     setCopiedUrl(true);
     setTimeout(() => setCopiedUrl(false), 1500);
   };
@@ -242,6 +263,8 @@ export const NewDownloadModal: React.FC<{ isStandalone?: boolean }> = ({ isStand
   }
 
   const isLowSpace = totalBytes && freeSpaceBytes && freeSpaceBytes < totalBytes;
+
+  if (!isNewModalOpen) return null;
 
   const dialogCard = (
     <div className={`flex flex-col bg-white dark:bg-zinc-900 overflow-hidden ${

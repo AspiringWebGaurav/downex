@@ -288,28 +288,60 @@ Content-Length: 0\r\n\r\n",
 
         // Routing
         let (status_code, response_json) = match (method, path) {
-            ("GET", "/api/ping") => (
-                200,
-                serde_json::json!({
-                    "success": true,
-                    "data": {
-                        "app": "Downex",
-                        "version": env!("CARGO_PKG_VERSION"),
-                        "status": "ready"
-                    }
-                }),
-            ),
-            ("GET", "/api/handshake") => (
-                200,
-                serde_json::json!({
-                    "success": true,
-                    "token": self.auth_token,
-                    "data": {
+            ("GET", "/api/ping") => {
+                let current_ver = if let Some(ref handle) = self.app_handle {
+                    crate::version::resolve_installed_version(handle, Some(&self.db))
+                } else {
+                    env!("CARGO_PKG_VERSION").to_string()
+                };
+
+                let downloads = self.db.get_all_downloads().unwrap_or_default();
+                let active_count = downloads
+                    .iter()
+                    .filter(|d| d.status == "downloading" || d.status == "probing")
+                    .count();
+                let total_count = downloads.len();
+                let total_speed: u64 = downloads
+                    .iter()
+                    .filter(|d| d.status == "downloading")
+                    .map(|d| d.speed_bytes_sec as u64)
+                    .sum();
+
+                (
+                    200,
+                    serde_json::json!({
+                        "success": true,
                         "token": self.auth_token,
-                        "version": env!("CARGO_PKG_VERSION")
-                    }
-                }),
-            ),
+                        "data": {
+                            "app": "Downex",
+                            "version": current_ver,
+                            "token": self.auth_token,
+                            "status": "ready",
+                            "active_count": active_count,
+                            "total_count": total_count,
+                            "total_speed_bytes_sec": total_speed
+                        }
+                    }),
+                )
+            }
+            ("GET", "/api/handshake") => {
+                let current_ver = if let Some(ref handle) = self.app_handle {
+                    crate::version::resolve_installed_version(handle, Some(&self.db))
+                } else {
+                    env!("CARGO_PKG_VERSION").to_string()
+                };
+                (
+                    200,
+                    serde_json::json!({
+                        "success": true,
+                        "token": self.auth_token,
+                        "data": {
+                            "token": self.auth_token,
+                            "version": current_ver
+                        }
+                    }),
+                )
+            }
             ("GET", "/api/status") if !is_authorized => (
                 401,
                 serde_json::json!({
@@ -338,6 +370,34 @@ Content-Length: 0\r\n\r\n",
                             "total_count": total_count,
                             "total_speed_bytes_sec": total_speed,
                         }
+                    }),
+                )
+            }
+            ("POST", "/api/stop") if origin_header.is_none() => {
+                if let Some(ref handle) = self.app_handle {
+                    let h = handle.clone();
+                    tauri::async_runtime::spawn(async move {
+                        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                        h.exit(0);
+                    });
+                }
+                (
+                    200,
+                    serde_json::json!({
+                        "success": true,
+                        "data": "Terminating Downex background service"
+                    }),
+                )
+            }
+            ("POST", "/api/bring_to_front") if origin_header.is_none() => {
+                if let Some(ref handle) = self.app_handle {
+                    let _ = crate::tray::create_or_show_main_window(handle);
+                }
+                (
+                    200,
+                    serde_json::json!({
+                        "success": true,
+                        "data": "Showing main window"
                     }),
                 )
             }

@@ -28,6 +28,11 @@
     }
     body {
       width: 360px;
+      min-width: 360px;
+      max-width: 360px;
+      min-height: 250px;
+      overflow-x: hidden;
+      contain: paint;
       background-color: var(--bg);
       color: var(--text);
       padding: 13px 14px;
@@ -258,29 +263,106 @@
       width: 100%;
     }
 
-    /* Settings Strip */
-    .settings-strip {
+    /* Modular Settings */
+    .chip-status {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 9px;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      padding: 1px 6px;
+      border-radius: 9999px;
+      transition: all 0.2s ease;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
+    .chip-dot {
+      width: 5px;
+      height: 5px;
+      border-radius: 50%;
+    }
+    .chip-active {
+      color: #047857;
+      background: #ecfdf5;
+      border: 1px solid #a7f3d0;
+    }
+    .chip-active .chip-dot {
+      background: #10b981;
+      box-shadow: 0 0 5px rgba(16, 185, 129, 0.6);
+    }
+    .chip-disabled {
+      color: #64748b;
+      background: #f1f5f9;
+      border: 1px solid #cbd5e1;
+    }
+    .chip-disabled .chip-dot {
+      background: #94a3b8;
+    }
+
+    .setting-master-row {
       display: flex;
       align-items: center;
       justify-content: space-between;
-      padding: 2px 0;
+      padding: 3px 0 5px 0;
     }
-    .setting-item {
-      display: flex;
-      align-items: center;
-      gap: 7px;
-      cursor: pointer;
+    .setting-info {
+      flex: 1;
+      min-width: 0;
+      padding-right: 8px;
     }
-    .setting-label {
+    .setting-name {
+      font-size: 11.5px;
+      font-weight: 600;
+      color: var(--text);
+      line-height: 1.25;
+    }
+    .setting-desc {
+      font-size: 9.5px;
+      color: var(--text-muted);
+      line-height: 1.25;
+      margin-top: 1px;
+    }
+    .setting-sub-name {
       font-size: 11px;
       font-weight: 500;
       color: var(--text);
     }
+    .setting-sub-desc {
+      font-size: 9px;
+      color: var(--text-subtle);
+    }
+
+    .sub-settings-container {
+      margin-left: 6px;
+      padding-left: 9px;
+      border-left: 2px solid #e2e8f0;
+      display: flex;
+      flex-direction: column;
+      gap: 5px;
+      margin-top: 3px;
+      margin-bottom: 5px;
+      transition: opacity 0.2s ease, filter 0.2s ease;
+    }
+    .sub-settings-container.is-disabled {
+      opacity: 0.4;
+      pointer-events: none;
+      filter: grayscale(0.7);
+    }
+
+    .sub-setting-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 1.5px 0;
+    }
+
     .switch {
       position: relative;
       display: inline-block;
       width: 28px;
       height: 15px;
+      flex-shrink: 0;
     }
     .switch input {
       opacity: 0;
@@ -312,6 +394,29 @@
     }
     input:checked + .slider:before {
       transform: translateX(13px);
+    }
+
+    .switch-sm {
+      width: 24px;
+      height: 13px;
+    }
+    .switch-sm .slider {
+      border-radius: 13px;
+    }
+    .switch-sm .slider:before {
+      height: 9px;
+      width: 9px;
+      left: 2px;
+      bottom: 2px;
+    }
+    .switch-sm input:checked + .slider:before {
+      transform: translateX(11px);
+    }
+
+    .settings-divider {
+      height: 1px;
+      background: var(--card-border);
+      margin: 5px 0;
     }
 
     /* Batch Scanner */
@@ -488,23 +593,74 @@
     </div>
   </div>
 
-  <!-- Smart Preferences Strip (Compact 1-Row) -->
-  <div class="card" style="padding: 7px 11px;">
-    <div class="settings-strip">
-      <label class="setting-item" title="Automatically intercept browser download links">
-        <span class="switch">
-          <input type="checkbox" id="toggle-intercept" checked>
-          <span class="slider"></span>
-        </span>
-        <span class="setting-label">Auto-Capture</span>
-      </label>
+  <!-- Modular Detection & Preferences Card -->
+  <div class="card" style="padding: 9px 11px;">
+    <div class="card-header" style="margin-bottom: 7px;">
+      <span class="card-label">Detection Preferences</span>
+      <span class="chip-status chip-active" id="detection-status-chip" title="Video stream sniffing status">
+        <span class="chip-dot"></span>Video ON
+      </span>
+    </div>
 
-      <label class="setting-item" title="Show in-player media grabber bar on YouTube/HTML5 videos">
-        <span class="switch">
-          <input type="checkbox" id="toggle-media" checked>
+    <!-- Master Switch: Video & Stream Detection -->
+    <div class="setting-master-row">
+      <div class="setting-info">
+        <div class="setting-name">Video & Stream Grabber</div>
+        <div class="setting-desc">Sniff DASH, HLS & MP4 on YouTube / HTML5 players</div>
+      </div>
+      <label class="switch" title="Master toggle: Turn ON/OFF video and stream detection">
+        <input type="checkbox" id="toggle-media" checked>
+        <span class="slider"></span>
+      </label>
+    </div>
+
+    <!-- Modular Sub-Options for Video (Hierarchical tree) -->
+    <div class="sub-settings-container" id="video-sub-settings">
+      <div class="sub-setting-row">
+        <div class="setting-info">
+          <div class="setting-sub-name">In-Player Overlay Pill</div>
+          <div class="setting-sub-desc">Attach floating download button on video players</div>
+        </div>
+        <label class="switch switch-sm" title="Show or hide floating download pill inside video players">
+          <input type="checkbox" id="toggle-in-player-pill" checked>
           <span class="slider"></span>
-        </span>
-        <span class="setting-label">Video Grabber</span>
+        </label>
+      </div>
+
+      <div class="sub-setting-row">
+        <div class="setting-info">
+          <div class="setting-sub-name">Toolbar Quality Badge</div>
+          <div class="setting-sub-desc">Show top stream resolution (HD/4K) on icon</div>
+        </div>
+        <label class="switch switch-sm" title="Show resolution or format count on extension icon">
+          <input type="checkbox" id="toggle-quality-badge" checked>
+          <span class="slider"></span>
+        </label>
+      </div>
+    </div>
+
+    <div class="settings-divider"></div>
+
+    <!-- File Download Options -->
+    <div class="sub-setting-row" style="margin-top: 2px;">
+      <div class="setting-info">
+        <div class="setting-name">Auto-Capture Downloads</div>
+        <div class="setting-desc">Catch browser files (.zip, .exe, .iso, etc.)</div>
+      </div>
+      <label class="switch switch-sm" title="Automatically intercept browser download links">
+        <input type="checkbox" id="toggle-intercept" checked>
+        <span class="slider"></span>
+      </label>
+    </div>
+
+    <div class="sub-setting-row" style="margin-top: 3px;">
+      <div class="setting-info">
+        <div class="setting-name">Alt-Key Quick Bypass</div>
+        <div class="setting-desc">Hold Alt while clicking to skip Downex</div>
+      </div>
+      <label class="switch switch-sm" title="Hold Alt key while clicking links to use standard browser download">
+        <input type="checkbox" id="toggle-alt-bypass" checked>
+        <span class="slider"></span>
       </label>
     </div>
   </div>

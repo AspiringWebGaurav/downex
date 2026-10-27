@@ -55,6 +55,9 @@ export const DownloadTable: React.FC = () => {
     if (selectedView === 'queues') {
       return item.status === 'queued' || item.status === 'downloading' || item.status === 'probing';
     }
+    if (selectedView === 'trash') {
+      return item.status === 'failed' || item.status === 'cancelled' || item.status === 'error';
+    }
     return true;
   });
 
@@ -166,16 +169,32 @@ export const DownloadTable: React.FC = () => {
           <div className="w-12 h-12 rounded-full bg-zinc-100 dark:bg-zinc-900 flex items-center justify-center mb-3">
             {isQueuesView ? (
               <ListOrdered className="w-6 h-6 stroke-[1.5]" />
+            ) : selectedView === 'trash' ? (
+              <Trash2 className="w-6 h-6 stroke-[1.5]" />
             ) : (
               <File className="w-6 h-6 stroke-[1.5]" />
             )}
           </div>
           <p className="text-sm font-medium text-zinc-600 dark:text-zinc-400">
-            {isQueuesView ? 'Queue is empty' : 'No downloads found'}
+            {isQueuesView
+              ? 'Queue is empty'
+              : selectedView === 'trash'
+              ? 'Trash is empty'
+              : selectedView === 'active'
+              ? 'No active downloads'
+              : selectedView === 'completed'
+              ? 'No completed downloads'
+              : 'No downloads found'}
           </p>
           <p className="text-xs text-zinc-400 dark:text-zinc-500 mt-1 max-w-sm">
             {isQueuesView
               ? 'Click "+ New Download" and choose "Download Later", or click the queue icon on any paused download.'
+              : selectedView === 'trash'
+              ? 'Failed or cancelled downloads will appear here.'
+              : selectedView === 'active'
+              ? 'Active and running downloads will appear here.'
+              : selectedView === 'completed'
+              ? 'Finished downloads will appear here.'
               : 'Click "+ New Download" or copy any download link to start.'}
           </p>
         </div>

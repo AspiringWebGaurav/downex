@@ -36,7 +36,18 @@ let isEngineAlive = false;
 let extensionConfig = {
   interceptDownloads: true,
   enableMediaGrabber: true,
+  showInPlayerPill: true,
+  showQualityBadge: true,
+  altKeyBypass: true,
 };
+
+function removeAllPills() {
+  document.querySelectorAll('.downex-pill-host').forEach((host) => {
+    try {
+      host.remove();
+    } catch (_) {}
+  });
+}
 
 try {
   chrome.storage.local.get(['config', 'engineAlive'], (result) => {
@@ -51,7 +62,23 @@ try {
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area === 'local') {
       if (changes.config && changes.config.newValue) {
+        const prevMedia = extensionConfig.enableMediaGrabber !== false;
+        const prevPill = extensionConfig.showInPlayerPill !== false;
+
         extensionConfig = { ...extensionConfig, ...changes.config.newValue };
+
+        const nextMedia = extensionConfig.enableMediaGrabber !== false;
+        const nextPill = extensionConfig.showInPlayerPill !== false;
+
+        // Dynamic reaction: if video grabber or in-player pill was toggled OFF, remove all pills from DOM
+        if (!nextMedia || !nextPill) {
+          removeAllPills();
+        }
+
+        // If turned back ON, trigger a scan to re-attach to existing video players immediately
+        if (nextMedia && nextPill && (!prevMedia || !prevPill)) {
+          scheduleScan();
+        }
       }
       if (changes.engineAlive && typeof changes.engineAlive.newValue === 'boolean') {
         isEngineAlive = changes.engineAlive.newValue;
@@ -70,11 +97,18 @@ window.addEventListener('message', (event) => {
   }
 
   if (event.data.type === 'MEDIA_METADATA') {
+    // If video detection is completely OFF, drop immediately
+    if (extensionConfig.enableMediaGrabber === false) {
+      return;
+    }
+
     activeMediaMetadata = event.data.data;
-    updateAllPillsWithMetadata(activeMediaMetadata);
+    if (extensionConfig.showInPlayerPill !== false) {
+      updateAllPillsWithMetadata(activeMediaMetadata);
+    }
 
     // Notify background worker to update action badge for this tab
-    if (activeMediaMetadata && activeMediaMetadata.formats) {
+    if (activeMediaMetadata && activeMediaMetadata.formats && extensionConfig.showQualityBadge !== false) {
       const topFmt = activeMediaMetadata.formats[0];
       chrome.runtime.sendMessage({
         type: 'MEDIA_DETECTED',
@@ -93,7 +127,15 @@ window.addEventListener('message', (event) => {
    ========================================================================= */
 
 function attachGrabberPill(videoEl) {
-  if (!videoEl || !videoEl.isConnected || attachedPlayers.has(videoEl)) return;
+  if (extensionConfig.enableMediaGrabber === false || extensionConfig.showInPlayerPill === false) {
+    return;
+  }
+  if (!videoEl || !videoEl.isConnected) return;
+
+  const existingHost = attachedPlayers.get(videoEl);
+  if (existingHost && existingHost.isConnected) {
+    return;
+  }
 
   // Resolve best container (handles YouTube theater, fullscreen, and custom HTML5 players)
   const container = videoEl.closest('.html5-video-player, ytd-player, .player-container, [data-player]') || videoEl.parentElement;
@@ -450,6 +492,9 @@ function scheduleScan() {
 }
 
 function scanVideos() {
+  if (extensionConfig.enableMediaGrabber === false || extensionConfig.showInPlayerPill === false) {
+    return;
+  }
   const videos = document.querySelectorAll('video');
   videos.forEach((video) => {
     if (video.offsetWidth > 140 && video.offsetHeight > 80) {
@@ -525,10 +570,10 @@ const DIRECT_DOWNLOAD_EXTENSIONS = new Set([
 
 document.addEventListener('click', (event) => {
   // 1. Bypass download manager if user holds Alt key (Standard IDM suppression shortcut)
-  if (event.altKey) return;
+  if (event.altKey && extensionConfig.altKeyBypass !== false) return;
 
   // 2. Safety Gate: If desktop engine is offline or user disabled interception, allow native browser download
-  if (!isEngineAlive || !extensionConfig.interceptDownloads) return;
+  if (!isEngineAlive || extensionConfig.interceptDownloads === false) return;
 
   const anchor = event.target.closest('a');
   if (!anchor || !anchor.href) return;

@@ -58,6 +58,7 @@ export const DownexSidebar: React.FC<DownexSidebarProps> = ({ darkMode, setDarkM
   const activeCount = items.filter((i) => i.status === 'downloading' || i.status === 'probing').length;
   const completedCount = items.filter((i) => i.status === 'completed').length;
   const queuedCount = items.filter((i) => i.status === 'queued').length;
+  const trashCount = items.filter((i) => i.status === 'failed' || i.status === 'cancelled' || i.status === 'error').length;
   const isQueueRunning = useDownloadStore((state) => state.isQueueRunning);
 
   const navItems = [
@@ -67,7 +68,7 @@ export const DownexSidebar: React.FC<DownexSidebarProps> = ({ darkMode, setDarkM
     { id: 'completed', label: 'Completed', icon: CheckCircle2, count: completedCount },
     { id: 'add_url', label: 'Add URL', icon: Plus, isAction: true },
     { id: 'settings', label: 'Settings', icon: Settings },
-    { id: 'trash', label: 'Trash', icon: Trash2 },
+    { id: 'trash', label: 'Trash', icon: Trash2, count: trashCount },
   ];
 
   return (

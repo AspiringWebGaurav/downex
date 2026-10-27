@@ -96,6 +96,8 @@ coverage/
 *.lcov
 .nyc_output/
 report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
+test-results/
+playwright-report/
 
 # ------------------------------------------------------------------------------
 # VAULT ASSETS & DEFENSE (EXPLICITLY INCLUDED & TRACKED IN GIT)

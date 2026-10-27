@@ -17,10 +17,8 @@
 !define MUI_FINISHPAGE_TEXT "Downex has been successfully installed.$\r$\n$\r$\nPress the Finish button to exit this installation.$\r$\n$\r$\nIf you want Downex to take over your downloads immediately after the installation, please close all web browsers before proceeding. You may open your browser after starting Downex."
 !endif
 
-; 3. Automatically offer to launch Downex upon finish
-!ifndef MUI_FINISHPAGE_RUN
-!define MUI_FINISHPAGE_RUN "$INSTDIR\Downex.exe"
-!define MUI_FINISHPAGE_RUN_TEXT "Launch Downex"
+; 3. Automatically check "Run Downex" checkbox upon finish
+!ifndef MUI_FINISHPAGE_RUN_CHECKED
 !define MUI_FINISHPAGE_RUN_CHECKED
 !endif
 
