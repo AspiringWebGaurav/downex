@@ -207,7 +207,7 @@ export const DownloadCompleteWindow: React.FC = () => {
   const exactBytes = totalBytes.toLocaleString();
 
   const CompleteCard = (
-    <div className="w-[500px] max-w-full flex flex-col bg-white dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 font-sans select-none border border-zinc-300/80 dark:border-zinc-800 shadow-2xl rounded-xl overflow-hidden">
+    <div className="w-[580px] max-w-full flex flex-col bg-white dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 font-sans select-none border border-zinc-300/80 dark:border-zinc-800 shadow-2xl rounded-xl overflow-hidden">
       {/* Titlebar (Draggable with standard window buttons) */}
       <div
         data-tauri-drag-region
@@ -452,7 +452,7 @@ export const DownloadCompleteWindow: React.FC = () => {
   return (
     <div className="min-h-screen w-full bg-gradient-to-br from-zinc-900 via-zinc-950 to-black text-zinc-100 flex flex-col items-center justify-center p-4 relative font-sans selection:bg-emerald-500 selection:text-white">
       {/* Dev Control Bar */}
-      <div className="w-[500px] max-w-full mb-3 px-3 py-2 rounded-xl bg-zinc-900/90 border border-zinc-800/90 backdrop-blur-md flex items-center justify-between shadow-xl ring-1 ring-white/5">
+      <div className="w-[580px] max-w-full mb-3 px-3 py-2 rounded-xl bg-zinc-900/90 border border-zinc-800/90 backdrop-blur-md flex items-center justify-between shadow-xl ring-1 ring-white/5">
         <div className="flex items-center gap-2">
           <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
           <span className="text-xs font-semibold text-zinc-200">
@@ -492,8 +492,8 @@ export const DownloadCompleteWindow: React.FC = () => {
 
       {CompleteCard}
 
-      <div className="w-[500px] max-w-full mt-2.5 px-2 flex items-center justify-between text-[11px] text-zinc-500 font-mono">
-        <span>Native Dialog Size: 500 × 330 px</span>
+      <div className="w-[580px] max-w-full mt-2.5 px-2 flex items-center justify-between text-[11px] text-zinc-500 font-mono">
+        <span>Native Dialog Size: 580 × 320 px</span>
         <span>Simulated Desktop Mode</span>
       </div>
     </div>

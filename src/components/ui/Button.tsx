@@ -44,7 +44,7 @@ export function getButtonClassName({
 } = {}): string {
   // Base interaction & geometry contract (shared across all buttons)
   const baseClasses = 
-    'inline-flex items-center justify-center font-sans font-semibold tracking-normal ' +
+    'inline-flex items-center justify-center font-sans font-semibold tracking-normal whitespace-nowrap ' +
     'select-none cursor-pointer transition-all duration-150 ease-out ' +
     'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/40 focus-visible:ring-offset-1 ' +
     'disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none disabled:active:scale-100 ' +
@@ -139,12 +139,12 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
         {loading ? (
           <>
             <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0" />
-            <span>{loadingText || children}</span>
+            <span className="whitespace-nowrap">{loadingText || children}</span>
           </>
         ) : (
           <>
             {icon && <span className="shrink-0 flex items-center justify-center">{icon}</span>}
-            {children && <span>{children}</span>}
+            {children && <span className="whitespace-nowrap">{children}</span>}
             {iconRight && <span className="shrink-0 flex items-center justify-center">{iconRight}</span>}
           </>
         )}
@@ -154,3 +154,4 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
 );
 
 Button.displayName = 'Button';
+

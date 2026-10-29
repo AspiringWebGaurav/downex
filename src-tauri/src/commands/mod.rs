@@ -1226,7 +1226,7 @@ pub fn show_download_complete<R: tauri::Runtime>(app: &tauri::AppHandle<R>, payl
             tauri::WebviewUrl::default(),
         )
         .title("Download complete")
-        .inner_size(520.0, 310.0)
+        .inner_size(580.0, 320.0)
         .decorations(false)
         .transparent(false)
         .shadow(true)
