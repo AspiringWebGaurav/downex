@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Button } from '../components/ui/Button';
+import { AutoScrollText } from '../components/ui/AutoScrollText';
 import { 
   Sun,
   Moon,
@@ -204,7 +205,6 @@ export const DownloadCompleteWindow: React.FC = () => {
 
   const totalBytes = payload?.total_bytes || payload?.downloaded_bytes || 0;
   const formattedSize = formatBytes(totalBytes);
-  const exactBytes = totalBytes.toLocaleString();
 
   const CompleteCard = (
     <div className="w-[580px] max-w-full flex flex-col bg-white dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 font-sans select-none border border-zinc-300/80 dark:border-zinc-800 shadow-2xl rounded-xl overflow-hidden">
@@ -297,10 +297,8 @@ export const DownloadCompleteWindow: React.FC = () => {
                     100% Complete
                   </span>
                 </div>
-                <div className="flex items-center gap-2 text-xs font-mono text-zinc-600 dark:text-zinc-400">
+                <div className="text-xs font-mono text-zinc-600 dark:text-zinc-400 font-medium">
                   <span className="font-semibold text-zinc-900 dark:text-zinc-100">Downloaded {formattedSize}</span>
-                  <span className="text-zinc-300 dark:text-zinc-700">•</span>
-                  <span>{exactBytes} Bytes</span>
                 </div>
               </div>
             </div>
@@ -321,12 +319,13 @@ export const DownloadCompleteWindow: React.FC = () => {
                   </button>
                 )}
               </div>
-              <input
-                type="text"
-                readOnly
-                value={payload?.url || ''}
-                className="w-full text-xs font-mono bg-zinc-50 dark:bg-zinc-900/90 border border-zinc-200 dark:border-zinc-800 rounded-md px-2.5 py-1.5 text-zinc-800 dark:text-zinc-200 select-all outline-none focus:border-zinc-400 dark:focus:border-zinc-600 transition-colors"
-              />
+              <div className="w-full text-xs font-mono bg-zinc-50 dark:bg-zinc-900/90 border border-zinc-200 dark:border-zinc-800 rounded-lg px-3 py-2 flex items-center overflow-hidden">
+                <AutoScrollText
+                  text={payload?.url || ''}
+                  className="text-xs font-mono text-zinc-800 dark:text-zinc-200"
+                  placeholder="No URL provided"
+                />
+              </div>
             </div>
 
             {/* The file saved as (Destination Path) Input Field */}
@@ -345,12 +344,13 @@ export const DownloadCompleteWindow: React.FC = () => {
                   </button>
                 )}
               </div>
-              <input
-                type="text"
-                readOnly
-                value={payload?.destination_path || ''}
-                className="w-full text-xs font-mono bg-zinc-50 dark:bg-zinc-900/90 border border-zinc-200 dark:border-zinc-800 rounded-md px-2.5 py-1.5 text-zinc-800 dark:text-zinc-200 select-all outline-none focus:border-zinc-400 dark:focus:border-zinc-600 transition-colors"
-              />
+              <div className="w-full text-xs font-mono bg-zinc-50 dark:bg-zinc-900/90 border border-zinc-200 dark:border-zinc-800 rounded-lg px-3 py-2 flex items-center overflow-hidden">
+                <AutoScrollText
+                  text={payload?.destination_path || ''}
+                  className="text-xs font-mono text-zinc-800 dark:text-zinc-200"
+                  placeholder="No save path"
+                />
+              </div>
             </div>
 
             {/* Action Buttons Row (Open, Open With, Open folder, Close) */}

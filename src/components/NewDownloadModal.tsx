@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Button } from './ui/Button';
+import { AutoScrollText } from './ui/AutoScrollText';
 import { 
   X, 
   Download, 
@@ -270,7 +271,6 @@ export const NewDownloadModal: React.FC<{ isStandalone?: boolean }> = ({ isStand
     setTimeout(() => setCopiedUrl(false), 1500);
   };
 
-  const originHost = url || '';
 
   const isLowSpace = totalBytes && freeSpaceBytes && freeSpaceBytes < totalBytes;
 
@@ -433,8 +433,12 @@ export const NewDownloadModal: React.FC<{ isStandalone?: boolean }> = ({ isStand
               <span>{copiedUrl ? 'Copied' : 'Copy URL'}</span>
             </button>
           </div>
-          <div className="px-3 py-1.5 min-h-[30px] rounded-lg bg-zinc-50/70 dark:bg-zinc-950/50 border border-zinc-200/80 dark:border-zinc-800/80 text-[11px] font-mono text-zinc-500 dark:text-zinc-400 truncate select-all flex items-center" title={url}>
-            {url ? (originHost || url) : <span className="text-zinc-400 dark:text-zinc-500 italic font-sans text-xs">No URL provided</span>}
+          <div className="px-3 py-1.5 min-h-[30px] rounded-lg bg-zinc-50/70 dark:bg-zinc-950/50 border border-zinc-200/80 dark:border-zinc-800/80 flex items-center overflow-hidden">
+            <AutoScrollText
+              text={url}
+              className="text-[11px] font-mono text-zinc-700 dark:text-zinc-300"
+              placeholder="No URL provided"
+            />
           </div>
         </div>
       </div>
