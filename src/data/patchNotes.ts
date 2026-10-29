@@ -44,6 +44,19 @@ export function getLatestCodebaseVersion(): string {
 }
 
 export const BASELINE_PATCH_NOTES: Record<string, DynamicPatchNotes> = {
+  '0.0.19': {
+    version: '0.0.19',
+    releaseDate: 'October 29, 2026',
+    title: 'Unified Button Design System, 580px Modal Polish & Ping-Pong URL Auto-Scroll',
+    highlights: [
+      'Unified Button Standard: Harmonized every button across main app, settings, recovery modals, and popups to match the flagship design styling',
+      'Expanded 580px Modal Layout: Widened Download Complete and Download Dialog windows to 580px for a clean single-line action button row',
+      'Large File Size Digit & Simple Language: Prominent 20px monospace numbers with clean plain English labels and zero technical buzzwords',
+      'Clean Download Complete Info: Removed redundant byte counts to keep summary cards crisp and easy to read',
+      'Ping-Pong URL Auto-Scroll: Source and file destination URLs smoothly pan back and forth without artificial ellipsis truncation',
+    ],
+    rawNotes: 'v0.0.19: Unified Button Design System, 580px modal polish, plain English metrics, and ping-pong URL auto-scroll',
+  },
   '0.0.18': {
     version: '0.0.18',
     releaseDate: 'October 29, 2026',

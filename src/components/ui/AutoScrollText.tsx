@@ -99,3 +99,4 @@ export const AutoScrollText: React.FC<AutoScrollTextProps> = ({
     </div>
   );
 };
+
