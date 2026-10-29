@@ -30,6 +30,19 @@ export function parseNotesToHighlights(rawText?: string): string[] {
 }
 
 export const BASELINE_PATCH_NOTES: Record<string, DynamicPatchNotes> = {
+  '0.0.14': {
+    version: '0.0.14',
+    releaseDate: 'October 29, 2026',
+    title: 'Zero-Modal Instant Restart Architecture & Automated Legacy Cleanup',
+    highlights: [
+      'Complete eradication of restarting modal and secondary window, eliminating all blank window traps permanently',
+      'Instant 600ms visual feedback handoff: clicking Restart & Apply immediately executes atomic binary placement and exits cleanly in 0.1s',
+      'Eliminated faulty watchdog rollback logic that caused previous versions to revert to older corrupt binaries',
+      'Integrated automatic startup purge routine that removes all superseded .old, .tmp, and .part files on every boot',
+      'Permanent Base 0.0.0 installer and companion extension assets fully isolated and safeguarded',
+    ],
+    rawNotes: 'v0.0.14: Complete eradication of restarting modal and secondary window, instant zero-hang handoff, elimination of false watchdog rollback, and automated legacy cleanup',
+  },
   '0.0.13': {
     version: '0.0.13',
     releaseDate: 'October 29, 2026',
