@@ -194,6 +194,7 @@ async function uploadToGPHost(bytes, filename, slug, folder, noShareLink = true)
     },
     body: JSON.stringify({
       fileId,
+      slug,
       noShareLink,
       isPermanent: true,
       expiry_preset: 'never',

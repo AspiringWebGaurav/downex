@@ -395,69 +395,35 @@ export const DownloadTable: React.FC = () => {
               </div>
             )}
 
-            {/* IDM-Style Structured Information Grid (Image 2 Tribute) */}
-            <div className="rounded-lg bg-zinc-50/90 dark:bg-zinc-950/80 border border-zinc-200/90 dark:border-zinc-800/90 p-3 text-[11px] font-mono grid grid-cols-2 md:grid-cols-3 gap-x-5 gap-y-2 select-text shadow-2xs">
-              <div className="flex items-center gap-1.5 min-w-0">
-                <span className="text-zinc-400 dark:text-zinc-500 w-[78px] shrink-0 font-medium">Status</span>
-                <div className="flex items-center gap-2 min-w-0">
-                  {isDownloading && (
-                    <span className="relative flex h-3.5 w-3.5 items-center justify-center shrink-0">
-                      {/* Full 360-degree radar / beacon wave pulse */}
-                      <span className="absolute inline-flex h-full w-full rounded-full bg-emerald-400/80 animate-ping pointer-events-none" />
-                      {/* Permanent 100% solid full circle with glowing shadow */}
-                      <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500 shadow-[0_0_6px_rgba(16,185,129,0.9)]" />
-                    </span>
-                  )}
-                  {isPaused && (
-                    <span className="relative flex h-3.5 w-3.5 items-center justify-center shrink-0">
-                      <span className="inline-flex rounded-full h-2 w-2 bg-amber-500 shadow-[0_0_4px_rgba(245,158,11,0.6)]" />
-                    </span>
-                  )}
-                  {item.status === 'completed' && (
-                    <span className="relative flex h-3.5 w-3.5 items-center justify-center shrink-0">
-                      <span className="inline-flex rounded-full h-2 w-2 bg-emerald-500 shadow-[0_0_4px_rgba(16,185,129,0.6)]" />
-                    </span>
-                  )}
-                  {item.status === 'failed' && (
-                    <span className="relative flex h-3.5 w-3.5 items-center justify-center shrink-0">
-                      <span className="inline-flex rounded-full h-2 w-2 bg-rose-500 shadow-[0_0_4px_rgba(244,63,94,0.6)]" />
-                    </span>
-                  )}
-                  <span className={`font-semibold truncate ${
-                    isDownloading ? 'text-blue-600 dark:text-blue-400' :
-                    item.status === 'completed' ? 'text-emerald-600 dark:text-emerald-400' :
-                    isPaused ? 'text-amber-600 dark:text-amber-400' :
-                    item.status === 'failed' ? 'text-rose-600 dark:text-rose-400' :
-                    'text-zinc-600 dark:text-zinc-400'
-                  }`}>
-                    {isDownloading ? 'Receiving data...' : isPaused ? 'Paused' : item.status === 'completed' ? 'Completed' : item.status === 'failed' ? 'Failed' : item.status}
-                  </span>
-                </div>
-              </div>
-
+            {/* Minimal Structured Metrics Grid */}
+            <div className="rounded-lg bg-zinc-50/90 dark:bg-zinc-950/80 border border-zinc-200/90 dark:border-zinc-800/90 p-3 text-[11px] font-mono grid grid-cols-2 lg:grid-cols-4 gap-x-5 gap-y-2 select-text shadow-2xs">
+              {/* 1. File size */}
               <div className="flex items-center gap-1.5 overflow-hidden">
-                <span className="text-zinc-400 dark:text-zinc-500 w-[78px] shrink-0 font-medium">File size</span>
+                <span className="text-zinc-400 dark:text-zinc-500 w-[92px] shrink-0 font-medium whitespace-nowrap">File size</span>
                 <span className="font-semibold text-zinc-800 dark:text-zinc-200 truncate">
                   {formatBytes(item.total_bytes)}
                 </span>
               </div>
 
+              {/* 2. Downloaded */}
               <div className="flex items-center gap-1.5 overflow-hidden">
-                <span className="text-zinc-400 dark:text-zinc-500 w-[78px] shrink-0 font-medium">Downloaded</span>
+                <span className="text-zinc-400 dark:text-zinc-500 w-[92px] shrink-0 font-medium whitespace-nowrap">Downloaded</span>
                 <span className="font-semibold text-zinc-800 dark:text-zinc-200 truncate">
                   {formatBytes(item.downloaded_bytes)} ({percent}%)
                 </span>
               </div>
 
+              {/* 3. Transfer rate (single line) */}
               <div className="flex items-center gap-1.5 overflow-hidden">
-                <span className="text-zinc-400 dark:text-zinc-500 w-[78px] shrink-0 font-medium">Transfer rate</span>
-                <span className={`font-semibold truncate ${isDownloading && effectiveSpeed > 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-zinc-500'}`}>
+                <span className="text-zinc-400 dark:text-zinc-500 w-[92px] shrink-0 font-medium whitespace-nowrap">Transfer rate</span>
+                <span className={`font-semibold truncate whitespace-nowrap ${isDownloading && effectiveSpeed > 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-zinc-500'}`}>
                   {isDownloading && effectiveSpeed > 0 ? formatSpeed(effectiveSpeed) : '0 B/s (0.0 Mbps)'}
                 </span>
               </div>
 
+              {/* 4. Time left */}
               <div className="flex items-center gap-1.5 overflow-hidden">
-                <span className="text-zinc-400 dark:text-zinc-500 w-[78px] shrink-0 font-medium">Time left</span>
+                <span className="text-zinc-400 dark:text-zinc-500 w-[92px] shrink-0 font-medium whitespace-nowrap">Time left</span>
                 <span className="text-zinc-700 dark:text-zinc-300 truncate font-semibold">
                   {isDownloading
                     ? (formattedEta || 'Calculating...')
@@ -468,13 +434,6 @@ export const DownloadTable: React.FC = () => {
                     : isQueued
                     ? 'In Queue'
                     : 'Pending'}
-                </span>
-              </div>
-
-              <div className="flex items-center gap-1.5 overflow-hidden">
-                <span className="text-zinc-400 dark:text-zinc-500 w-[78px] shrink-0 font-medium">Resume</span>
-                <span className="text-emerald-600 dark:text-emerald-400 font-medium truncate">
-                  {item.total_bytes ? 'Yes (HTTP 206)' : 'Unknown'}
                 </span>
               </div>
             </div>
@@ -541,7 +500,7 @@ export const DownloadTable: React.FC = () => {
               <div className="flex items-center gap-2 text-[10px] text-zinc-400 dark:text-zinc-500 font-mono">
                 <span className="flex items-center gap-1">
                   <ShieldCheck className="w-3 h-3 text-emerald-500" />
-                  Resume: {item.total_bytes ? 'Yes (HTTP 206)' : 'Unknown'}
+                  Resume: {item.total_bytes ? 'Yes' : 'Unknown'}
                 </span>
                 {item.segments && item.segments.length > 0 && (
                   <span>• {item.segments.length} Connection(s)</span>

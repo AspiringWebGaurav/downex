@@ -30,6 +30,41 @@ export function parseNotesToHighlights(rawText?: string): string[] {
 }
 
 export const BASELINE_PATCH_NOTES: Record<string, DynamicPatchNotes> = {
+  '0.0.12': {
+    version: '0.0.12',
+    releaseDate: 'October 29, 2026',
+    title: 'Zero-Hang OTA Restart Handoff & UAC Permission Fallback',
+    highlights: [
+      'Eliminated blank secondary window hang by transitioning restart progress seamlessly inside the active application window',
+      'Dual-stage NTFS atomic swap with resilient post-exit watchdog and automated UAC elevation fallback for permission-restricted directories',
+      'Added cancel and escape key controls to update restarting modals to eliminate any unclosable window conditions',
+      'Hardened remote release purge rules on GPHost to permanently protect immutable base installer and extension assets',
+    ],
+    rawNotes: 'v0.0.12: Zero-hang in-process OTA restart handoff, dual-stage NTFS atomic swap with UAC permission fallback, and unclosable window protection',
+  },
+  '0.0.11': {
+    version: '0.0.11',
+    releaseDate: 'October 29, 2026',
+    title: 'Minimal Download Metrics & Streamlined Download Modal UI',
+    highlights: [
+      'Reshuffled download card metrics into minimal, clean 4-element dashboard: File size, Downloaded, Transfer rate, and Time left',
+      'Fixed Transfer rate label wrapping onto two lines with fixed width and whitespace-nowrap guarantees',
+      'Eliminated technical HTTP 206 status codes from details toggle footer bar',
+      'Streamlined Download Modal and standalone window interface for clean and distraction-free file downloading',
+    ],
+    rawNotes: 'v0.0.11: Minimal download metrics reshuffle, single-line transfer rate guarantee, removal of HTTP 206 badge, and polished Download Modal UI',
+  },
+  '0.0.10': {
+    version: '0.0.10',
+    releaseDate: 'October 29, 2026',
+    title: 'Light-Theme Restarting Window & Transition Checklist',
+    highlights: [
+      'Dedicated standalone light-theme restarting window with circular progress visualization',
+      'Automated service milestone checklist and seamless system handoff during updates',
+      'Anti-stale process termination preventing socket lockups during restarts',
+    ],
+    rawNotes: 'v0.0.10: Dedicated light-theme restarting window with animated circular progress, automated service milestone checklist, and seamless system handoff',
+  },
   '0.0.9': {
     version: '0.0.9',
     releaseDate: 'October 29, 2026',

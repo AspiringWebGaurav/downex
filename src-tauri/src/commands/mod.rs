@@ -580,14 +580,19 @@ pub fn cmd_apply_in_process_update(
         let bytes = if let Some(b) = binary_bytes {
             b
         } else if let Some(ref path_str) = effective_staging_path {
-            std::fs::read(path_str)
-                .map_err(|e| format!("Could not read staged binary from '{}': {}", path_str, e))?
+            match std::fs::read(path_str) {
+                Ok(b) => b,
+                Err(e) => {
+                    UPDATE_APPLIED.store(false, std::sync::atomic::Ordering::SeqCst);
+                    return Err(format!("Could not read staged binary from '{}': {}", path_str, e));
+                }
+            }
         } else {
+            UPDATE_APPLIED.store(false, std::sync::atomic::Ordering::SeqCst);
             return Err("Neither binary_bytes nor staging_path was provided".to_string());
         };
 
         eprintln!("[Downex OTA] Starting in-process atomic shadow swap with {} bytes", bytes.len());
-
 
         // 2. Pre-sync Windows Installed Apps registry, SQLite app_settings, and AppData sidecar
         if let Some(ref ver) = target_version {
@@ -596,26 +601,40 @@ pub fn cmd_apply_in_process_update(
 
         // 3. Sanity check: payload must not be trivial
         if bytes.len() < 1024 * 512 {
+            UPDATE_APPLIED.store(false, std::sync::atomic::Ordering::SeqCst);
             return Err("Invalid update payload: binary size is unexpectedly small".to_string());
         }
 
         // 4. Validate Windows PE signature (MZ header)
         if bytes.len() < 2 || bytes[0] != b'M' || bytes[1] != b'Z' {
+            UPDATE_APPLIED.store(false, std::sync::atomic::Ordering::SeqCst);
             return Err("Invalid update payload: missing Windows executable PE header (MZ)".to_string());
         }
 
         // 5. Resolve currently executing file path
-        let current_exe = std::env::current_exe()
-            .map_err(|e| format!("Could not resolve current executable path: {}", e))?;
+        let current_exe = match std::env::current_exe() {
+            Ok(p) => p,
+            Err(e) => {
+                UPDATE_APPLIED.store(false, std::sync::atomic::Ordering::SeqCst);
+                return Err(format!("Could not resolve current executable path: {}", e));
+            }
+        };
 
-        let parent_dir = current_exe
-            .parent()
-            .ok_or_else(|| "Could not resolve executable directory".to_string())?;
+        let parent_dir = match current_exe.parent() {
+            Some(p) => p.to_path_buf(),
+            None => {
+                UPDATE_APPLIED.store(false, std::sync::atomic::Ordering::SeqCst);
+                return Err("Could not resolve executable directory".to_string());
+            }
+        };
 
-        let file_name = current_exe
-            .file_name()
-            .ok_or_else(|| "Could not determine executable name".to_string())?
-            .to_string_lossy();
+        let file_name = match current_exe.file_name() {
+            Some(n) => n.to_string_lossy().to_string(),
+            None => {
+                UPDATE_APPLIED.store(false, std::sync::atomic::Ordering::SeqCst);
+                return Err("Could not determine executable name".to_string());
+            }
+        };
 
         let old_exe = parent_dir.join(format!("{}.old", file_name));
         let tmp_exe = parent_dir.join(format!("{}.tmp", file_name));
@@ -629,66 +648,77 @@ pub fn cmd_apply_in_process_update(
         }
 
         // 6. Stage verified binary into temporary staging file first
-        {
-            let mut file = std::fs::File::create(&tmp_exe)
-                .map_err(|e| format!("Could not create staging update file: {}", e))?;
-            file.write_all(&bytes)
-                .map_err(|e| format!("Could not write update payload: {}", e))?;
-            file.flush()
-                .map_err(|e| format!("Could not flush update payload to disk: {}", e))?;
-        }
+        let stage_write_ok = (|| -> Result<(), std::io::Error> {
+            let mut file = std::fs::File::create(&tmp_exe)?;
+            file.write_all(&bytes)?;
+            file.flush()?;
+            Ok(())
+        })().is_ok();
 
-        // 7. In-Process NTFS Atomic Shadow Swap:
-        // Rename running .exe -> .exe.old
-        std::fs::rename(&current_exe, &old_exe)
-            .map_err(|e| {
-                let _ = std::fs::remove_file(&tmp_exe);
-                format!("NTFS rename of running executable failed: {}", e)
-            })?;
+        // If local parent_dir write failed (e.g. Program Files permission boundary), use temp staging
+        let active_staged_file = if stage_write_ok {
+            tmp_exe.clone()
+        } else if let Some(ref path_str) = effective_staging_path {
+            std::path::PathBuf::from(path_str)
+        } else {
+            let fallback = std::env::temp_dir().join("com.downex.manager").join("downex_handoff.staged.exe");
+            let _ = std::fs::write(&fallback, &bytes);
+            fallback
+        };
 
-        // Rename staged .tmp -> .exe
-        if let Err(e) = std::fs::rename(&tmp_exe, &current_exe) {
-            // Automatic Rollback on failure
-            let _ = std::fs::rename(&old_exe, &current_exe);
-            let _ = std::fs::remove_file(&tmp_exe);
-            return Err(format!("Could not place new executable in-place: {}. Restored existing version.", e));
-        }
+        // 7. Atomic Swap with Self-Healing Supervisor Fallback
+        // Try in-process NTFS rename first (fastest path if executable has FILE_SHARE_DELETE and no external lock)
+        let in_process_swap_ok = match std::fs::rename(&current_exe, &old_exe) {
+            Ok(_) => {
+                if let Err(e) = std::fs::rename(&active_staged_file, &current_exe) {
+                    eprintln!("[Downex OTA] Could not move staged file to current exe: {}. Reverting...", e);
+                    let _ = std::fs::rename(&old_exe, &current_exe);
+                    false
+                } else {
+                    true
+                }
+            }
+            Err(e) => {
+                eprintln!("[Downex OTA] In-process rename skipped/locked: {}. Watchdog supervisor will perform swap post-exit.", e);
+                false
+            }
+        };
 
-        // Clean staging file if provided
-        if let Some(ref path_str) = staging_path {
-            let _ = std::fs::remove_file(path_str);
-        }
-
-        eprintln!("[Downex OTA] NTFS Atomic Swap successful! Spawning self-healing watchdog...");
+        eprintln!("[Downex OTA] In-process swap status: {}. Spawning self-healing supervisor...", in_process_swap_ok);
 
         // 8. Spawn Resilient Self-Healing Watchdog Supervisor from clean staged script file:
         let pid = std::process::id();
         let exe_str = current_exe.to_string_lossy().to_string();
         let old_str = old_exe.to_string_lossy().to_string();
+        let staged_str = active_staged_file.to_string_lossy().to_string();
         let dir_str = parent_dir.to_string_lossy().to_string();
 
         let temp_dir = std::env::temp_dir().join("com.downex.manager");
         let _ = std::fs::create_dir_all(&temp_dir);
         let watchdog_file = temp_dir.join(format!("watchdog_{}.ps1", pid));
 
+        let in_process_str = if in_process_swap_ok { "$true" } else { "$false" };
+
         let watchdog_content = format!(
             r#"# Downex Self-Healing Watchdog Supervisor
 $oldPid = {pid}
 $exe = '{exe}'
 $old = '{old}'
+$staged = '{staged}'
 $dir = '{dir}'
-$log = Join-Path $env:TEMP 'com.downex.manager\watchdog.log'
+$inProcessOk = {in_process_flag}
+$log = Join-Path $env:TEMP 'com.downex.managerwatchdog.log'
 
 function Write-Log($msg) {{
     $ts = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss.fff')
     Add-Content -Path $log -Value "[$ts] $msg" -ErrorAction SilentlyContinue
 }}
 
-Write-Log "Watchdog started for PID $oldPid. Target exe: $exe"
+Write-Log "Watchdog started for PID $oldPid. Target exe: $exe (InProcessSwap: $inProcessOk)"
 
-# 1. Wait for old parent process to exit completely (up to 3s)
+# 1. Wait for old parent process to exit completely (up to 4s)
 $terminated = $false
-for ($i = 0; $i -lt 30; $i++) {{
+for ($i = 0; $i -lt 40; $i++) {{
     if (-not (Get-Process -Id $oldPid -ErrorAction SilentlyContinue)) {{
         $terminated = $true
         break
@@ -696,17 +726,44 @@ for ($i = 0; $i -lt 30; $i++) {{
     Start-Sleep -Milliseconds 100
 }}
 if (-not $terminated) {{
-    Write-Log "Old PID $oldPid did not exit within 3s. Force terminating..."
+    Write-Log "Old PID $oldPid did not exit within 4s. Force terminating..."
     Stop-Process -Id $oldPid -Force -ErrorAction SilentlyContinue
     Start-Sleep -Milliseconds 400
 }}
 Write-Log "Old PID $oldPid terminated."
 
-# 2. Terminate any lingering background Downex instances so port 18888, single-instance pipes, and WebView2 locks are clean
+# 2. Terminate any lingering background Downex instances so file locks and single-instance pipes are clean
 Get-Process -Name "Downex","downex" -ErrorAction SilentlyContinue | Where-Object {{ $_.Id -ne $PID }} | Stop-Process -Force -ErrorAction SilentlyContinue
-Start-Sleep -Milliseconds 600
+Start-Sleep -Milliseconds 400
 
-# 3. Launch updated application binary (with retry)
+# 3. If in-process swap didn't happen, complete swap now that all handles are closed!
+if (-not $inProcessOk -and (Test-Path $staged)) {{
+    Write-Log "Completing binary placement from $staged to $exe..."
+    $placed = $false
+    try {{
+        if (Test-Path $exe) {{
+            Move-Item -Path $exe -Destination $old -Force -ErrorAction Stop
+        }}
+        Move-Item -Path $staged -Destination $exe -Force -ErrorAction Stop
+        $placed = $true
+        Write-Log "Binary placed successfully."
+    }} catch {{
+        Write-Log "Standard placement failed ($($_.Exception.Message)). Attempting elevated UAC handoff..."
+        try {{
+            # Request Administrator elevation via UAC (-Verb RunAs) to update protected folder
+            $uacCmd = "if (Test-Path '$exe') {{ Move-Item -Path '$exe' -Destination '$old' -Force }}; Move-Item -Path '$staged' -Destination '$exe' -Force; Start-Process -FilePath '$exe' -WorkingDirectory '$dir' -ArgumentList '--restarted-after-update'"
+            $elevatedProc = Start-Process powershell.exe -Verb RunAs -ArgumentList "-NoProfile", "-WindowStyle", "Hidden", "-Command", $uacCmd -PassThru -Wait
+            if ($elevatedProc.ExitCode -eq 0) {{
+                Write-Log "Elevated placement succeeded."
+                exit
+            }}
+        }} catch {{
+            Write-Log "Elevated placement failed or was declined: $($_.Exception.Message)"
+        }}
+    }}
+}}
+
+# 4. Launch updated application binary (with retry)
 $p = $null
 for ($attempt = 1; $attempt -le 3; $attempt++) {{
     Write-Log "Launch attempt $attempt for $exe..."
@@ -737,13 +794,16 @@ if (-not $proc -or $proc.HasExited) {{
     exit
 }}
 
-# 4. Verify initial health and clean up old binary
+# 5. Verify initial health and clean up old binary & staging
 Start-Sleep -Milliseconds 2500
 $finalCheck = Get-Process -Id $p.Id -ErrorAction SilentlyContinue
 if ($finalCheck -and (-not $finalCheck.HasExited)) {{
-    Write-Log "Application healthy and stable with PID $($p.Id). Cleaning up $old..."
+    Write-Log "Application healthy and stable with PID $($p.Id). Cleaning up temporary assets..."
     if (Test-Path $old) {{
         Remove-Item -Path $old -Force -ErrorAction SilentlyContinue
+    }}
+    if (Test-Path $staged) {{
+        Remove-Item -Path $staged -Force -ErrorAction SilentlyContinue
     }}
     Write-Log "Update process completed successfully."
 }} else {{
@@ -758,7 +818,9 @@ if ($finalCheck -and (-not $finalCheck.HasExited)) {{
             pid = pid,
             exe = exe_str,
             old = old_str,
-            dir = dir_str
+            staged = staged_str,
+            dir = dir_str,
+            in_process_flag = in_process_str
         );
 
         if let Err(e) = std::fs::write(&watchdog_file, &watchdog_content) {
@@ -803,9 +865,12 @@ if ($finalCheck -and (-not $finalCheck.HasExited)) {{
                 Ok(())
             }
             Err(e) => {
+                UPDATE_APPLIED.store(false, std::sync::atomic::Ordering::SeqCst);
                 // Rollback if detached supervisor couldn't spawn
-                let _ = std::fs::remove_file(&current_exe);
-                let _ = std::fs::rename(&old_exe, &current_exe);
+                if in_process_swap_ok {
+                    let _ = std::fs::remove_file(&current_exe);
+                    let _ = std::fs::rename(&old_exe, &current_exe);
+                }
                 Err(format!("Could not spawn restart supervisor: {}. Restored previous version.", e))
             }
         }
@@ -1190,58 +1255,26 @@ pub fn show_restarting_window(
         *lock = Some(payload.clone());
     }
 
-    // 1. Immediately hide main application window and any child dialogs so the old app closes from view
+    // Keep main application window visible, focused and active — do NOT hide it!
     if let Some(main_win) = app.get_webview_window("main") {
-        let _ = main_win.hide();
+        let _ = main_win.show();
+        let _ = main_win.unminimize();
+        let _ = main_win.set_focus();
     }
+    // Clean up any child dialogs so main window has complete focus
     if let Some(dlg) = app.get_webview_window("download_dialog") {
         let _ = dlg.hide();
     }
     if let Some(dlg) = app.get_webview_window("download_complete") {
         let _ = dlg.hide();
     }
-
-    // 2. Open or restore dedicated restarting window
+    // Safely close standalone restarting window if open from earlier
     if let Some(window) = app.get_webview_window("restarting") {
-        let _ = window.show();
-        let _ = window.unminimize();
-        let _ = window.center();
-        let _ = window.set_always_on_top(true);
-        let _ = window.set_focus();
-    } else {
-        let builder = tauri::WebviewWindowBuilder::new(
-            app,
-            "restarting",
-            tauri::WebviewUrl::default(),
-        )
-        .title("Downex - Restarting Services")
-        .inner_size(480.0, 480.0)
-        .decorations(false)
-        .transparent(false)
-        .shadow(true)
-        .center()
-        .resizable(false)
-        .always_on_top(true)
-        .visible(true);
-
-        let _ = builder.build();
+        let _ = window.close();
     }
 
+    // Emit event directly to main window so the smooth in-window RestartingModal displays immediately
     let _ = app.emit("open-restarting-modal", &payload);
-
-    // 3. Native Safety Watchdog: Spawns a background thread to ensure atomic swap executes even if UI timers stall
-    let app_handle = app.clone();
-    let staging_fallback = staging_path.clone();
-    let target_fallback = target_version.clone();
-    std::thread::spawn(move || {
-        std::thread::sleep(std::time::Duration::from_millis(10000));
-        let _ = cmd_apply_in_process_update(
-            app_handle,
-            None,
-            staging_fallback,
-            target_fallback,
-        );
-    });
 }
 
 #[tauri::command]

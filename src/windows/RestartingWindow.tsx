@@ -1,10 +1,11 @@
-import React, { useEffect, useState } from 'react';
-import { RefreshCw, CheckCircle2, ShieldCheck, Database, Server, Cpu } from 'lucide-react';
+import React, { useEffect, useState, useCallback } from 'react';
+import { RefreshCw, CheckCircle2, ShieldCheck, Database, Server, Cpu, X } from 'lucide-react';
 import { 
   getRestartingPayload, 
   onOpenRestartingModal, 
   applyInProcessUpdate
 } from '../services/tauriService';
+import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
 
 const COUNTDOWN_TOTAL_MS = 7000;
 
@@ -20,6 +21,31 @@ export const RestartingWindow: React.FC = () => {
 
   const [stagingPath, setStagingPath] = useState<string | null>(null);
   const [elapsed, setElapsed] = useState(0);
+  const [isCloseHovered, setIsCloseHovered] = useState(false);
+
+  const handleClose = useCallback(async () => {
+    try {
+      const win = getCurrentWebviewWindow();
+      if (win) {
+        await win.close();
+      } else {
+        window.close();
+      }
+    } catch {
+      window.close();
+    }
+  }, []);
+
+  // Escape key listener
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        handleClose();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [handleClose]);
 
   // Force Light Theme strictly on document and body
   useEffect(() => {
@@ -126,6 +152,21 @@ export const RestartingWindow: React.FC = () => {
     >
       {/* Subtle Ambient Emerald Radial Glow */}
       <div className="absolute -top-24 left-1/2 -translate-x-1/2 w-64 h-64 bg-emerald-500/10 rounded-full blur-3xl pointer-events-none" />
+
+      {/* Close Button in Top Right */}
+      <button
+        onClick={handleClose}
+        onMouseEnter={() => setIsCloseHovered(true)}
+        onMouseLeave={() => setIsCloseHovered(false)}
+        className={`absolute top-3.5 right-3.5 z-20 w-6 h-6 rounded-md flex items-center justify-center transition-colors cursor-pointer focus:outline-none ${
+          isCloseHovered
+            ? 'bg-rose-500 text-white'
+            : 'text-zinc-400 hover:text-zinc-600 bg-zinc-100/60'
+        }`}
+        title="Close (Esc)"
+      >
+        <X className="w-3.5 h-3.5" />
+      </button>
 
       {/* Main Content Area */}
       <div data-tauri-drag-region className="w-full flex-1 flex flex-col items-center justify-between z-10 gap-3">

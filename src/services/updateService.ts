@@ -640,8 +640,8 @@ class UpdateService {
         localStorage.removeItem('downex_recently_updated');
       } catch {}
       this.notify({
-        state: 'error',
-        errorMessage: `Installation failed: ${err?.message || err}`,
+        state: 'ready',
+        errorMessage: `Restart failed: ${err?.message || err}`,
       });
     }
   }

@@ -1,6 +1,7 @@
-import React, { useEffect, useState } from 'react';
-import { RefreshCw, CheckCircle2, ShieldCheck, Database, Server, Cpu } from 'lucide-react';
+import React, { useEffect, useState, useCallback } from 'react';
+import { RefreshCw, CheckCircle2, ShieldCheck, Database, Server, Cpu, X } from 'lucide-react';
 import { useAppVersionStore } from '../stores/appVersionStore';
+import { updateService } from '../services/updateService';
 
 const COUNTDOWN_TOTAL_MS = 7000;
 
@@ -9,6 +10,27 @@ export const RestartingModal: React.FC = () => {
   const isRestarting = status.state === 'restarting';
 
   const [elapsed, setElapsed] = useState(0);
+  const [isCloseHovered, setIsCloseHovered] = useState(false);
+
+  const handleCancel = useCallback(() => {
+    setIsCloseHovered(false);
+    updateService.notify({
+      state: 'ready',
+      errorMessage: undefined,
+    });
+  }, []);
+
+  // Escape key listener to dismiss if needed
+  useEffect(() => {
+    if (!isRestarting) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        handleCancel();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isRestarting, handleCancel]);
 
   useEffect(() => {
     if (!isRestarting) {
@@ -56,6 +78,21 @@ export const RestartingModal: React.FC = () => {
       <div className="w-[460px] max-w-[calc(100vw-32px)] bg-white border border-zinc-200/90 rounded-3xl shadow-[0_25px_60px_-15px_rgba(0,0,0,0.18)] overflow-hidden flex flex-col animate-in zoom-in-95 duration-200 relative">
         {/* Subtle Ambient Emerald Glow */}
         <div className="absolute -top-24 left-1/2 -translate-x-1/2 w-64 h-64 bg-emerald-500/10 rounded-full blur-3xl pointer-events-none" />
+
+        {/* Dismiss Button in Top Right */}
+        <button
+          onClick={handleCancel}
+          onMouseEnter={() => setIsCloseHovered(true)}
+          onMouseLeave={() => setIsCloseHovered(false)}
+          className={`absolute top-4 right-4 z-20 w-7 h-7 rounded-lg flex items-center justify-center transition-colors cursor-pointer focus:outline-none ${
+            isCloseHovered
+              ? 'bg-rose-500 text-white'
+              : 'text-zinc-400 hover:text-zinc-600 bg-zinc-100/60'
+          }`}
+          title="Cancel restart (Esc)"
+        >
+          <X className="w-4 h-4" />
+        </button>
 
         {/* Content Container */}
         <div className="p-7 flex flex-col items-center text-center relative z-10 gap-5">
