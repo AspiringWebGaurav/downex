@@ -26,6 +26,7 @@ import {
 import { unpackOtaPayload } from './otaContainer';
 import { ReleaseManifest } from '../types/download';
 import { cleanVersion, compareSemver } from '../utils/version';
+import { getLatestCodebaseVersion } from '../data/patchNotes';
 
 export interface UpdateProgress {
   downloadedBytes: number;
@@ -59,10 +60,10 @@ export interface UpdateStatus {
 export type UpdateStatusListener = (status: UpdateStatus) => void;
 
 class UpdateService {
-  private currentVersion = '0.0.0';
+  private currentVersion = getLatestCodebaseVersion();
   private status: UpdateStatus = {
     state: 'idle',
-    currentVersion: '0.0.0',
+    currentVersion: getLatestCodebaseVersion(),
   };
   private listeners = new Set<UpdateStatusListener>();
   private stagedBinaryPath: string | null = null;
@@ -125,7 +126,14 @@ class UpdateService {
   }
 
   public setCurrentVersion(ver: string) {
-    this.currentVersion = cleanVersion(ver);
+    const cleaned = cleanVersion(ver);
+    const codebaseVer = getLatestCodebaseVersion();
+    // In dev mode or when native reports 0.0.0, dynamically adhere to active codebase version
+    if (cleaned === '0.0.0' || (typeof import.meta !== 'undefined' && (import.meta as any).env?.DEV)) {
+      this.currentVersion = codebaseVer;
+    } else {
+      this.currentVersion = cleaned;
+    }
     this.notify({ currentVersion: this.currentVersion });
   }
 
@@ -134,6 +142,14 @@ class UpdateService {
    */
   public async checkForUpdates(silent = false): Promise<ReleaseManifest | null> {
     if (this.isBusy) return null;
+
+    // Ensure dev environment always reflects the latest codebase version
+    if (typeof import.meta !== 'undefined' && (import.meta as any).env?.DEV) {
+      const codebaseVer = getLatestCodebaseVersion();
+      if (compareSemver(codebaseVer, this.currentVersion) > 0) {
+        this.currentVersion = codebaseVer;
+      }
+    }
 
     const isManual = !silent;
     if (isManual) {

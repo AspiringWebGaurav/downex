@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from 'react';
-import { Settings, Eye, HardDrive, Cpu, ShieldCheck, FolderOpen, Check, Link2, Zap, Minimize2, Power, ChevronRight, FileText, Wrench, RotateCcw, Trash2, ShieldAlert, Loader2 } from 'lucide-react';
+import { Settings, Eye, HardDrive, Cpu, ShieldCheck, FolderOpen, Check, Link2, Zap, Minimize2, Power, ChevronRight, FileText, Wrench, RotateCcw, Trash2, ShieldAlert, Loader2, Shield, ExternalLink, ArrowUpRight } from 'lucide-react';
 import { useDownloadStore } from '../stores/downloadStore';
 import { TelemetryWidget } from './TelemetryWidget';
-import { getDefaultDownloadDir, getMaxSegments, openFolderPicker, setDefaultDownloadDir, setMaxSegments as apiSetMaxSegments, isAutostartEnabled, setAutostartEnabled, triggerUninstall, repairApplication, resetToBaseVersion } from '../services/tauriService';
+import { getDefaultDownloadDir, getMaxSegments, openFolderPicker, setDefaultDownloadDir, setMaxSegments as apiSetMaxSegments, isAutostartEnabled, setAutostartEnabled, triggerUninstall, repairApplication, resetToBaseVersion, openExternalUrl } from '../services/tauriService';
 import { useAppVersionStore } from '../stores/appVersionStore';
 import { PatchNotesView } from './Views/PatchNotesView';
+import { RecoveryActionModal, RecoveryActionType } from './RecoveryActionModal';
 
 interface SettingsViewProps {
   darkMode?: boolean;
@@ -14,6 +15,7 @@ interface SettingsViewProps {
 export const SettingsView: React.FC<SettingsViewProps> = () => {
   const showTelemetryOnHome = useDownloadStore((state) => state.showTelemetryOnHome);
   const setShowTelemetryOnHome = useDownloadStore((state) => state.setShowTelemetryOnHome);
+  const setSelectedView = useDownloadStore((state) => state.setSelectedView);
   const formattedVersion = useAppVersionStore((state) => state.formattedVersion);
 
   const [defaultDir, setDefaultDir] = useState<string>('Downloads\\Downex');
@@ -51,51 +53,41 @@ export const SettingsView: React.FC<SettingsViewProps> = () => {
   const [isResettingBase, setIsResettingBase] = useState(false);
   const [isUninstalling, setIsUninstalling] = useState(false);
   const [maintenanceMessage, setMaintenanceMessage] = useState<string | null>(null);
+  const [pendingAction, setPendingAction] = useState<RecoveryActionType>(null);
 
-  const handleRepair = async () => {
-    setIsRepairing(true);
-    setMaintenanceMessage('Sweeping legacy artifacts and restarting supervisor...');
-    try {
-      await repairApplication();
-    } catch (err: any) {
-      setIsRepairing(false);
-      setMaintenanceMessage(`Repair error: ${err?.message || err}`);
-    }
-  };
+  const executeConfirmedAction = async () => {
+    if (!pendingAction) return;
+    const action = pendingAction;
+    setPendingAction(null);
 
-  const handleResetToBase = async () => {
-    const confirmed = window.confirm(
-      'Revert Downex to the immutable Base 0.0.0 foundation?\n\n' +
-      '• Downloads, library records, and preferences will remain 100% preserved.\n' +
-      '• The verified Base 0.0.0 installer will be retrieved and applied silently.\n' +
-      '• Downex will restart automatically into Base 0.0.0.'
-    );
-    if (!confirmed) return;
-
-    setIsResettingBase(true);
-    setMaintenanceMessage('Fetching verified Base 0.0.0 installer from GPHost...');
-    try {
-      const res = await resetToBaseVersion();
-      setMaintenanceMessage(res || 'Base reset initiated. Restarting...');
-    } catch (err: any) {
-      setIsResettingBase(false);
-      setMaintenanceMessage(`Reset failed: ${err?.message || err}`);
-    }
-  };
-
-  const handleUninstall = async () => {
-    const confirmed = window.confirm(
-      'Launch Downex Uninstaller?\n\n' +
-      'This will close Downex and launch the native Windows uninstallation wizard.'
-    );
-    if (!confirmed) return;
-
-    setIsUninstalling(true);
-    try {
-      await triggerUninstall();
-    } catch (err: any) {
-      setIsUninstalling(false);
-      alert(`Could not launch uninstaller: ${err?.message || err}`);
+    if (action === 'repair') {
+      setIsRepairing(true);
+      setMaintenanceMessage('Sweeping legacy artifacts and restarting supervisor...');
+      try {
+        await repairApplication();
+      } catch (err: any) {
+        setIsRepairing(false);
+        setMaintenanceMessage(`Repair error: ${err?.message || err}`);
+      }
+    } else if (action === 'reset-base') {
+      setIsResettingBase(true);
+      setMaintenanceMessage('Fetching verified Base 0.0.0 installer from GPHost...');
+      try {
+        const res = await resetToBaseVersion();
+        setMaintenanceMessage(res || 'Base reset initiated. Restarting...');
+      } catch (err: any) {
+        setIsResettingBase(false);
+        setMaintenanceMessage(`Reset failed: ${err?.message || err}`);
+      }
+    } else if (action === 'uninstall') {
+      setIsUninstalling(true);
+      setMaintenanceMessage('Launching native Windows uninstaller wizard...');
+      try {
+        await triggerUninstall();
+      } catch (err: any) {
+        setIsUninstalling(false);
+        setMaintenanceMessage(`Could not launch uninstaller: ${err?.message || err}`);
+      }
     }
   };
 
@@ -207,7 +199,20 @@ export const SettingsView: React.FC<SettingsViewProps> = () => {
                 Live Engine Performance & Storage Telemetry
               </h2>
             </div>
-            <span className="text-[10px] font-mono text-zinc-400 dark:text-zinc-500">Real-time hardware sensors</span>
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] font-mono text-zinc-400 dark:text-zinc-500 hidden sm:inline">
+                Real-time hardware sensors
+              </span>
+              <button
+                type="button"
+                onClick={() => setSelectedView('telemetry')}
+                title="Open dedicated telemetry & sensors dashboard"
+                className="text-xs font-semibold text-emerald-600 dark:text-emerald-400 hover:text-emerald-700 dark:hover:text-emerald-300 flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-300/80 dark:border-emerald-800/60 shadow-2xs hover:bg-emerald-100/70 dark:hover:bg-emerald-900/40 transition-all cursor-pointer"
+              >
+                <span>View All</span>
+                <ArrowUpRight className="w-3.5 h-3.5 stroke-[2.5]" />
+              </button>
+            </div>
           </div>
 
           <TelemetryWidget layout="embedded" />
@@ -481,100 +486,133 @@ export const SettingsView: React.FC<SettingsViewProps> = () => {
 
           <div className="rounded-xl bg-zinc-50/70 dark:bg-zinc-900/40 border border-zinc-200/80 dark:border-zinc-800/60 shadow-xs divide-y divide-zinc-200/60 dark:divide-zinc-800/60">
             {/* Action 1: Self-Healing Repair */}
-            <div className="p-4 flex items-center justify-between gap-4">
-              <div className="space-y-0.5">
-                <div className="flex items-center gap-2">
-                  <Wrench className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
-                  <span className="text-xs font-semibold text-zinc-900 dark:text-zinc-100">
-                    Self-Healing Process & Lock Repair
+            <div className="p-3 sm:p-3.5 flex items-center justify-between gap-4">
+              <div className="flex items-center gap-3 min-w-0 flex-1">
+                <div className="w-8 h-8 rounded-sm bg-emerald-500/10 dark:bg-emerald-500/20 border border-emerald-500/20 flex items-center justify-center shrink-0">
+                  <Wrench className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+                </div>
+                <div className="flex items-center gap-2 min-w-0 flex-1 truncate">
+                  <span className="text-xs font-bold text-zinc-900 dark:text-zinc-100 whitespace-nowrap">
+                    Process & Lock Repair
                   </span>
-                  <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-emerald-100 dark:bg-emerald-950/80 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800">
-                    Instant 2s
+                  <span className="text-[10px] font-mono px-1.5 py-0.5 rounded-xs bg-emerald-100 dark:bg-emerald-950/80 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 shrink-0">
+                    Instant
+                  </span>
+                  <span className="text-[11px] text-zinc-400 dark:text-zinc-500 truncate">
+                    — Sweep temp binaries, release SQLite locks, and restart
                   </span>
                 </div>
-                <p className="text-[11px] text-zinc-500 dark:text-zinc-400 max-w-xl">
-                  Sweep and purge corrupt .old or .tmp binaries, terminate orphaned background watchdog scripts, release SQLite locks, and restart the engine cleanly.
-                </p>
               </div>
 
               <button
                 type="button"
-                onClick={handleRepair}
+                onClick={() => setPendingAction('repair')}
                 disabled={isRepairing || isResettingBase}
-                className="px-3.5 py-1.5 rounded-lg border border-emerald-300 dark:border-emerald-800/80 bg-emerald-50 dark:bg-emerald-950/50 hover:bg-emerald-100 dark:hover:bg-emerald-900/50 text-emerald-700 dark:text-emerald-300 text-xs font-semibold flex items-center gap-1.5 cursor-pointer shadow-xs transition-all shrink-0 disabled:opacity-50"
+                className="w-44 h-9 rounded-sm bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white font-mono text-xs font-bold uppercase tracking-wider flex items-center justify-center gap-2 cursor-pointer shadow-xs transition-all shrink-0 disabled:opacity-50 disabled:cursor-not-allowed active:scale-[0.98]"
               >
                 {isRepairing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Wrench className="w-3.5 h-3.5" />}
-                <span>{isRepairing ? 'Repairing...' : 'Run Repair'}</span>
+                <span>{isRepairing ? 'REPAIRING...' : 'RUN REPAIR'}</span>
               </button>
             </div>
 
             {/* Action 2: Reset to Base (0.0.0 Foundation) */}
-            <div className="p-4 flex items-center justify-between gap-4">
-              <div className="space-y-0.5">
-                <div className="flex items-center gap-2">
-                  <RotateCcw className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0" />
-                  <span className="text-xs font-semibold text-zinc-900 dark:text-zinc-100">
-                    Reset to Base Foundation (v0.0.0)
+            <div className="p-3 sm:p-3.5 flex items-center justify-between gap-4">
+              <div className="flex items-center gap-3 min-w-0 flex-1">
+                <div className="w-8 h-8 rounded-sm bg-amber-500/10 dark:bg-amber-500/20 border border-amber-500/20 flex items-center justify-center shrink-0">
+                  <RotateCcw className="w-4 h-4 text-amber-600 dark:text-amber-400" />
+                </div>
+                <div className="flex items-center gap-2 min-w-0 flex-1 truncate">
+                  <span className="text-xs font-bold text-zinc-900 dark:text-zinc-100 whitespace-nowrap">
+                    Reset to Base Foundation
                   </span>
-                  <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-amber-100 dark:bg-amber-950/80 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800">
-                    Zero Data Loss
+                  <span className="text-[10px] font-mono px-1.5 py-0.5 rounded-xs bg-amber-100 dark:bg-amber-950/80 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800 shrink-0">
+                    v0.0.0
+                  </span>
+                  <span className="text-[11px] text-zinc-400 dark:text-zinc-500 truncate">
+                    — Revert executable to permanent Base 0.0.0 installer
                   </span>
                 </div>
-                <p className="text-[11px] text-zinc-500 dark:text-zinc-400 max-w-xl">
-                  Revert executable foundation to the permanent Base 0.0.0 installer. All downloads, database records, and settings remain 100% intact.
-                </p>
               </div>
 
               <button
                 type="button"
-                onClick={handleResetToBase}
+                onClick={() => setPendingAction('reset-base')}
                 disabled={isRepairing || isResettingBase}
-                className="px-3.5 py-1.5 rounded-lg border border-amber-300 dark:border-amber-800/80 bg-amber-50 dark:bg-amber-950/50 hover:bg-amber-100 dark:hover:bg-amber-900/50 text-amber-700 dark:text-amber-300 text-xs font-semibold flex items-center gap-1.5 cursor-pointer shadow-xs transition-all shrink-0 disabled:opacity-50"
+                className="w-44 h-9 rounded-sm bg-amber-600 hover:bg-amber-700 active:bg-amber-800 text-white font-mono text-xs font-bold uppercase tracking-wider flex items-center justify-center gap-2 cursor-pointer shadow-xs transition-all shrink-0 disabled:opacity-50 disabled:cursor-not-allowed active:scale-[0.98]"
               >
                 {isResettingBase ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RotateCcw className="w-3.5 h-3.5" />}
-                <span>{isResettingBase ? 'Reverting...' : 'Reset to Base'}</span>
+                <span>{isResettingBase ? 'REVERTING...' : 'RESET TO BASE'}</span>
               </button>
             </div>
 
             {/* Action 3: Native Windows Uninstaller */}
-            <div className="p-4 flex items-center justify-between gap-4">
-              <div className="space-y-0.5">
-                <div className="flex items-center gap-2">
-                  <Trash2 className="w-4 h-4 text-rose-600 dark:text-rose-400 shrink-0" />
-                  <span className="text-xs font-semibold text-zinc-900 dark:text-zinc-100">
+            <div className="p-3 sm:p-3.5 flex items-center justify-between gap-4">
+              <div className="flex items-center gap-3 min-w-0 flex-1">
+                <div className="w-8 h-8 rounded-sm bg-rose-500/10 dark:bg-rose-500/20 border border-rose-500/20 flex items-center justify-center shrink-0">
+                  <Trash2 className="w-4 h-4 text-rose-600 dark:text-rose-400" />
+                </div>
+                <div className="flex items-center gap-2 min-w-0 flex-1 truncate">
+                  <span className="text-xs font-bold text-zinc-900 dark:text-zinc-100 whitespace-nowrap">
                     Uninstall Downex
                   </span>
-                  <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-zinc-200/80 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400">
-                    Native NSIS
+                  <span className="text-[10px] font-mono px-1.5 py-0.5 rounded-xs bg-zinc-200/80 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400 shrink-0">
+                    NSIS
+                  </span>
+                  <span className="text-[11px] text-zinc-400 dark:text-zinc-500 truncate">
+                    — Cleanly remove Downex desktop application from Windows
                   </span>
                 </div>
-                <p className="text-[11px] text-zinc-500 dark:text-zinc-400 max-w-xl">
-                  Launch the native Windows uninstallation wizard to cleanly remove Downex and its system integrations.
-                </p>
               </div>
 
               <button
                 type="button"
-                onClick={handleUninstall}
+                onClick={() => setPendingAction('uninstall')}
                 disabled={isUninstalling}
-                className="px-3.5 py-1.5 rounded-lg border border-rose-300 dark:border-rose-900/80 bg-rose-50 dark:bg-rose-950/50 hover:bg-rose-100 dark:hover:bg-rose-900/50 text-rose-700 dark:text-rose-300 text-xs font-semibold flex items-center gap-1.5 cursor-pointer shadow-xs transition-all shrink-0 disabled:opacity-50"
+                className="w-44 h-9 rounded-sm bg-rose-600 hover:bg-rose-700 active:bg-rose-800 text-white font-mono text-xs font-bold uppercase tracking-wider flex items-center justify-center gap-2 cursor-pointer shadow-xs transition-all shrink-0 disabled:opacity-50 disabled:cursor-not-allowed active:scale-[0.98]"
               >
-                <Trash2 className="w-3.5 h-3.5" />
-                <span>{isUninstalling ? 'Launching...' : 'Uninstall Downex...'}</span>
+                {isUninstalling ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
+                <span>{isUninstalling ? 'LAUNCHING...' : 'UNINSTALL'}</span>
               </button>
             </div>
           </div>
         </div>
 
-        {/* Minimal Footer */}
-        <div className="flex items-center justify-between text-[11px] font-mono text-zinc-400 dark:text-zinc-500 pt-1">
-          <div className="flex items-center gap-1.5">
-            <ShieldCheck className="w-3.5 h-3.5 text-emerald-500" />
-            <span>Downex Core Build: {formattedVersion}</span>
+        {/* Minimal Footer & Terms of Service Governance */}
+        <div className="space-y-2 pt-2 border-t border-zinc-200/60 dark:border-zinc-800/60">
+          <div className="flex items-center justify-between text-[11px] font-mono text-zinc-400 dark:text-zinc-500">
+            <div className="flex items-center gap-1.5">
+              <ShieldCheck className="w-3.5 h-3.5 text-emerald-500" />
+              <span>Downex Core Build: {formattedVersion}</span>
+            </div>
+            <span>Windows x64 Native • SQLite WAL High-Throughput Engine</span>
           </div>
-          <span>Windows x64 Native • SQLite WAL High-Throughput Engine</span>
+
+          <div className="p-2.5 rounded-lg bg-zinc-50 dark:bg-zinc-900/60 border border-zinc-200/80 dark:border-zinc-800/80 flex items-center justify-between text-[11px] text-zinc-500 dark:text-zinc-400">
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <Shield className="w-3.5 h-3.5 text-violet-500 shrink-0" />
+              <span>By using Downex, you acknowledge and agree to official software terms & privacy governance.</span>
+              <button
+                type="button"
+                onClick={() => openExternalUrl('https://download.gauravpatil.site#terms')}
+                className="text-violet-600 dark:text-violet-400 hover:underline font-semibold cursor-pointer inline-flex items-center gap-0.5"
+              >
+                <span>Click here for Terms & Privacy info</span>
+                <ExternalLink className="w-3 h-3" />
+              </button>
+            </div>
+            <span className="font-mono text-[10px] text-zinc-400 dark:text-zinc-500 shrink-0 hidden md:inline">GPHost Cloud Engine</span>
+          </div>
         </div>
       </div>
+
+      {/* Irreversible & Destructive Action Confirmation Modal */}
+      <RecoveryActionModal
+        isOpen={pendingAction !== null}
+        actionType={pendingAction}
+        onClose={() => setPendingAction(null)}
+        onConfirm={executeConfirmedAction}
+        isLoading={isRepairing || isResettingBase || isUninstalling}
+      />
     </div>
   );
 };

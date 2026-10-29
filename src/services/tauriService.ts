@@ -1,6 +1,8 @@
 import { invoke, isTauri as coreIsTauri } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { DownloadItem, DownloadProgressEvent, ReleaseManifest } from '../types/download';
+import { cleanVersion, compareSemver } from '../utils/version';
+import { getLatestCodebaseVersion } from '../data/patchNotes';
 
 export function isTauriEnv(): boolean {
   if (typeof window === 'undefined') return false;
@@ -227,6 +229,38 @@ export async function setMaxSegments(count: number): Promise<number> {
   return await invoke<number>('cmd_set_max_segments', { count });
 }
 
+export async function getLifetimeDownloadedBytes(): Promise<number> {
+  if (!isTauri) {
+    try {
+      const v = localStorage.getItem('downex_lifetime_downloaded_bytes');
+      return v ? parseInt(v, 10) || 0 : 0;
+    } catch {
+      return 0;
+    }
+  }
+  try {
+    return await invoke<number>('cmd_get_lifetime_downloaded_bytes');
+  } catch (err) {
+    console.warn('[Downex DB] Failed to get lifetime downloaded bytes:', err);
+    return 0;
+  }
+}
+
+export async function setLifetimeDownloadedBytes(bytes: number): Promise<number> {
+  if (!isTauri) {
+    try {
+      localStorage.setItem('downex_lifetime_downloaded_bytes', String(bytes));
+    } catch {}
+    return bytes;
+  }
+  try {
+    return await invoke<number>('cmd_set_lifetime_downloaded_bytes', { bytes });
+  } catch (err) {
+    console.warn('[Downex DB] Failed to set lifetime downloaded bytes:', err);
+    return bytes;
+  }
+}
+
 export async function isAutostartEnabled(): Promise<boolean> {
   if (!isTauri) {
     try {
@@ -381,17 +415,35 @@ export async function checkUpdates(): Promise<ReleaseManifest | null> {
 }
 
 export async function getResolvedVersion(): Promise<string> {
-  if (!isTauri) {
+  const latestCodebase = getLatestCodebaseVersion();
+
+  // In browser preview, web demo, or local Vite development server:
+  // Dynamically resolve to the active codebase version so dev always runs the latest
+  if (!isTauri || (typeof import.meta !== 'undefined' && (import.meta as any).env?.DEV)) {
     try {
-      return localStorage.getItem('downex_persisted_version') || '0.0.0';
+      const persisted = localStorage.getItem('downex_persisted_version');
+      if (persisted && persisted !== '0.0.0') {
+        const pClean = cleanVersion(persisted);
+        if (compareSemver(pClean, latestCodebase) >= 0) {
+          return pClean;
+        }
+      }
+      return latestCodebase;
     } catch {
-      return '0.0.0';
+      return latestCodebase;
     }
   }
+
   try {
-    return await invoke<string>('cmd_get_resolved_version');
+    const nativeVer = await invoke<string>('cmd_get_resolved_version');
+    const clean = cleanVersion(nativeVer);
+    // If native reports 0.0.0 (e.g. unpatched debug base), fallback dynamically to the codebase version
+    if (clean === '0.0.0') {
+      return latestCodebase;
+    }
+    return clean;
   } catch {
-    return '0.0.0';
+    return latestCodebase;
   }
 }
 
@@ -973,4 +1025,17 @@ export async function resetToBaseVersion(): Promise<string> {
     return 'Base reset complete (Dev Mode)';
   }
   return await invoke<string>('cmd_reset_to_base_version');
+}
+
+export async function openExternalUrl(url: string): Promise<void> {
+  if (!isTauri) {
+    window.open(url, '_blank', 'noopener,noreferrer');
+    return;
+  }
+  try {
+    const { openUrl } = await import('@tauri-apps/plugin-opener');
+    await openUrl(url);
+  } catch {
+    window.open(url, '_blank', 'noopener,noreferrer');
+  }
 }

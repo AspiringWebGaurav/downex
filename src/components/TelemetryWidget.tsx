@@ -1,7 +1,8 @@
 import React, { useEffect, useState } from 'react';
-import { Activity, HardDrive, Zap, FolderOpen } from 'lucide-react';
+import { Activity, HardDrive, Zap, FolderOpen, Database } from 'lucide-react';
 import { useDownloadStore } from '../stores/downloadStore';
 import { getDefaultDownloadDir, openFolderPicker, setDefaultDownloadDir } from '../services/tauriService';
+import { formatBytes, formatSpeed } from '../utils/format';
 
 interface TelemetryWidgetProps {
   layout?: 'sidebar' | 'embedded';
@@ -11,6 +12,8 @@ export const TelemetryWidget: React.FC<TelemetryWidgetProps> = ({ layout = 'side
   const totalSpeed = useDownloadStore((state) => state.totalSpeed);
   const speedHistory = useDownloadStore((state) => state.speedHistory);
   const items = useDownloadStore((state) => state.items);
+  const lifetimeDownloadedBytes = useDownloadStore((state) => state.lifetimeDownloadedBytes);
+  const sessionDownloadedBytes = useDownloadStore((state) => state.sessionDownloadedBytes);
   const [storagePath, setStoragePath] = useState<string>('Downloads\\Downex');
 
   useEffect(() => {
@@ -36,16 +39,6 @@ export const TelemetryWidget: React.FC<TelemetryWidgetProps> = ({ layout = 'side
   const activeDownloads = items.filter((i) => i.status === 'downloading');
   const activeSegmentsCount = activeDownloads.reduce((acc, curr) => acc + (curr.segments?.length || 1), 0);
 
-  const formatSpeed = (bytesPerSec: number) => {
-    if (!bytesPerSec || bytesPerSec === 0) return '0.0 MB/s';
-    const mb = bytesPerSec / (1024 * 1024);
-    if (mb < 1) {
-      const kb = bytesPerSec / 1024;
-      return kb.toFixed(1) + ' KB/s';
-    }
-    return mb.toFixed(1) + ' MB/s';
-  };
-
   // Generate SVG sparkline path
   const maxSpeed = Math.max(...speedHistory, 1024 * 1024 * 10); // at least 10MB scale
   const points = speedHistory
@@ -58,8 +51,8 @@ export const TelemetryWidget: React.FC<TelemetryWidgetProps> = ({ layout = 'side
 
   if (layout === 'embedded') {
     return (
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-        {/* Live Speed Card */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+        {/* Card 1: Live Speed & Throughput */}
         <div className="p-3.5 rounded-xl bg-zinc-50/80 dark:bg-zinc-900/60 border border-zinc-200/80 dark:border-zinc-800/60 shadow-xs flex flex-col justify-between">
           <div>
             <div className="flex items-center justify-between text-zinc-400 dark:text-zinc-500 mb-1">
@@ -85,7 +78,7 @@ export const TelemetryWidget: React.FC<TelemetryWidgetProps> = ({ layout = 'side
           </div>
         </div>
 
-        {/* Active Sockets & Parallel Workers */}
+        {/* Card 2: Active Sockets & Parallel Workers */}
         <div className="p-3.5 rounded-xl bg-zinc-50/80 dark:bg-zinc-900/60 border border-zinc-200/80 dark:border-zinc-800/60 shadow-xs flex flex-col justify-between">
           <div>
             <div className="flex items-center justify-between text-zinc-400 dark:text-zinc-500 mb-1">
@@ -101,7 +94,7 @@ export const TelemetryWidget: React.FC<TelemetryWidgetProps> = ({ layout = 'side
           </div>
         </div>
 
-        {/* Dynamic Storage Target */}
+        {/* Card 3: Dynamic Storage Target */}
         <div className="p-3.5 rounded-xl bg-zinc-50/80 dark:bg-zinc-900/60 border border-zinc-200/80 dark:border-zinc-800/60 shadow-xs flex flex-col justify-between">
           <div>
             <div className="flex items-center justify-between text-zinc-400 dark:text-zinc-500 mb-1">
@@ -127,6 +120,29 @@ export const TelemetryWidget: React.FC<TelemetryWidgetProps> = ({ layout = 'side
                 <FolderOpen className="w-3 h-3" /> Change
               </button>
             </div>
+          </div>
+        </div>
+
+        {/* Card 4: Total Downloaded Data Till Now (Persistent SQLite Metric) */}
+        <div className="p-3.5 rounded-xl bg-zinc-50/80 dark:bg-zinc-900/60 border border-zinc-200/80 dark:border-zinc-800/60 shadow-xs flex flex-col justify-between">
+          <div>
+            <div className="flex items-center justify-between text-zinc-400 dark:text-zinc-500 mb-1">
+              <span className="text-[10px] font-mono uppercase tracking-wider font-semibold">Total Data Downloaded</span>
+              <Database className="w-4 h-4 text-violet-500" />
+            </div>
+            <div className="text-xl font-bold font-mono text-zinc-900 dark:text-zinc-100">
+              {formatBytes(lifetimeDownloadedBytes)}
+            </div>
+          </div>
+
+          <div className="mt-2 pt-2 border-t border-zinc-200/60 dark:border-zinc-800/60 flex items-center justify-between text-[11px] font-mono text-zinc-500 dark:text-zinc-400">
+            <span className="flex items-center gap-1.5">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+              SQLite Synced
+            </span>
+            <span title="Downloaded during this session">
+              +{formatBytes(sessionDownloadedBytes)} session
+            </span>
           </div>
         </div>
       </div>
@@ -184,7 +200,7 @@ export const TelemetryWidget: React.FC<TelemetryWidgetProps> = ({ layout = 'side
             <div className="h-full bg-emerald-500 rounded-full" style={{ width: '42%' }} />
           </div>
           <div className="mt-1 flex justify-between text-[10px] font-mono text-zinc-400">
-            <span>Used 42%</span>
+            <span>Drive Available</span>
             <button
               type="button"
               onClick={handlePickFolder}
@@ -193,6 +209,21 @@ export const TelemetryWidget: React.FC<TelemetryWidgetProps> = ({ layout = 'side
               <FolderOpen className="w-3 h-3" /> Change
             </button>
           </div>
+        </div>
+      </div>
+
+      {/* Card 4 (Sidebar): Lifetime Data Transferred */}
+      <div className="p-3 rounded-xl bg-white dark:bg-zinc-900/70 border border-zinc-200/80 dark:border-zinc-800/60 shadow-xs">
+        <div className="flex items-center justify-between text-zinc-400 dark:text-zinc-500 mb-1">
+          <span className="text-[10px] font-mono uppercase tracking-wider">Total Downloaded</span>
+          <Database className="w-3.5 h-3.5 text-violet-500" />
+        </div>
+        <div className="text-base font-bold font-mono text-zinc-900 dark:text-zinc-100">
+          {formatBytes(lifetimeDownloadedBytes)}
+        </div>
+        <div className="text-[10px] font-mono text-zinc-400 mt-1 flex items-center justify-between">
+          <span>Lifetime transfer</span>
+          <span className="text-emerald-600 dark:text-emerald-400 font-medium">SQLite</span>
         </div>
       </div>
     </div>

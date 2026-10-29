@@ -14,6 +14,8 @@ import {
   queueDownload,
   onRefreshDownloads,
   DownloadInfoModalPayload,
+  getLifetimeDownloadedBytes,
+  setLifetimeDownloadedBytes,
 } from '../services/tauriService';
 
 interface DownloadStore {
@@ -27,6 +29,9 @@ interface DownloadStore {
   openNewModalWithData: (data: DownloadInfoModalPayload) => void;
   totalSpeed: number;
   speedHistory: number[];
+  peakSpeed: number;
+  lifetimeDownloadedBytes: number;
+  sessionDownloadedBytes: number;
   showTelemetryOnHome: boolean;
   setShowTelemetryOnHome: (val: boolean) => void;
 
@@ -35,6 +40,8 @@ interface DownloadStore {
   pauseQueue: () => Promise<void>;
   queueDownload: (id: string) => Promise<void>;
   loadItems: () => Promise<void>;
+  initLifetimeStats: () => Promise<void>;
+  syncLifetimeStatsToDb: () => Promise<void>;
   addNewDownload: (url: string, folder?: string, queue?: string, headers?: Record<string, string>, startImmediately?: boolean, customFilename?: string) => Promise<void>;
   changeFolderAndRetry: (id: string, newFolder: string) => Promise<void>;
   togglePause: (id: string) => Promise<void>;
@@ -54,6 +61,9 @@ export const useDownloadStore = create<DownloadStore>((set, get) => ({
   setIsStandaloneModal: (val: boolean) => set({ isStandaloneModal: val }),
   totalSpeed: 0,
   speedHistory: Array(20).fill(0),
+  peakSpeed: 0,
+  lifetimeDownloadedBytes: 0,
+  sessionDownloadedBytes: 0,
   isQueueRunning: false,
   showTelemetryOnHome: (() => {
     try {
@@ -103,8 +113,35 @@ export const useDownloadStore = create<DownloadStore>((set, get) => ({
         });
         return { items: merged, isQueueRunning: queueRunning };
       });
+      // Ensure lifetime stats baseline is synchronized with loaded items
+      const itemsSum = get().items.reduce((acc, i) => acc + (i.downloaded_bytes || 0), 0);
+      if (itemsSum > get().lifetimeDownloadedBytes) {
+        set({ lifetimeDownloadedBytes: itemsSum });
+      }
     } catch (e) {
       console.warn('Failed to load downloads:', e);
+    }
+  },
+
+  initLifetimeStats: async () => {
+    try {
+      const dbBytes = await getLifetimeDownloadedBytes();
+      const itemsSum = get().items.reduce((acc, i) => acc + (i.downloaded_bytes || 0), 0);
+      const initial = Math.max(dbBytes, itemsSum);
+      set({ lifetimeDownloadedBytes: initial });
+    } catch (e) {
+      console.warn('Failed to initialize lifetime downloaded bytes:', e);
+    }
+  },
+
+  syncLifetimeStatsToDb: async () => {
+    try {
+      const current = get().lifetimeDownloadedBytes;
+      if (current > 0) {
+        await setLifetimeDownloadedBytes(current);
+      }
+    } catch (e) {
+      console.warn('Failed to sync lifetime stats to db:', e);
     }
   },
 
@@ -189,12 +226,32 @@ export const useDownloadStore = create<DownloadStore>((set, get) => ({
     }),
 
   initListener: () => {
+    // 0. Initialize persistent lifetime counter from SQLite DB
+    get().initLifetimeStats().catch(() => {});
+
+    // In-memory delta tracker per task ID for zero-overhead, byte-accurate accumulation
+    const taskDownloadedCache = new Map<string, number>();
+    let isLifetimeDirty = false;
+
     // 1. High-frequency push event listener from Tauri Rust backend
     const unlistenProgress = onDownloadProgress((event: DownloadProgressEvent) => {
       set((state) => {
         let currentTotalSpeed = 0;
         let taskFinished = false;
         let itemFound = false;
+
+        // Byte-accurate accumulation without disk I/O thrashing
+        const prevBytes = taskDownloadedCache.get(event.task_id) ?? 0;
+        const currentBytes = event.downloaded_bytes || 0;
+        let lifetimeIncrement = 0;
+        if (currentBytes > prevBytes) {
+          lifetimeIncrement = currentBytes - prevBytes;
+          taskDownloadedCache.set(event.task_id, currentBytes);
+          isLifetimeDirty = true;
+        }
+
+        const newLifetime = state.lifetimeDownloadedBytes + lifetimeIncrement;
+        const newSession = state.sessionDownloadedBytes + lifetimeIncrement;
 
         const updated = state.items.map((item) => {
           if (item.id === event.task_id) {
@@ -247,7 +304,15 @@ export const useDownloadStore = create<DownloadStore>((set, get) => ({
         }
 
         const newHistory = [...state.speedHistory.slice(1), currentTotalSpeed];
-        return { items: updated, totalSpeed: currentTotalSpeed, speedHistory: newHistory };
+        const newPeak = Math.max(state.peakSpeed, currentTotalSpeed);
+        return { 
+          items: updated, 
+          totalSpeed: currentTotalSpeed, 
+          speedHistory: newHistory,
+          peakSpeed: newPeak,
+          lifetimeDownloadedBytes: newLifetime,
+          sessionDownloadedBytes: newSession,
+        };
       });
     });
 
@@ -257,7 +322,15 @@ export const useDownloadStore = create<DownloadStore>((set, get) => ({
       get().setSelectedView('all');
     });
 
-    // 3. Safety heartbeat polling: Sync with SQLite every 1000ms while any task is active
+    // 3. Periodic debounced synchronization: Flush accumulated bytes to SQLite every 10s ONLY if dirty
+    const syncIntervalId = setInterval(() => {
+      if (isLifetimeDirty) {
+        isLifetimeDirty = false;
+        get().syncLifetimeStatsToDb().catch(() => {});
+      }
+    }, 10000);
+
+    // 4. Safety heartbeat polling: Sync with SQLite every 1000ms while any task is active
     const intervalId = setInterval(() => {
       const hasActive = get().items.some((i) => i.status === 'downloading' || i.status === 'probing');
       if (hasActive) {
@@ -265,10 +338,29 @@ export const useDownloadStore = create<DownloadStore>((set, get) => ({
       }
     }, 1000);
 
+    // 5. Lifecycle termination guard: Flush immediately before window unloads
+    const handleBeforeUnload = () => {
+      if (isLifetimeDirty) {
+        isLifetimeDirty = false;
+        get().syncLifetimeStatsToDb().catch(() => {});
+      }
+    };
+    if (typeof window !== 'undefined') {
+      window.addEventListener('beforeunload', handleBeforeUnload);
+    }
+
     return () => {
+      if (isLifetimeDirty) {
+        isLifetimeDirty = false;
+        get().syncLifetimeStatsToDb().catch(() => {});
+      }
+      if (typeof window !== 'undefined') {
+        window.removeEventListener('beforeunload', handleBeforeUnload);
+      }
       unlistenProgress();
       unlistenRefresh();
       clearInterval(intervalId);
+      clearInterval(syncIntervalId);
     };
   },
 }));

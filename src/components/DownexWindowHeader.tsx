@@ -2,9 +2,11 @@ import React, { useState, useEffect } from 'react';
 import { X, Check, RefreshCw, Download, AlertTriangle } from 'lucide-react';
 import { minimizeToBackground } from '../services/tauriService';
 import { useAppVersionStore } from '../stores/appVersionStore';
+import { compareSemver } from '../utils/version';
 
 export const DownexWindowHeader: React.FC = () => {
   const formattedVersion = useAppVersionStore((state) => state.formattedVersion);
+  const currentVersion = useAppVersionStore((state) => state.currentVersion);
   const status = useAppVersionStore((state) => state.status);
   const openModal = useAppVersionStore((state) => state.openModal);
   const [isCloseHovered, setIsCloseHovered] = useState(false);
@@ -74,7 +76,7 @@ export const DownexWindowHeader: React.FC = () => {
             <Check className="w-3 h-3 text-emerald-600 shrink-0 stroke-[2.5]" />
             <span>Up to date • {formattedVersion}</span>
           </div>
-        ) : status.state === 'available' && status.manifest ? (
+        ) : status.state === 'available' && status.manifest && status.targetVersion && compareSemver(status.targetVersion, currentVersion) > 0 ? (
           <div className="flex items-center gap-2 px-2.5 h-6 rounded bg-violet-50 dark:bg-violet-950/40 border border-violet-300 dark:border-violet-800 text-[11px] font-mono text-violet-800 dark:text-violet-300 shadow-xs">
             <span className="font-semibold">{status.manifest.version} Available</span>
             <button
@@ -86,7 +88,7 @@ export const DownexWindowHeader: React.FC = () => {
               <span>Update</span>
             </button>
           </div>
-        ) : status.state === 'ready' ? (
+        ) : status.state === 'ready' && status.targetVersion && compareSemver(status.targetVersion, currentVersion) > 0 ? (
           <div className="flex items-center gap-2 px-2.5 h-6 rounded bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-300 dark:border-emerald-800 text-[11px] font-mono text-emerald-800 dark:text-emerald-300 shadow-xs">
             <span className="font-semibold">{status.targetVersion} Ready</span>
             <button

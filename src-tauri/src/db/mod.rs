@@ -430,6 +430,43 @@ impl DatabaseManager {
         Ok(())
     }
 
+    pub fn get_lifetime_downloaded_bytes(&self) -> Result<u64> {
+        let conn = self.conn.lock();
+        let mut stmt = conn.prepare("SELECT value FROM app_settings WHERE key = 'lifetime_downloaded_bytes'")?;
+        let mut rows = stmt.query([])?;
+        if let Some(row) = rows.next()? {
+            let val: String = row.get(0)?;
+            if let Ok(b) = val.parse::<u64>() {
+                return Ok(b);
+            }
+        }
+
+        // Fallback seed: Sum existing downloads if lifetime metric has not been initialized
+        let mut sum_stmt = conn.prepare("SELECT COALESCE(SUM(downloaded_bytes), 0) FROM downloads")?;
+        let sum: i64 = sum_stmt.query_row([], |r| r.get(0)).unwrap_or(0);
+        let bytes = if sum > 0 { sum as u64 } else { 0 };
+
+        let now = chrono::Utc::now().timestamp_millis();
+        let _ = conn.execute(
+            "INSERT INTO app_settings (key, value, updated_at) VALUES ('lifetime_downloaded_bytes', ?1, ?2)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+            params![bytes.to_string(), now],
+        );
+
+        Ok(bytes)
+    }
+
+    pub fn set_lifetime_downloaded_bytes(&self, bytes: u64) -> Result<()> {
+        let conn = self.conn.lock();
+        let now = chrono::Utc::now().timestamp_millis();
+        conn.execute(
+            "INSERT INTO app_settings (key, value, updated_at) VALUES ('lifetime_downloaded_bytes', ?1, ?2)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+            params![bytes.to_string(), now],
+        )?;
+        Ok(())
+    }
+
     pub fn get_all_patch_notes(&self) -> Result<Vec<PatchNoteRecord>> {
         let conn = self.conn.lock();
         let mut stmt = conn.prepare(

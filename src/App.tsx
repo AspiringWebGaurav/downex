@@ -11,6 +11,7 @@ import { UpdateModal } from './components/UpdateModal';
 import { UpdateNotification } from './components/UpdateNotification';
 import { PatchNotesModal } from './components/PatchNotesModal';
 import { SettingsView } from './components/SettingsView';
+import { TelemetryView } from './components/TelemetryView';
 import { onOpenNewDownloadModal, showDownloadDialog, onNavigate, onCheckUpdatesFromTray, notifyDomReady } from './services/tauriService';
 import './App.css';
 
@@ -115,9 +116,9 @@ export const App: React.FC = () => {
       if (view) setSelectedView(view);
     });
 
-    const unlistenCheckUpdates = onCheckUpdatesFromTray(() => {
-      useAppVersionStore.getState().checkForUpdates(false);
+    const unlistenCheckUpdates = onCheckUpdatesFromTray(async () => {
       useAppVersionStore.getState().openModal();
+      await useAppVersionStore.getState().checkForUpdates(false);
     });
 
     return () => {
@@ -143,6 +144,8 @@ export const App: React.FC = () => {
         <main className="flex-1 flex flex-col overflow-hidden bg-white dark:bg-zinc-950">
           {selectedView === 'settings' ? (
             <SettingsView darkMode={darkMode} setDarkMode={setDarkMode} />
+          ) : selectedView === 'telemetry' ? (
+            <TelemetryView onBack={() => setSelectedView('settings')} />
           ) : (
             <>
               {/* Top Control Bar */}
@@ -177,7 +180,7 @@ export const App: React.FC = () => {
         </main>
 
         {/* Right Telemetry & Speed Sparkline Panel (Only when enabled in settings and not on settings page) */}
-        {showTelemetryOnHome && selectedView !== 'settings' && (
+        {showTelemetryOnHome && selectedView !== 'settings' && selectedView !== 'telemetry' && (
           <TelemetryWidget layout="sidebar" />
         )}
       </div>

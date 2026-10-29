@@ -201,11 +201,23 @@ pub fn resolve_installed_version<R: tauri::Runtime>(
 
     #[cfg(debug_assertions)]
     {
-        let _ = db;
-        // In dev mode, check if an OTA update was explicitly applied via sidecar
+        // In dev mode, check sidecar and SQLite DB before base version fallback
         if let Some(sidecar_ver) = read_sidecar_version(app) {
             if sidecar_ver != "0.0.0" {
                 return sidecar_ver;
+            }
+        }
+        if let Some(db_mgr) = db {
+            if let Some(db_ver) = read_db_installed_version(db_mgr) {
+                if db_ver != "0.0.0" {
+                    return db_ver;
+                }
+            }
+        } else if let Some(state) = app.try_state::<crate::AppState>() {
+            if let Some(db_ver) = read_db_installed_version(&state.db) {
+                if db_ver != "0.0.0" {
+                    return db_ver;
+                }
             }
         }
         return base_version;

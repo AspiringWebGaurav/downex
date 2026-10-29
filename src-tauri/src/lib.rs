@@ -281,6 +281,8 @@ pub fn run() {
             cmd_set_default_download_dir,
             cmd_set_max_segments,
             cmd_get_max_segments,
+            cmd_get_lifetime_downloaded_bytes,
+            cmd_set_lifetime_downloaded_bytes,
             cmd_is_autostart_enabled,
             cmd_set_autostart,
             cmd_change_download_destination,

@@ -7,6 +7,7 @@ import {
 } from '../services/tauriService';
 import { updateService, UpdateStatus } from '../services/updateService';
 import { cleanVersion, formatVersion, compareSemver } from '../utils/version';
+import { getLatestCodebaseVersion } from '../data/patchNotes';
 
 const PERSISTED_UPDATE_KEY = 'downex_persisted_update_status';
 
@@ -45,9 +46,11 @@ export const useAppVersionStore = create<AppVersionStore>((set, get) => {
     }
   })();
 
+  const initialCodebaseVer = getLatestCodebaseVersion();
+
   return {
-    currentVersion: '0.0.0',
-    formattedVersion: 'v0.0.0',
+    currentVersion: initialCodebaseVer,
+    formattedVersion: formatVersion(initialCodebaseVer),
     status: updateService.getStatus(),
     isModalOpen: false,
     isToastDismissed: initialDismissed,
@@ -165,6 +168,12 @@ export const useAppVersionStore = create<AppVersionStore>((set, get) => {
               }
             } else {
               localStorage.removeItem(PERSISTED_UPDATE_KEY);
+              updateService.notify({
+                state: 'idle',
+                manifest: null,
+                targetVersion: undefined,
+                errorMessage: undefined,
+              });
             }
           }
         } catch {}
@@ -196,6 +205,9 @@ export const useAppVersionStore = create<AppVersionStore>((set, get) => {
 
     closeModal: () => {
       set({ isModalOpen: false });
+      if (updateService.getStatus().state === 'up-to-date') {
+        updateService.notify({ state: 'idle', isManualCheck: false });
+      }
     },
   };
 });
@@ -218,7 +230,10 @@ updateService.subscribe((status) => {
   });
 
   // Persist update status across refreshes/restarts
-  if ((status.state === 'available' || status.state === 'ready') && status.manifest) {
+  const curVer = useAppVersionStore.getState()?.currentVersion || getLatestCodebaseVersion();
+  const isTargetNewer = Boolean(status.targetVersion && compareSemver(status.targetVersion, curVer) > 0);
+
+  if ((status.state === 'available' || status.state === 'ready') && status.manifest && isTargetNewer) {
     try {
       localStorage.setItem(
         PERSISTED_UPDATE_KEY,
@@ -231,7 +246,7 @@ updateService.subscribe((status) => {
         })
       );
     } catch {}
-  } else if (status.state === 'up-to-date' || status.state === 'idle') {
+  } else if (status.state === 'up-to-date' || status.state === 'idle' || !isTargetNewer) {
     try {
       localStorage.removeItem(PERSISTED_UPDATE_KEY);
     } catch {}

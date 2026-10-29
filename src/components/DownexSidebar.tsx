@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { Download, PlayCircle, ListOrdered, CheckCircle2, Trash2, Settings, Power, Moon, Sun, Plus, ChevronLeft, RefreshCw, Check, Sparkles } from 'lucide-react';
+import { Download, PlayCircle, ListOrdered, CheckCircle2, Trash2, Settings, Power, Moon, Sun, Plus, ChevronLeft, RefreshCw, Check, Sparkles, Activity } from 'lucide-react';
 import { useDownloadStore } from '../stores/downloadStore';
 import { useAppVersionStore } from '../stores/appVersionStore';
 import { quitApp } from '../services/tauriService';
+import { compareSemver } from '../utils/version';
 
 interface DownexSidebarProps {
   darkMode: boolean;
@@ -24,6 +25,7 @@ export const DownexSidebar: React.FC<DownexSidebarProps> = ({ darkMode, setDarkM
   const setNewModalOpen = useDownloadStore((state) => state.setNewModalOpen);
   const items = useDownloadStore((state) => state.items);
   const status = useAppVersionStore((state) => state.status);
+  const currentVersion = useAppVersionStore((state) => state.currentVersion);
   const formattedVersion = useAppVersionStore((state) => state.formattedVersion);
   const checkForUpdates = useAppVersionStore((state) => state.checkForUpdates);
   const openModal = useAppVersionStore((state) => state.openModal);
@@ -66,6 +68,7 @@ export const DownexSidebar: React.FC<DownexSidebarProps> = ({ darkMode, setDarkM
     { id: 'active', label: 'Active', icon: PlayCircle, count: activeCount, highlight: activeCount > 0 },
     { id: 'queues', label: 'Queues', icon: ListOrdered, count: queuedCount, highlight: isQueueRunning && queuedCount > 0 },
     { id: 'completed', label: 'Completed', icon: CheckCircle2, count: completedCount },
+    { id: 'telemetry', label: 'Telemetry', icon: Activity },
     { id: 'add_url', label: 'Add URL', icon: Plus, isAction: true },
     { id: 'settings', label: 'Settings', icon: Settings },
     { id: 'trash', label: 'Trash', icon: Trash2, count: trashCount },
@@ -199,7 +202,7 @@ export const DownexSidebar: React.FC<DownexSidebarProps> = ({ darkMode, setDarkM
             <RefreshCw className="w-4 h-4 animate-spin text-zinc-500 shrink-0" />
             {!isCollapsed && <span className="truncate">Checking...</span>}
           </div>
-        ) : status.state === 'available' && status.manifest ? (
+        ) : status.state === 'available' && status.manifest && status.targetVersion && compareSemver(status.targetVersion, currentVersion) > 0 ? (
           <button
             type="button"
             onClick={openModal}
@@ -220,7 +223,7 @@ export const DownexSidebar: React.FC<DownexSidebarProps> = ({ darkMode, setDarkM
               <span className="absolute top-1 right-1 w-2 h-2 rounded-full bg-violet-600 animate-ping" />
             )}
           </button>
-        ) : status.state === 'ready' ? (
+        ) : status.state === 'ready' && status.targetVersion && compareSemver(status.targetVersion, currentVersion) > 0 ? (
           <button
             type="button"
             onClick={openModal}
@@ -244,7 +247,10 @@ export const DownexSidebar: React.FC<DownexSidebarProps> = ({ darkMode, setDarkM
         ) : status.state === 'up-to-date' ? (
           <button
             type="button"
-            onClick={() => checkForUpdates(false)}
+            onClick={async () => {
+              openModal();
+              await checkForUpdates(false);
+            }}
             title={`Downex is up to date (${formattedVersion}). Click to check again.`}
             className={`flex items-center rounded-lg text-xs text-emerald-600 dark:text-emerald-400 bg-emerald-50/50 dark:bg-emerald-950/20 border border-emerald-200/50 dark:border-emerald-800/40 hover:bg-emerald-100/60 dark:hover:bg-emerald-900/30 cursor-pointer transition-colors ${
               isCollapsed ? 'w-10 h-10 justify-center' : 'justify-between px-3 py-2'
@@ -263,7 +269,10 @@ export const DownexSidebar: React.FC<DownexSidebarProps> = ({ darkMode, setDarkM
         ) : (
           <button
             type="button"
-            onClick={() => checkForUpdates(false)}
+            onClick={async () => {
+              openModal();
+              await checkForUpdates(false);
+            }}
             title={`Check for Updates (${formattedVersion})`}
             className={`flex items-center rounded-lg text-xs text-zinc-600 dark:text-zinc-400 hover:bg-zinc-200/60 dark:hover:bg-zinc-800/50 hover:text-zinc-900 dark:hover:text-zinc-100 cursor-pointer transition-colors ${
               isCollapsed ? 'w-10 h-10 justify-center' : 'justify-between px-3 py-2'

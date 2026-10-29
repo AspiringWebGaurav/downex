@@ -130,6 +130,17 @@ pub fn cmd_get_max_segments(state: State<'_, AppState>) -> Result<u32, String> {
 }
 
 #[tauri::command]
+pub fn cmd_get_lifetime_downloaded_bytes(state: State<'_, AppState>) -> Result<u64, String> {
+    state.db.get_lifetime_downloaded_bytes().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn cmd_set_lifetime_downloaded_bytes(bytes: u64, state: State<'_, AppState>) -> Result<u64, String> {
+    state.db.set_lifetime_downloaded_bytes(bytes).map_err(|e| e.to_string())?;
+    Ok(bytes)
+}
+
+#[tauri::command]
 pub fn cmd_is_autostart_enabled(state: State<'_, AppState>) -> Result<bool, String> {
     if let Ok(Some(val)) = state.db.get_setting("autostart_enabled") {
         return Ok(val == "true");

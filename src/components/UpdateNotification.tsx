@@ -1,10 +1,11 @@
 import React, { useState } from 'react';
 import { useAppVersionStore } from '../stores/appVersionStore';
 import { Download, RefreshCw, X, AlertCircle, CheckCircle2 } from 'lucide-react';
-import { formatVersion } from '../utils/version';
+import { formatVersion, compareSemver } from '../utils/version';
 
 export const UpdateNotification: React.FC = () => {
   const status = useAppVersionStore((state) => state.status);
+  const currentVersion = useAppVersionStore((state) => state.currentVersion);
   const isToastDismissed = useAppVersionStore((state) => state.isToastDismissed);
   const dismissToast = useAppVersionStore((state) => state.dismissToast);
   const downloadUpdate = useAppVersionStore((state) => state.downloadUpdate);
@@ -15,13 +16,19 @@ export const UpdateNotification: React.FC = () => {
 
   // GPN / Enterprise Rule: If same version (idle / up-to-date) -> NO SHOW!
   // Only show when next version is available, downloading, verifying, ready, or error.
+  const hasLegitUpdate =
+    Boolean(status.targetVersion) &&
+    Boolean(status.manifest) &&
+    compareSemver(status.targetVersion!, currentVersion) > 0;
+
   const isRealActive =
     !isToastDismissed &&
     status.state !== 'idle' &&
     status.state !== 'checking' &&
     status.state !== 'up-to-date' &&
     status.state !== 'installing' &&
-    status.state !== 'restarting';
+    status.state !== 'restarting' &&
+    (status.state === 'available' || status.state === 'ready' ? hasLegitUpdate : true);
 
   if (!isRealActive) {
     return null;

@@ -29,6 +29,20 @@ export function parseNotesToHighlights(rawText?: string): string[] {
     .filter((line) => line.length > 0 && !line.toLowerCase().startsWith('v0.') && !line.toLowerCase().startsWith('version '));
 }
 
+export function getLatestCodebaseVersion(): string {
+  const versions = Object.keys(BASELINE_PATCH_NOTES).sort((a, b) => {
+    const parse = (v: string) => v.split('.').map((n) => parseInt(n, 10) || 0);
+    const p1 = parse(a);
+    const p2 = parse(b);
+    for (let i = 0; i < Math.max(p1.length, p2.length); i++) {
+      const diff = (p2[i] ?? 0) - (p1[i] ?? 0);
+      if (diff !== 0) return diff;
+    }
+    return 0;
+  });
+  return versions[0] || '0.0.0';
+}
+
 export const BASELINE_PATCH_NOTES: Record<string, DynamicPatchNotes> = {
   '0.0.16': {
     version: '0.0.16',
