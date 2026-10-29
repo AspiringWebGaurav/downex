@@ -44,6 +44,19 @@ export function getLatestCodebaseVersion(): string {
 }
 
 export const BASELINE_PATCH_NOTES: Record<string, DynamicPatchNotes> = {
+  '0.0.17': {
+    version: '0.0.17',
+    releaseDate: 'October 29, 2026',
+    title: 'Destructive Recovery Confirmation Guards, Dedicated Telemetry & Lifetime Data Transfer Tracking',
+    highlights: [
+      'Destructive Action Modal Guards: Added RecoveryActionModal with mandatory explicit acknowledgment checkboxes before executing Process Repair, Reset to Base (0.0.0), or Windows Uninstaller',
+      'Dedicated Telemetry & Hardware Sensors: Added "View All" in Settings and sidebar navigation opening full-screen TelemetryView with high-res throughput graphs',
+      'Accurate Lifetime Data Transfer Sensor: 4th telemetry sensor tracking total downloaded data till now with persistent SQLite WAL storage and debounced 10s memory buffering to prevent disk wear',
+      'Bulletproof Up-to-Date Lifecycle: Replaced false update triggers with dynamic semantic version comparison, displaying an "Up to date" green checkmark and "OK" confirmation when on latest',
+      'Terms & Governance Navigation: Added Terms & Privacy footer strip linking to official legal documents with smooth scrolling and autofocus',
+    ],
+    rawNotes: 'v0.0.17: Recovery modal guards, dedicated telemetry dashboard, and lifetime data transfer sensor',
+  },
   '0.0.16': {
     version: '0.0.16',
     releaseDate: 'October 29, 2026',
