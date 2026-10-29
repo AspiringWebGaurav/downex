@@ -30,6 +30,19 @@ export function parseNotesToHighlights(rawText?: string): string[] {
 }
 
 export const BASELINE_PATCH_NOTES: Record<string, DynamicPatchNotes> = {
+  '0.0.13': {
+    version: '0.0.13',
+    releaseDate: 'October 29, 2026',
+    title: 'Instant Bulletproof Restart & Complete Elimination of Modal Hang',
+    highlights: [
+      'Permanently wiped the restarting modal and secondary window to eliminate all blank white window occurrences',
+      'Instant 600ms visual handoff: clicking Restart & Apply immediately spawns the detached supervisor and exits cleanly',
+      'Watchdog supervisor handles complete binary placement with automatic UAC elevation fallback if permissions are restricted',
+      'Automated startup cleanup deletes legacy .old, .tmp, and .part files to keep the installation directory completely fresh',
+      'Preserved permanent immutable Base 0.0.0 installer and companion extension assets',
+    ],
+    rawNotes: 'v0.0.13: Permanent elimination of restarting window/modal hang, instant handoff supervisor, automated legacy cleanup, and bulletproof OTA pipeline',
+  },
   '0.0.12': {
     version: '0.0.12',
     releaseDate: 'October 29, 2026',

@@ -887,61 +887,7 @@ export function onCheckUpdatesFromTray(callback: () => void): () => void {
   };
 }
 
-export async function showRestartingWindow(
-  targetVersion?: string,
-  stagingPath?: string
-): Promise<void> {
-  if (!isTauri) return;
-  try {
-    await invoke('cmd_show_restarting_window', {
-      targetVersion: targetVersion || null,
-      stagingPath: stagingPath || null,
-    });
-  } catch (e) {
-    console.warn('Failed to show restarting window:', e);
-  }
-}
 
-export async function getRestartingPayload(): Promise<{ target_version?: string; staging_path?: string } | null> {
-  if (!isTauri) return null;
-  try {
-    return await invoke<{ target_version?: string; staging_path?: string } | null>('cmd_get_restarting_payload');
-  } catch {
-    return null;
-  }
-}
-
-export function onOpenRestartingModal(
-  callback: (payload: { target_version?: string; staging_path?: string }) => void
-): () => void {
-  if (!isTauri) return () => {};
-  let isCancelled = false;
-  let unlistenFn: (() => void) | null = null;
-
-  listen<{ target_version?: string; staging_path?: string }>('open-restarting-modal', (event) => {
-    if (!isCancelled && event.payload) {
-      callback(event.payload);
-    }
-  })
-    .then((fn) => {
-      if (isCancelled) {
-        fn();
-      } else {
-        unlistenFn = fn;
-      }
-    })
-    .catch((err) => {
-      console.error('[Downex] Error listening to open-restarting-modal:', err);
-    });
-
-  return () => {
-    isCancelled = true;
-    if (unlistenFn) {
-      unlistenFn();
-      unlistenFn = null;
-    }
-  };
-}
 
 export interface DbPatchNoteRecord {
   version: string;

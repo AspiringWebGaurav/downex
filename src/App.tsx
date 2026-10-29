@@ -10,7 +10,6 @@ import { useAppVersionStore } from './stores/appVersionStore';
 import { UpdateModal } from './components/UpdateModal';
 import { UpdateNotification } from './components/UpdateNotification';
 import { PatchNotesModal } from './components/PatchNotesModal';
-import { RestartingModal } from './components/RestartingModal';
 import { SettingsView } from './components/SettingsView';
 import { onOpenNewDownloadModal, showDownloadDialog, onNavigate, onCheckUpdatesFromTray, notifyDomReady } from './services/tauriService';
 import './App.css';
@@ -188,7 +187,6 @@ export const App: React.FC = () => {
       <UpdateModal />
       <UpdateNotification />
       <PatchNotesModal />
-      <RestartingModal />
     </div>
   );
 };

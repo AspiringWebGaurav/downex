@@ -300,8 +300,6 @@ pub fn run() {
             cmd_close_download_complete,
             cmd_get_download_complete_payload,
             cmd_notify_dom_ready,
-            cmd_show_restarting_window,
-            cmd_get_restarting_payload,
             cmd_get_patch_notes,
             cmd_save_patch_note,
             cmd_delete_patch_note,

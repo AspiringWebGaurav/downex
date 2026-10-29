@@ -22,7 +22,6 @@ import {
   setTrayIcon,
   verifyUpdateSignature,
   pauseDownload,
-  showRestartingWindow,
 } from './tauriService';
 import { unpackOtaPayload } from './otaContainer';
 import { ReleaseManifest } from '../types/download';
@@ -594,8 +593,7 @@ class UpdateService {
         errorMessage: undefined,
       });
 
-      // Show dedicated restarting window immediately and pass targetVersion & stagedBinaryPath
-      await showRestartingWindow(targetVersion, this.stagedBinaryPath || undefined);
+
 
       // Save post-update celebration marker with release notes
       try {
@@ -625,10 +623,8 @@ class UpdateService {
         }
       } catch {}
 
-      // Intentional calibrated pacing: hold restarting state for 7.0 seconds (user requested dedicated UX)
-      // Gives the user visual feedback ("Please wait, apps and services restarting...")
-      // and gives OS, SQLite WAL, and single-instance sockets time to cleanly flush and disconnect
-      await new Promise((resolve) => setTimeout(resolve, 7000));
+      // Brief calibrated pacing (600ms) for smooth visual feedback before native supervisor handoff
+      await new Promise((resolve) => setTimeout(resolve, 600));
 
       await applyInProcessUpdate({
         stagingPath: this.stagedBinaryPath,

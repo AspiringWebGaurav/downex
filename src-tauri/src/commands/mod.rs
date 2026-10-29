@@ -557,11 +557,6 @@ pub fn cmd_apply_in_process_update(
 
         let effective_staging_path = staging_path.clone()
             .or_else(|| {
-                LAST_RESTARTING_PAYLOAD.lock().ok()
-                    .and_then(|g| g.as_ref().and_then(|val| val.get("staging_path").and_then(|p| p.as_str().map(|s| s.to_string()))))
-                    .filter(|s| !s.is_empty())
-            })
-            .or_else(|| {
                 // Fallback: look in temp directory for any staged Downex binary
                 let temp_dir = std::env::temp_dir().join("com.downex.manager");
                 if let Ok(entries) = std::fs::read_dir(&temp_dir) {
@@ -1236,60 +1231,6 @@ pub fn cmd_close_download_complete(app: AppHandle) -> Result<(), String> {
         let _ = window.hide();
     }
     Ok(())
-}
-
-static LAST_RESTARTING_PAYLOAD: Mutex<Option<serde_json::Value>> = Mutex::new(None);
-
-pub fn show_restarting_window(
-    app: &AppHandle,
-    target_version: Option<String>,
-    staging_path: Option<String>,
-) {
-    let clean_ver = target_version.clone().unwrap_or_else(|| "latest".to_string());
-    let payload = serde_json::json!({
-        "target_version": clean_ver,
-        "staging_path": staging_path.clone().unwrap_or_default(),
-    });
-
-    if let Ok(mut lock) = LAST_RESTARTING_PAYLOAD.lock() {
-        *lock = Some(payload.clone());
-    }
-
-    // Keep main application window visible, focused and active — do NOT hide it!
-    if let Some(main_win) = app.get_webview_window("main") {
-        let _ = main_win.show();
-        let _ = main_win.unminimize();
-        let _ = main_win.set_focus();
-    }
-    // Clean up any child dialogs so main window has complete focus
-    if let Some(dlg) = app.get_webview_window("download_dialog") {
-        let _ = dlg.hide();
-    }
-    if let Some(dlg) = app.get_webview_window("download_complete") {
-        let _ = dlg.hide();
-    }
-    // Safely close standalone restarting window if open from earlier
-    if let Some(window) = app.get_webview_window("restarting") {
-        let _ = window.close();
-    }
-
-    // Emit event directly to main window so the smooth in-window RestartingModal displays immediately
-    let _ = app.emit("open-restarting-modal", &payload);
-}
-
-#[tauri::command]
-pub fn cmd_show_restarting_window(
-    app: AppHandle,
-    target_version: Option<String>,
-    staging_path: Option<String>,
-) -> Result<(), String> {
-    show_restarting_window(&app, target_version, staging_path);
-    Ok(())
-}
-
-#[tauri::command]
-pub fn cmd_get_restarting_payload() -> Option<serde_json::Value> {
-    LAST_RESTARTING_PAYLOAD.lock().ok().and_then(|g| g.clone())
 }
 
 #[tauri::command]
