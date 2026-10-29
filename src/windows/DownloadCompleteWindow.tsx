@@ -250,7 +250,7 @@ export const DownloadCompleteWindow: React.FC = () => {
         {isLoading && !payload ? (
           <div className="flex-1 flex flex-col items-center justify-center gap-2 py-8 text-zinc-400">
             <div className="w-6 h-6 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin" />
-            <span className="font-mono text-xs">Loading download information...</span>
+            <span className="font-mono text-xs">Loading download details</span>
           </div>
         ) : !payload ? (
           <div className="flex-1 flex flex-col items-center justify-center gap-3 py-6 text-center">
@@ -288,16 +288,20 @@ export const DownloadCompleteWindow: React.FC = () => {
                 </span>
               </div>
 
-              <div className="min-w-0 flex-1">
-                <h2 className="font-bold text-sm tracking-tight text-zinc-900 dark:text-zinc-100 flex items-center gap-2">
-                  <span>Download complete</span>
-                  <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 font-semibold border border-emerald-500/20 shrink-0">
+              <div className="min-w-0 flex-1 space-y-1">
+                <div className="flex items-center justify-between gap-3">
+                  <h2 className="font-bold text-sm tracking-tight text-zinc-900 dark:text-zinc-100 truncate" title={payload?.filename}>
+                    {payload?.filename || 'Download Complete'}
+                  </h2>
+                  <span className="text-[10px] font-mono px-2.5 py-0.5 rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 font-semibold border border-emerald-500/20 shrink-0">
                     100% Complete
                   </span>
-                </h2>
-                <p className="font-mono text-xs text-zinc-600 dark:text-zinc-400 mt-0.5 font-medium truncate" title={payload?.filename}>
-                  {payload?.filename ? `${payload.filename} • ` : ''}Downloaded {formattedSize} ({exactBytes} Bytes)
-                </p>
+                </div>
+                <div className="flex items-center gap-2 text-xs font-mono text-zinc-600 dark:text-zinc-400">
+                  <span className="font-semibold text-zinc-900 dark:text-zinc-100">Downloaded {formattedSize}</span>
+                  <span className="text-zinc-300 dark:text-zinc-700">•</span>
+                  <span>{exactBytes} Bytes</span>
+                </div>
               </div>
             </div>
 
@@ -349,7 +353,7 @@ export const DownloadCompleteWindow: React.FC = () => {
               />
             </div>
 
-            {/* Action Buttons Row (Open, Open with..., Open folder, Close) */}
+            {/* Action Buttons Row (Open, Open With, Open folder, Close) */}
             <div className="grid grid-cols-4 gap-2 pt-1">
               <Button
                 variant="primary-emerald"
@@ -376,7 +380,7 @@ export const DownloadCompleteWindow: React.FC = () => {
                     handleClose();
                   }
                 }}
-                title="Choose program to open with..."
+                title="Choose program to open with"
               >
                 Open with...
               </Button>

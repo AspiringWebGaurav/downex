@@ -123,7 +123,7 @@ const MOCK_SCENARIOS: Record<string, MockScenario> = {
   probing: {
     id: 'probing',
     name: 'Probing State',
-    badge: 'Detecting Size...',
+    badge: 'Detecting Size',
     url: 'https://cloud-cdn.download/heavy-asset-payload.zip',
     filename: 'heavy-asset-payload.zip',
     total_bytes: 0,
@@ -435,16 +435,7 @@ export const DownloadDialogWindow: React.FC = () => {
     setTimeout(() => setCopiedUrl(false), 1500);
   };
 
-  // Format hostname for origin row
-  let originHost = '';
-  try {
-    if (url) {
-      const parsed = new URL(url);
-      originHost = parsed.hostname + (parsed.pathname.length > 28 ? parsed.pathname.substring(0, 28) + '...' : parsed.pathname);
-    }
-  } catch {
-    originHost = url.substring(0, 40) + '...';
-  }
+  const originHost = url || '';
 
   const isLowSpace = totalBytes && freeSpaceBytes && freeSpaceBytes < totalBytes;
 
@@ -469,7 +460,7 @@ export const DownloadDialogWindow: React.FC = () => {
                 <span className="absolute inline-flex h-full w-full rounded-full bg-emerald-400/80 animate-ping pointer-events-none" />
                 <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-emerald-500 shadow-[0_0_4px_rgba(16,185,129,0.8)]" />
               </span>
-              <span>Checking file size...</span>
+              <span>Checking file size</span>
             </span>
           )}
         </div>
@@ -571,7 +562,7 @@ export const DownloadDialogWindow: React.FC = () => {
                 type="text"
                 value={savePath}
                 onChange={(e) => setSavePath(e.target.value)}
-                placeholder="Destination folder path..."
+                placeholder="Destination folder path"
                 className="w-full px-3 py-2 pl-9 rounded-lg bg-zinc-50/80 dark:bg-zinc-950/60 border border-zinc-200 dark:border-zinc-800 text-xs font-mono text-zinc-800 dark:text-zinc-200 focus:outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/15 focus:bg-white dark:focus:bg-zinc-950 transition-all"
               />
               <Folder className="w-3.5 h-3.5 text-zinc-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
@@ -581,7 +572,7 @@ export const DownloadDialogWindow: React.FC = () => {
               variant="secondary"
               size="md"
               onClick={handleBrowseFolder}
-              title="Browse folder..."
+              title="Browse folder"
             >
               Browse…
             </Button>
@@ -668,7 +659,7 @@ export const DownloadDialogWindow: React.FC = () => {
             size="md"
             icon={<Download className="w-3.5 h-3.5 stroke-[2.5]" />}
             loading={submitting}
-            loadingText="Starting download..."
+            loadingText="Starting download"
             disabled={!url.trim()}
             onClick={() => handleStartDownload(true)}
           >
