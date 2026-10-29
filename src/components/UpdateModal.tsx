@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { Button } from './ui/Button';
 import {
   X,
   Download,
@@ -325,81 +326,72 @@ export const UpdateModal: React.FC = () => {
               )}
             </div>
 
-            <div className="flex items-center gap-2.5">
+            <div className="flex items-center gap-2">
               {isUpToDate ? (
-                <button
+                <Button
                   type="button"
+                  variant="primary"
+                  size="md"
                   onClick={closeModal}
-                  className="px-4 py-2 rounded-sm text-xs font-mono font-bold uppercase tracking-wider bg-zinc-900 dark:bg-zinc-100 text-white dark:text-zinc-900 hover:opacity-90 transition-all cursor-pointer shadow-xs"
                 >
                   OK
-                </button>
+                </Button>
               ) : isReady ? (
                 <>
-                  <button
+                  <Button
                     type="button"
-                    onClick={closeModal}
+                    variant="ghost"
+                    size="md"
                     disabled={isInstalling || isLoading}
-                    className="px-3.5 py-1.5 rounded-lg text-xs font-medium text-zinc-600 dark:text-zinc-400 hover:bg-zinc-200/60 dark:hover:bg-zinc-800 transition-colors cursor-pointer"
+                    onClick={closeModal}
                   >
                     Restart Later
-                  </button>
-                  <button
+                  </Button>
+                  <Button
                     type="button"
+                    variant="primary-emerald"
+                    size="md"
+                    icon={<RefreshCw className="w-3.5 h-3.5" />}
+                    loading={isInstalling || isLoading}
+                    loadingText="Restarting..."
                     onClick={handleRestart}
-                    disabled={isInstalling || isLoading}
-                    className="px-4 py-2 rounded-sm font-mono text-xs font-bold uppercase tracking-wider bg-emerald-600 hover:bg-emerald-700 active:scale-[0.98] text-white flex items-center gap-1.5 shadow-sm transition-all cursor-pointer"
                   >
-                    {isInstalling || isLoading ? (
-                      <>
-                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                        <span>Restarting...</span>
-                      </>
-                    ) : (
-                      <>
-                        <RefreshCw className="w-3.5 h-3.5" />
-                        <span>Restart & Apply Now</span>
-                      </>
-                    )}
-                  </button>
+                    Restart & Apply Now
+                  </Button>
                 </>
               ) : isAvailable ? (
                 <>
-                  <button
+                  <Button
                     type="button"
-                    onClick={closeModal}
+                    variant="ghost"
+                    size="md"
                     disabled={isDownloading || isInstalling || isLoading}
-                    className="px-3.5 py-1.5 rounded-lg text-xs font-medium text-zinc-600 dark:text-zinc-400 hover:bg-zinc-200/60 dark:hover:bg-zinc-800 transition-colors cursor-pointer"
+                    onClick={closeModal}
                   >
                     Later
-                  </button>
-                  <button
+                  </Button>
+                  <Button
                     type="button"
-                    onClick={handleDownloadAndInstall}
+                    variant="primary-emerald"
+                    size="md"
+                    icon={<Download className="w-3.5 h-3.5 stroke-[2.5]" />}
+                    loading={isDownloading || isLoading}
+                    loadingText="Updating..."
                     disabled={isDownloading || isInstalling || isLoading}
-                    className="px-4 py-2 rounded-sm font-mono text-xs font-bold uppercase tracking-wider bg-emerald-600 hover:bg-emerald-700 active:scale-[0.98] text-white flex items-center gap-1.5 shadow-sm transition-all cursor-pointer disabled:opacity-50"
+                    onClick={handleDownloadAndInstall}
                   >
-                    {isDownloading || isLoading ? (
-                      <>
-                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                        <span>Updating...</span>
-                      </>
-                    ) : (
-                      <>
-                        <Download className="w-3.5 h-3.5 stroke-[2.5]" />
-                        <span>Download & Install Now</span>
-                      </>
-                    )}
-                  </button>
+                    Download & Install Now
+                  </Button>
                 </>
               ) : (
-                <button
+                <Button
                   type="button"
+                  variant="outline"
+                  size="md"
                   onClick={closeModal}
-                  className="px-4 py-2 rounded-sm text-xs font-mono font-medium text-zinc-600 dark:text-zinc-400 hover:bg-zinc-200/60 dark:hover:bg-zinc-800 transition-colors cursor-pointer"
                 >
                   Close
-                </button>
+                </Button>
               )}
             </div>
           </div>

@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { Button } from './ui/Button';
 import { 
   X, 
   Download, 
@@ -413,14 +414,15 @@ export const NewDownloadModal: React.FC<{ isStandalone?: boolean }> = ({ isStand
               />
               <Folder className="w-3.5 h-3.5 text-zinc-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
             </div>
-            <button
+            <Button
               type="button"
+              variant="secondary"
+              size="md"
               onClick={handleBrowseFolder}
               title="Browse folder..."
-              className="px-3 py-2 rounded-lg text-xs font-semibold bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200/80 dark:hover:bg-zinc-700 text-zinc-700 dark:text-zinc-200 border border-zinc-200/80 dark:border-zinc-700/80 transition-colors shadow-xs shrink-0 cursor-pointer"
             >
               Browse…
-            </button>
+            </Button>
           </div>
         </div>
 
@@ -460,34 +462,39 @@ export const NewDownloadModal: React.FC<{ isStandalone?: boolean }> = ({ isStand
         </label>
 
         <div className="flex items-center gap-2">
-          <button
+          <Button
             type="button"
+            variant="ghost"
+            size="md"
             onClick={handleCloseModal}
-            className="px-3.5 py-1.5 rounded-lg text-xs font-medium text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 hover:bg-zinc-200/60 dark:hover:bg-zinc-800 transition-colors cursor-pointer"
           >
             Cancel
-          </button>
+          </Button>
 
-          <button
+          <Button
             type="button"
-            disabled={submitting || !url.trim()}
+            variant="secondary"
+            size="md"
+            icon={<Clock className="w-3.5 h-3.5" />}
+            disabled={!url.trim()}
             onClick={() => handleCreateDownload(false)}
             title="Add to queue in paused state"
-            className="px-3.5 py-1.5 rounded-lg text-xs font-semibold bg-zinc-100 hover:bg-zinc-200/80 dark:bg-zinc-800 dark:hover:bg-zinc-700 text-zinc-700 dark:text-zinc-200 border border-zinc-200/80 dark:border-zinc-700/80 transition-all flex items-center gap-1.5 shadow-xs cursor-pointer disabled:opacity-40"
           >
-            <Clock className="w-3.5 h-3.5 text-zinc-500 dark:text-zinc-400" />
-            <span>Later</span>
-          </button>
+            Later
+          </Button>
 
-          <button
+          <Button
             type="button"
-            disabled={submitting || !url.trim()}
+            variant="primary-emerald"
+            size="md"
+            icon={<Download className="w-3.5 h-3.5 stroke-[2.5]" />}
+            loading={submitting}
+            loadingText="Connecting..."
+            disabled={!url.trim()}
             onClick={() => handleCreateDownload(true)}
-            className="px-4.5 py-1.5 rounded-lg text-xs font-semibold bg-emerald-600 hover:bg-emerald-500 active:bg-emerald-700 text-white shadow-xs transition-all flex items-center gap-1.5 cursor-pointer disabled:opacity-40"
           >
-            <Download className="w-3.5 h-3.5 stroke-[2.5]" />
-            <span>{submitting ? 'Connecting...' : 'Start Download'}</span>
-          </button>
+            Start Download
+          </Button>
         </div>
       </div>
     </div>

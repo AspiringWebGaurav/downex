@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { Button } from './ui/Button';
 import { Settings, Eye, HardDrive, Cpu, ShieldCheck, FolderOpen, Check, Link2, Zap, Minimize2, Power, ChevronRight, FileText, Wrench, RotateCcw, Trash2, ShieldAlert, Loader2, Shield, ExternalLink, ArrowUpRight } from 'lucide-react';
 import { useDownloadStore } from '../stores/downloadStore';
 import { TelemetryWidget } from './TelemetryWidget';
@@ -396,15 +397,16 @@ export const SettingsView: React.FC<SettingsViewProps> = () => {
               </p>
             </div>
 
-            <button
+            <Button
               type="button"
               id="view-patch-notes-btn"
+              variant="outline"
+              size="md"
+              iconRight={<ChevronRight className="w-3.5 h-3.5" />}
               onClick={() => setActiveSubView('patch-notes')}
-              className="px-3.5 py-1.5 rounded-lg border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-zinc-800 dark:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-700 text-xs font-semibold flex items-center gap-1.5 cursor-pointer shadow-xs transition-all shrink-0"
             >
-              <span>View Patch Notes</span>
-              <ChevronRight className="w-3.5 h-3.5" />
-            </button>
+              View Patch Notes
+            </Button>
           </div>
 
           {/* Option 5: Default Download Directory (IDM Lifecycle Pattern) */}
@@ -423,8 +425,10 @@ export const SettingsView: React.FC<SettingsViewProps> = () => {
               </div>
 
               <div className="flex items-center gap-2">
-                <button
+                <Button
                   type="button"
+                  variant="outline"
+                  size="sm"
                   onClick={async () => {
                     try {
                       const res = await setDefaultDownloadDir('');
@@ -436,18 +440,18 @@ export const SettingsView: React.FC<SettingsViewProps> = () => {
                       console.warn(e);
                     }
                   }}
-                  className="px-2.5 py-1.5 rounded-lg border border-zinc-200 dark:border-zinc-800 text-[11px] font-mono text-zinc-500 dark:text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors cursor-pointer"
                 >
                   Reset
-                </button>
-                <button
+                </Button>
+                <Button
                   type="button"
+                  variant="primary"
+                  size="md"
+                  icon={<FolderOpen className="w-3.5 h-3.5" />}
                   onClick={handlePickFolder}
-                  className="px-3.5 py-1.5 rounded-lg bg-zinc-900 text-white dark:bg-white dark:text-zinc-900 text-xs font-medium hover:opacity-90 flex items-center gap-1.5 cursor-pointer shadow-xs transition-all"
                 >
-                  <FolderOpen className="w-3.5 h-3.5" />
-                  <span>Browse Folder...</span>
-                </button>
+                  Browse Folder...
+                </Button>
               </div>
             </div>
 
@@ -510,15 +514,19 @@ export const SettingsView: React.FC<SettingsViewProps> = () => {
                 </div>
               </div>
 
-              <button
+              <Button
                 type="button"
+                variant="primary-emerald"
+                size="lg"
+                className="w-40 shrink-0"
+                icon={<Wrench className="w-3.5 h-3.5" />}
+                loading={isRepairing}
+                loadingText="Repairing..."
+                disabled={isResettingBase}
                 onClick={() => setPendingAction('repair')}
-                disabled={isRepairing || isResettingBase}
-                className="w-44 h-9 rounded-sm bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white font-mono text-xs font-bold uppercase tracking-wider flex items-center justify-center gap-2 cursor-pointer shadow-xs transition-all shrink-0 disabled:opacity-50 disabled:cursor-not-allowed active:scale-[0.98]"
               >
-                {isRepairing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Wrench className="w-3.5 h-3.5" />}
-                <span>{isRepairing ? 'REPAIRING...' : 'RUN REPAIR'}</span>
-              </button>
+                Run Repair
+              </Button>
             </div>
 
             {/* Action 2: Reset to Base (0.0.0 Foundation) */}
@@ -540,15 +548,19 @@ export const SettingsView: React.FC<SettingsViewProps> = () => {
                 </div>
               </div>
 
-              <button
+              <Button
                 type="button"
+                variant="warning"
+                size="lg"
+                className="w-40 shrink-0"
+                icon={<RotateCcw className="w-3.5 h-3.5" />}
+                loading={isResettingBase}
+                loadingText="Reverting..."
+                disabled={isRepairing}
                 onClick={() => setPendingAction('reset-base')}
-                disabled={isRepairing || isResettingBase}
-                className="w-44 h-9 rounded-sm bg-amber-600 hover:bg-amber-700 active:bg-amber-800 text-white font-mono text-xs font-bold uppercase tracking-wider flex items-center justify-center gap-2 cursor-pointer shadow-xs transition-all shrink-0 disabled:opacity-50 disabled:cursor-not-allowed active:scale-[0.98]"
               >
-                {isResettingBase ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RotateCcw className="w-3.5 h-3.5" />}
-                <span>{isResettingBase ? 'REVERTING...' : 'RESET TO BASE'}</span>
-              </button>
+                Reset to Base
+              </Button>
             </div>
 
             {/* Action 3: Native Windows Uninstaller */}
@@ -570,15 +582,18 @@ export const SettingsView: React.FC<SettingsViewProps> = () => {
                 </div>
               </div>
 
-              <button
+              <Button
                 type="button"
+                variant="destructive"
+                size="lg"
+                className="w-40 shrink-0"
+                icon={<Trash2 className="w-3.5 h-3.5" />}
+                loading={isUninstalling}
+                loadingText="Launching..."
                 onClick={() => setPendingAction('uninstall')}
-                disabled={isUninstalling}
-                className="w-44 h-9 rounded-sm bg-rose-600 hover:bg-rose-700 active:bg-rose-800 text-white font-mono text-xs font-bold uppercase tracking-wider flex items-center justify-center gap-2 cursor-pointer shadow-xs transition-all shrink-0 disabled:opacity-50 disabled:cursor-not-allowed active:scale-[0.98]"
               >
-                {isUninstalling ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
-                <span>{isUninstalling ? 'LAUNCHING...' : 'UNINSTALL'}</span>
-              </button>
+                Uninstall
+              </Button>
             </div>
 
             {/* Action 4: Stop Background Engine & Exit (Guarded) */}
@@ -600,14 +615,16 @@ export const SettingsView: React.FC<SettingsViewProps> = () => {
                 </div>
               </div>
 
-              <button
+              <Button
                 type="button"
+                variant="neutral-dark"
+                size="lg"
+                className="w-40 shrink-0"
+                icon={<Power className="w-3.5 h-3.5" />}
                 onClick={() => setPendingAction('stop-engine')}
-                className="w-44 h-9 rounded-sm bg-zinc-700 hover:bg-zinc-800 active:bg-zinc-900 dark:bg-zinc-700 dark:hover:bg-zinc-600 text-white font-mono text-xs font-bold uppercase tracking-wider flex items-center justify-center gap-2 cursor-pointer shadow-xs transition-all shrink-0 active:scale-[0.98]"
               >
-                <Power className="w-3.5 h-3.5" />
-                <span>STOP ENGINE</span>
-              </button>
+                Stop Engine
+              </Button>
             </div>
           </div>
         </div>

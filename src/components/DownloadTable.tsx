@@ -1,4 +1,5 @@
 import React, { useState, useRef } from 'react';
+import { Button } from './ui/Button';
 import { Play, Pause, Trash2, File, AlertCircle, FolderEdit, ListOrdered, ChevronDown, ChevronUp, ShieldCheck, FolderOpen, ExternalLink } from 'lucide-react';
 import { useDownloadStore } from '../stores/downloadStore';
 import { openFolderPicker, openFile, openFileFolder, showDownloadCompleteDialog } from '../services/tauriService';
@@ -140,22 +141,24 @@ export const DownloadTable: React.FC = () => {
 
       <div className="flex items-center gap-2">
         {isQueueRunning ? (
-          <button
+          <Button
+            variant="warning"
+            size="sm"
+            icon={<Pause className="w-3.5 h-3.5 fill-current" />}
             onClick={pauseQueue}
-            className="px-3.5 py-1.5 rounded-lg text-xs font-semibold bg-amber-500/10 hover:bg-amber-500/20 text-amber-700 dark:text-amber-300 border border-amber-500/30 flex items-center gap-1.5 cursor-pointer transition-all active:scale-95"
           >
-            <Pause className="w-3.5 h-3.5 fill-current" />
-            <span>Pause Queue</span>
-          </button>
+            Pause Queue
+          </Button>
         ) : (
-          <button
-            onClick={startQueue}
+          <Button
+            variant="primary-emerald"
+            size="sm"
+            icon={<Play className="w-3.5 h-3.5 fill-current" />}
             disabled={queuedItems.length === 0 && activeItems.length === 0}
-            className="px-4 py-1.5 rounded-lg text-xs font-semibold bg-emerald-600 hover:bg-emerald-700 text-white shadow-xs flex items-center gap-1.5 cursor-pointer transition-all disabled:opacity-40 disabled:cursor-not-allowed active:scale-95"
+            onClick={startQueue}
           >
-            <Play className="w-3.5 h-3.5 fill-current" />
-            <span>Start Queue (1 by 1)</span>
-          </button>
+            Start Queue (1 by 1)
+          </Button>
         )}
       </div>
     </div>

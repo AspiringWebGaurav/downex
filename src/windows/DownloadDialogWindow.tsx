@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useCallback } from 'react';
+import { Button } from '../components/ui/Button';
 import { 
   X, 
   Download, 
@@ -10,7 +11,13 @@ import {
   Layers, 
   FileBox, 
   CheckCircle2,
-  AlertCircle
+  AlertCircle,
+  Sun,
+  Moon,
+  RotateCcw,
+  Sparkles,
+  ArrowRight,
+  Monitor
 } from 'lucide-react';
 import { 
   addDownload, 
@@ -23,7 +30,8 @@ import {
   getDownloadDialogPayload,
   restoreManagerWindow,
   getClipboardText,
-  DownloadInfoModalPayload
+  DownloadInfoModalPayload,
+  isTauri
 } from '../services/tauriService';
 
 function formatBytes(bytes?: number): string {
@@ -50,6 +58,80 @@ function splitFilenameAndExt(fullName: string): { base: string; ext: string } {
   return { base: clean, ext: '' };
 }
 
+interface MockScenario {
+  id: string;
+  name: string;
+  badge: string;
+  url: string;
+  filename: string;
+  total_bytes: number;
+  supports_ranges: boolean;
+  freeSpaceBytes: number;
+}
+
+const MOCK_SCENARIOS: Record<string, MockScenario> = {
+  iso: {
+    id: 'iso',
+    name: 'Ubuntu 24.04 ISO',
+    badge: '5.72 GB • 8 Conns',
+    url: 'https://releases.ubuntu.com/24.04/ubuntu-24.04-desktop-amd64.iso',
+    filename: 'ubuntu-24.04-desktop-amd64.iso',
+    total_bytes: 6144000000,
+    supports_ranges: true,
+    freeSpaceBytes: 184.5 * 1024 * 1024 * 1024,
+  },
+  setup: {
+    id: 'setup',
+    name: 'VS Code Setup',
+    badge: '94.2 MB • Executable',
+    url: 'https://code.visualstudio.com/sha/download?build=stable&os=win32-x64-user',
+    filename: 'VSCodeUserSetup-x64-1.95.1.exe',
+    total_bytes: 98779136,
+    supports_ranges: true,
+    freeSpaceBytes: 184.5 * 1024 * 1024 * 1024,
+  },
+  video: {
+    id: 'video',
+    name: '4K Nature Video',
+    badge: '1.85 GB • MP4',
+    url: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4',
+    filename: 'BigBuckBunny-4K-60fps.mp4',
+    total_bytes: 1985000000,
+    supports_ranges: true,
+    freeSpaceBytes: 184.5 * 1024 * 1024 * 1024,
+  },
+  norange: {
+    id: 'norange',
+    name: 'Single Stream',
+    badge: '432 MB • No Resume',
+    url: 'https://live-archive.org/download/stream_backup_daily.tar',
+    filename: 'stream_backup_daily.tar',
+    total_bytes: 432537600,
+    supports_ranges: false,
+    freeSpaceBytes: 184.5 * 1024 * 1024 * 1024,
+  },
+  lowspace: {
+    id: 'lowspace',
+    name: 'Low Disk Warning',
+    badge: '1.1 GB Free Space',
+    url: 'https://releases.ubuntu.com/24.04/ubuntu-24.04-desktop-amd64.iso',
+    filename: 'ubuntu-24.04-desktop-amd64.iso',
+    total_bytes: 6144000000,
+    supports_ranges: true,
+    freeSpaceBytes: 1181116006, // 1.1 GB free space < 5.72 GB total!
+  },
+  probing: {
+    id: 'probing',
+    name: 'Probing State',
+    badge: 'Detecting Size...',
+    url: 'https://cloud-cdn.download/heavy-asset-payload.zip',
+    filename: 'heavy-asset-payload.zip',
+    total_bytes: 0,
+    supports_ranges: true,
+    freeSpaceBytes: 184.5 * 1024 * 1024 * 1024,
+  },
+};
+
 export const DownloadDialogWindow: React.FC = () => {
   const [url, setUrl] = useState('');
   const [fileBaseName, setFileBaseName] = useState('');
@@ -64,6 +146,24 @@ export const DownloadDialogWindow: React.FC = () => {
   const [copiedUrl, setCopiedUrl] = useState(false);
   const [incomingHeaders, setIncomingHeaders] = useState<Record<string, string> | undefined>();
   const [isCloseHovered, setIsCloseHovered] = useState(false);
+
+  // Browser sandbox state
+  const [activeScenarioId, setActiveScenarioId] = useState<string>('iso');
+  const [isDarkTheme, setIsDarkTheme] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('downex_theme') !== 'light';
+    } catch {
+      return true;
+    }
+  });
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
+
+  const showToast = useCallback((msg: string) => {
+    setToastMessage(msg);
+    setTimeout(() => {
+      setToastMessage((current) => (current === msg ? null : current));
+    }, 3200);
+  }, []);
 
   // Cleanly reset hover state on window blur, focus, or visibility changes
   useEffect(() => {
@@ -80,15 +180,16 @@ export const DownloadDialogWindow: React.FC = () => {
     };
   }, []);
 
-  // Sync theme immediately and show window gracefully
+  // Sync theme immediately
   useEffect(() => {
-    const isDark = localStorage.getItem('downex_theme') === 'dark';
-    if (isDark) {
+    if (isDarkTheme) {
       document.documentElement.classList.add('dark');
+      localStorage.setItem('downex_theme', 'dark');
     } else {
       document.documentElement.classList.remove('dark');
+      localStorage.setItem('downex_theme', 'light');
     }
-  }, []);
+  }, [isDarkTheme]);
 
   // Update free disk space whenever savePath changes
   useEffect(() => {
@@ -97,6 +198,10 @@ export const DownloadDialogWindow: React.FC = () => {
     getDiskFreeSpace(savePath)
       .then((bytes) => {
         if (!cancelled && bytes > 0) {
+          // If in lowspace scenario in browser preview, preserve mock low space
+          if (!isTauri && activeScenarioId === 'lowspace') {
+            return;
+          }
           setFreeSpaceBytes(bytes);
         }
       })
@@ -104,7 +209,7 @@ export const DownloadDialogWindow: React.FC = () => {
     return () => {
       cancelled = true;
     };
-  }, [savePath]);
+  }, [savePath, activeScenarioId]);
 
   // Load default download directory on mount
   useEffect(() => {
@@ -131,6 +236,7 @@ export const DownloadDialogWindow: React.FC = () => {
       setTotalBytes(payload.total_bytes);
       setIsProbing(false);
     } else {
+      setTotalBytes(undefined);
       setIsProbing(true);
     }
     if (payload.supports_ranges !== undefined) {
@@ -144,10 +250,29 @@ export const DownloadDialogWindow: React.FC = () => {
     setIncomingHeaders(Object.keys(headers).length > 0 ? headers : undefined);
   }, [applyFilename]);
 
+  const applyScenario = useCallback((scenarioKey: string) => {
+    const sc = MOCK_SCENARIOS[scenarioKey];
+    if (!sc) return;
+    setActiveScenarioId(sc.id);
+    setUrl(sc.url);
+    applyFilename(sc.filename);
+    setTotalBytes(sc.total_bytes > 0 ? sc.total_bytes : undefined);
+    setIsProbing(sc.total_bytes === 0);
+    setSupportsRanges(sc.supports_ranges);
+    setFreeSpaceBytes(sc.freeSpaceBytes);
+  }, [applyFilename]);
+
   // Listen for payload from Tauri backend + check initial cached payload
   useEffect(() => {
     getDownloadDialogPayload().then((cached) => {
-      if (cached) applyPayload(cached);
+      if (cached) {
+        applyPayload(cached);
+      } else if (!isTauri) {
+        // Auto-load default rich mock scenario in browser mode!
+        const urlParams = new URLSearchParams(window.location.search);
+        const requestedScenario = urlParams.get('scenario') || 'iso';
+        applyScenario(requestedScenario in MOCK_SCENARIOS ? requestedScenario : 'iso');
+      }
     });
 
     const unlisten = onOpenDownloadInfoModal((payload: DownloadInfoModalPayload) => {
@@ -157,7 +282,7 @@ export const DownloadDialogWindow: React.FC = () => {
     return () => {
       unlisten();
     };
-  }, [applyPayload]);
+  }, [applyPayload, applyScenario]);
 
   const handlePasteClipboard = useCallback(async () => {
     try {
@@ -168,9 +293,26 @@ export const DownloadDialogWindow: React.FC = () => {
         const guess = trimmed.split('?')[0].split('/').pop() || 'download.bin';
         applyFilename(guess);
         probeServer(trimmed);
+        showToast('Pasted URL from clipboard');
+      } else if (!isTauri) {
+        const sample = 'https://releases.ubuntu.com/24.04/ubuntu-24.04-desktop-amd64.iso';
+        setUrl(sample);
+        applyFilename('ubuntu-24.04-desktop-amd64.iso');
+        setTotalBytes(6144000000);
+        setSupportsRanges(true);
+        showToast('Sample URL loaded');
       }
-    } catch {}
-  }, [applyFilename]);
+    } catch {
+      if (!isTauri) {
+        const sample = 'https://releases.ubuntu.com/24.04/ubuntu-24.04-desktop-amd64.iso';
+        setUrl(sample);
+        applyFilename('ubuntu-24.04-desktop-amd64.iso');
+        setTotalBytes(6144000000);
+        setSupportsRanges(true);
+        showToast('Sample URL loaded');
+      }
+    }
+  }, [applyFilename, showToast]);
 
   const probeServer = async (targetUrl: string) => {
     setIsProbing(true);
@@ -197,6 +339,12 @@ export const DownloadDialogWindow: React.FC = () => {
       const selected = await openFolderPicker();
       if (selected) {
         setSavePath(selected);
+      } else if (!isTauri) {
+        // Browser quick folder choices
+        const choices = ['C:\Users\User\Downloads', 'D:\Downloads\ISOs', 'E:\Media\Videos', 'C:\Software\Packages'];
+        const nextChoice = choices[(choices.indexOf(savePath) + 1) % choices.length] || choices[0];
+        setSavePath(nextChoice);
+        showToast(`Selected mock folder: ${nextChoice}`);
       }
     } catch (e) {
       console.warn('Folder picker error:', e);
@@ -208,7 +356,21 @@ export const DownloadDialogWindow: React.FC = () => {
     if (document.activeElement instanceof HTMLElement) {
       document.activeElement.blur();
     }
+    if (!isTauri) {
+      showToast('✕ Dialog closed (Simulated)');
+      return;
+    }
     await closeDownloadDialog();
+  };
+
+  const handleClearForm = () => {
+    setUrl('');
+    setFileBaseName('');
+    setFileExtension('');
+    setTotalBytes(undefined);
+    setIsProbing(false);
+    setActiveScenarioId('');
+    showToast('Form cleared (Empty state)');
   };
 
   const handleStartDownload = async (startImmediately: boolean) => {
@@ -227,13 +389,22 @@ export const DownloadDialogWindow: React.FC = () => {
         fullFilename
       );
 
+      if (!isTauri) {
+        showToast(startImmediately ? '🚀 Download started! Added to queue.' : '⏸️ Saved to queue in paused state.');
+        return;
+      }
+
       // Close dialog window immediately
       await closeDownloadDialog();
 
       // Bring Downex main downloader window to front and show downloading list!
       await restoreManagerWindow();
     } catch (err) {
-      alert('Failed to initiate download: ' + err);
+      if (!isTauri) {
+        showToast('🚀 Download simulated in browser mode');
+      } else {
+        alert('Failed to initiate download: ' + err);
+      }
     } finally {
       setSubmitting(false);
     }
@@ -246,7 +417,6 @@ export const DownloadDialogWindow: React.FC = () => {
         e.preventDefault();
         handleClose();
       } else if (e.key === 'Enter' && !e.shiftKey && !e.ctrlKey) {
-        // Trigger download on Enter
         e.preventDefault();
         handleStartDownload(true);
       }
@@ -261,6 +431,7 @@ export const DownloadDialogWindow: React.FC = () => {
       console.warn('Clipboard write notice:', err);
     });
     setCopiedUrl(true);
+    showToast('Copied URL to clipboard');
     setTimeout(() => setCopiedUrl(false), 1500);
   };
 
@@ -269,7 +440,7 @@ export const DownloadDialogWindow: React.FC = () => {
   try {
     if (url) {
       const parsed = new URL(url);
-      originHost = parsed.hostname + (parsed.pathname.length > 25 ? parsed.pathname.substring(0, 25) + '...' : parsed.pathname);
+      originHost = parsed.hostname + (parsed.pathname.length > 28 ? parsed.pathname.substring(0, 28) + '...' : parsed.pathname);
     }
   } catch {
     originHost = url.substring(0, 40) + '...';
@@ -277,8 +448,9 @@ export const DownloadDialogWindow: React.FC = () => {
 
   const isLowSpace = totalBytes && freeSpaceBytes && freeSpaceBytes < totalBytes;
 
-  return (
-    <div className="w-screen h-screen flex flex-col bg-white dark:bg-zinc-900 text-zinc-900 dark:text-zinc-100 font-sans select-none overflow-hidden">
+  // The Dialog Window Component
+  const DialogContent = (
+    <div className="w-full flex flex-col bg-white dark:bg-zinc-900 text-zinc-900 dark:text-zinc-100 font-sans select-none overflow-hidden">
       {/* Frameless Drag Title Bar */}
       <div 
         data-tauri-drag-region
@@ -317,7 +489,7 @@ export const DownloadDialogWindow: React.FC = () => {
       </div>
 
       {/* Main Form Body */}
-      <div className="p-4.5 flex-1 flex flex-col justify-between gap-3 overflow-hidden">
+      <div className="p-4.5 flex-1 flex flex-col justify-between gap-3 overflow-y-auto">
         {/* Row 1: Prominent Editable File Name */}
         <div>
           <div className="flex items-center justify-between mb-1.5">
@@ -389,6 +561,7 @@ export const DownloadDialogWindow: React.FC = () => {
               }`}>
                 <HardDrive className="w-3 h-3" />
                 <span>{formatBytes(freeSpaceBytes)} free space</span>
+                {isLowSpace && <span className="text-[10px] bg-rose-500/10 text-rose-500 px-1 rounded ml-1 font-sans">Low Space</span>}
               </span>
             )}
           </div>
@@ -403,14 +576,15 @@ export const DownloadDialogWindow: React.FC = () => {
               />
               <Folder className="w-3.5 h-3.5 text-zinc-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
             </div>
-            <button
+            <Button
               type="button"
+              variant="secondary"
+              size="md"
               onClick={handleBrowseFolder}
               title="Browse folder..."
-              className="px-3 py-2 rounded-lg text-xs font-semibold bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200/80 dark:hover:bg-zinc-700 text-zinc-700 dark:text-zinc-200 border border-zinc-200/80 dark:border-zinc-700/80 transition-colors shadow-xs shrink-0 cursor-pointer"
             >
               Browse…
-            </button>
+            </Button>
           </div>
         </div>
 
@@ -428,7 +602,7 @@ export const DownloadDialogWindow: React.FC = () => {
                   className="text-[11px] font-medium text-emerald-600 dark:text-emerald-400 hover:underline transition-colors flex items-center gap-1 cursor-pointer"
                 >
                   <Copy className="w-3 h-3" />
-                  <span>Paste from Clipboard</span>
+                  <span>Paste URL</span>
                 </button>
               )}
               {url && (
@@ -465,38 +639,152 @@ export const DownloadDialogWindow: React.FC = () => {
 
         <div className="flex items-center gap-2">
           {/* Cancel Button */}
-          <button
+          <Button
             type="button"
+            variant="ghost"
+            size="md"
             onClick={handleClose}
-            className="px-3.5 py-1.5 rounded-lg text-xs font-medium text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 hover:bg-zinc-200/60 dark:hover:bg-zinc-800 transition-colors cursor-pointer"
           >
             Cancel
-          </button>
+          </Button>
 
           {/* Download Later Button (Paused Queue) */}
-          <button
+          <Button
             type="button"
-            disabled={submitting || !url.trim()}
+            variant="secondary"
+            size="md"
+            icon={<Clock className="w-3.5 h-3.5" />}
+            disabled={!url.trim()}
             onClick={() => handleStartDownload(false)}
             title="Add to queue in paused state"
-            className="px-3.5 py-1.5 rounded-lg text-xs font-semibold bg-zinc-100 hover:bg-zinc-200/80 dark:bg-zinc-800 dark:hover:bg-zinc-700 text-zinc-700 dark:text-zinc-200 border border-zinc-200/80 dark:border-zinc-700/80 transition-all flex items-center gap-1.5 shadow-xs cursor-pointer disabled:opacity-40"
           >
-            <Clock className="w-3.5 h-3.5 text-zinc-500 dark:text-zinc-400" />
-            <span>Later</span>
-          </button>
+            Later
+          </Button>
 
           {/* Start Download Button (Primary Emerald) */}
-          <button
+          <Button
             type="button"
-            disabled={submitting || !url.trim()}
+            variant="primary-emerald"
+            size="md"
+            icon={<Download className="w-3.5 h-3.5 stroke-[2.5]" />}
+            loading={submitting}
+            loadingText="Connecting..."
+            disabled={!url.trim()}
             onClick={() => handleStartDownload(true)}
-            className="px-4.5 py-1.5 rounded-lg text-xs font-semibold bg-emerald-600 hover:bg-emerald-500 active:bg-emerald-700 text-white shadow-xs transition-all flex items-center gap-1.5 cursor-pointer disabled:opacity-40"
           >
-            <Download className="w-3.5 h-3.5 stroke-[2.5]" />
-            <span>{submitting ? 'Connecting...' : 'Start Download'}</span>
-          </button>
+            Start Download
+          </Button>
         </div>
       </div>
+    </div>
+  );
+
+  // If running natively in Tauri desktop, render pure frameless window directly
+  if (isTauri) {
+    return (
+      <div className="w-screen h-screen flex flex-col bg-white dark:bg-zinc-900 text-zinc-900 dark:text-zinc-100 font-sans select-none overflow-hidden">
+        {DialogContent}
+      </div>
+    );
+  }
+
+  // If running in browser preview mode, wrap inside interactive desktop preview stage
+  return (
+    <div className="min-h-screen w-full bg-gradient-to-br from-zinc-900 via-zinc-950 to-black text-zinc-100 flex flex-col items-center justify-center p-4 sm:p-6 relative font-sans selection:bg-emerald-500 selection:text-white">
+      {/* Floating Dev Sandbox Navigation Bar */}
+      <div className="w-[520px] max-w-full mb-3 px-3 py-2 rounded-xl bg-zinc-900/90 border border-zinc-800/90 backdrop-blur-md flex flex-wrap items-center justify-between gap-2 shadow-xl ring-1 ring-white/5">
+        <div className="flex items-center gap-2">
+          <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+          <span className="text-xs font-semibold tracking-tight text-zinc-200">
+            Download Dialog Sandbox
+          </span>
+        </div>
+
+        <div className="flex items-center gap-1.5 text-xs">
+          {/* Theme Toggle */}
+          <button
+            type="button"
+            onClick={() => setIsDarkTheme(!isDarkTheme)}
+            className="p-1.5 rounded-lg text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800 transition-colors cursor-pointer"
+            title={isDarkTheme ? 'Switch to Light Theme' : 'Switch to Dark Theme'}
+          >
+            {isDarkTheme ? <Sun className="w-3.5 h-3.5" /> : <Moon className="w-3.5 h-3.5" />}
+          </button>
+
+          {/* Reset / Clear */}
+          <button
+            type="button"
+            onClick={handleClearForm}
+            className="p-1.5 rounded-lg text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800 transition-colors cursor-pointer"
+            title="Clear Form / Test Blank State"
+          >
+            <RotateCcw className="w-3.5 h-3.5" />
+          </button>
+
+          {/* Link to Download Complete Modal */}
+          <a
+            href="/?window=download_complete"
+            className="px-2 py-1 rounded-lg text-[11px] font-medium text-zinc-300 hover:text-white hover:bg-zinc-800 transition-colors flex items-center gap-1 cursor-pointer"
+            title="Inspect Download Complete Window"
+          >
+            <span>Complete Modal</span>
+            <ArrowRight className="w-3 h-3" />
+          </a>
+
+          {/* Link to Full Main App */}
+          <a
+            href="/"
+            className="px-2 py-1 rounded-lg text-[11px] font-medium text-emerald-400 hover:text-emerald-300 hover:bg-emerald-950/50 border border-emerald-900/60 transition-colors flex items-center gap-1 cursor-pointer"
+            title="Go to Main Downex Dashboard"
+          >
+            <Monitor className="w-3 h-3" />
+            <span>App</span>
+          </a>
+        </div>
+      </div>
+
+      {/* Scenario Pills Selector */}
+      <div className="w-[520px] max-w-full mb-3 flex items-center gap-1.5 overflow-x-auto pb-1 text-xs select-none scrollbar-none">
+        <span className="text-[11px] font-semibold text-zinc-400 shrink-0 mr-1">
+          Preset:
+        </span>
+        {Object.entries(MOCK_SCENARIOS).map(([key, sc]) => {
+          const isActive = activeScenarioId === key;
+          return (
+            <button
+              key={key}
+              type="button"
+              onClick={() => applyScenario(key)}
+              className={`px-2.5 py-1 rounded-lg text-[11px] font-medium transition-all whitespace-nowrap cursor-pointer shrink-0 border ${
+                isActive
+                  ? 'bg-emerald-600 text-white border-emerald-500 shadow-xs'
+                  : 'bg-zinc-900/80 hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200 border-zinc-800'
+              }`}
+            >
+              {sc.name}
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Realistic Windows 11 Desktop Window Wrapper */}
+      <div className="w-[520px] max-w-full rounded-xl shadow-2xl border border-zinc-300/80 dark:border-zinc-800 bg-white dark:bg-zinc-900 overflow-hidden ring-1 ring-black/5 dark:ring-white/10 transition-all">
+        {DialogContent}
+      </div>
+
+      {/* Dimension Label */}
+      <div className="w-[520px] max-w-full mt-2.5 px-2 flex items-center justify-between text-[11px] text-zinc-500 font-mono">
+        <span>Native Dialog Size: 520 × 340 px</span>
+        <span>Press <kbd className="px-1 py-0.5 rounded bg-zinc-800 text-zinc-300 border border-zinc-700 text-[10px]">Enter</kbd> to Start • <kbd className="px-1 py-0.5 rounded bg-zinc-800 text-zinc-300 border border-zinc-700 text-[10px]">Esc</kbd> to Cancel</span>
+      </div>
+
+      {/* Interactive Feedback Toast */}
+      {toastMessage && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 px-4 py-2 rounded-xl bg-zinc-900 text-white border border-zinc-700 shadow-2xl flex items-center gap-2 text-xs font-medium z-50 animate-in fade-in slide-in-from-bottom-2 duration-150">
+          <Sparkles className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+          <span>{toastMessage}</span>
+        </div>
+      )}
     </div>
   );
 };

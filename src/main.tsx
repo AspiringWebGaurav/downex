@@ -15,8 +15,24 @@ function getInitialWindowLabel(): string {
     const current = getCurrentWebviewWindow();
     if (current && current.label) return current.label;
   } catch {}
-  if (window.location.search.includes('window=download_dialog')) return 'download_dialog';
-  if (window.location.search.includes('window=download_complete')) return 'download_complete';
+  const search = window.location.search;
+  const path = window.location.pathname;
+  if (
+    search.includes('window=download_dialog') ||
+    search.includes('modal=download') ||
+    search.includes('view=dialog') ||
+    path.includes('/download-dialog')
+  ) {
+    return 'download_dialog';
+  }
+  if (
+    search.includes('window=download_complete') ||
+    search.includes('modal=complete') ||
+    search.includes('view=complete') ||
+    path.includes('/download-complete')
+  ) {
+    return 'download_complete';
+  }
   return 'main';
 }
 
@@ -34,11 +50,26 @@ function Root() {
     }
   }, []);
 
-  if (windowLabel === 'download_dialog' || window.location.search.includes('window=download_dialog')) {
+  const search = window.location.search;
+  const path = window.location.pathname;
+
+  if (
+    windowLabel === 'download_dialog' ||
+    search.includes('window=download_dialog') ||
+    search.includes('modal=download') ||
+    search.includes('view=dialog') ||
+    path.includes('/download-dialog')
+  ) {
     return <DownloadDialogWindow />;
   }
 
-  if (windowLabel === 'download_complete' || window.location.search.includes('window=download_complete')) {
+  if (
+    windowLabel === 'download_complete' ||
+    search.includes('window=download_complete') ||
+    search.includes('modal=complete') ||
+    search.includes('view=complete') ||
+    path.includes('/download-complete')
+  ) {
     return <DownloadCompleteWindow />;
   }
 

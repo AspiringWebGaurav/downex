@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { Button } from './components/ui/Button';
 import { Search, Plus, ShieldAlert, X } from 'lucide-react';
 import { DownexWindowHeader } from './components/DownexWindowHeader';
 import { DownexSidebar } from './components/DownexSidebar';
@@ -187,13 +188,14 @@ export const App: React.FC = () => {
                 </div>
 
                 {/* New Download Action Button */}
-                <button
+                <Button
+                  variant="primary"
+                  size="md"
+                  icon={<Plus className="w-4 h-4 stroke-[2.5]" />}
                   onClick={() => showDownloadDialog()}
-                  className="px-3.5 py-1.5 rounded-lg bg-zinc-900 text-white dark:bg-white dark:text-zinc-900 font-semibold text-xs flex items-center gap-1.5 shadow-xs hover:opacity-90 active:scale-[0.98] transition-all cursor-pointer"
                 >
-                  <Plus className="w-4 h-4 stroke-[2.5]" />
-                  <span>New Download</span>
-                </button>
+                  New Download
+                </Button>
               </div>
 
               {/* Active Downloads List */}

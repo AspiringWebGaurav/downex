@@ -56,8 +56,8 @@ export const RecoveryActionModal: React.FC<RecoveryActionModalProps> = ({
         'Preserves all active downloads and configuration settings',
       ],
       checkboxLabel: 'I understand that Downex will terminate background processes and restart immediately.',
-      confirmButtonText: 'YES, RUN REPAIR',
-      confirmButtonLoading: 'REPAIRING...',
+      confirmButtonText: 'Run Repair',
+      confirmButtonLoading: 'Repairing...',
       confirmButtonClass: 'bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white',
     },
     'reset-base': {
@@ -77,7 +77,7 @@ export const RecoveryActionModal: React.FC<RecoveryActionModalProps> = ({
       ],
       checkboxLabel: 'I acknowledge that this action will revert Downex to version 0.0.0 and restart the application.',
       confirmButtonText: 'YES, RESET TO BASE (v0.0.0)',
-      confirmButtonLoading: 'REVERTING...',
+      confirmButtonLoading: 'Reverting...',
       confirmButtonClass: 'bg-amber-600 hover:bg-amber-700 active:bg-amber-800 text-white',
     },
     uninstall: {
@@ -97,7 +97,7 @@ export const RecoveryActionModal: React.FC<RecoveryActionModalProps> = ({
       ],
       checkboxLabel: 'I confirm that I want to exit Downex and permanently remove the application from Windows.',
       confirmButtonText: 'YES, UNINSTALL DOWNEX',
-      confirmButtonLoading: 'LAUNCHING...',
+      confirmButtonLoading: 'Launching...',
       confirmButtonClass: 'bg-rose-600 hover:bg-rose-700 active:bg-rose-800 text-white',
     },
     'stop-engine': {
@@ -116,8 +116,8 @@ export const RecoveryActionModal: React.FC<RecoveryActionModalProps> = ({
         'Completely terminates the application process until you open it again',
       ],
       checkboxLabel: 'I understand that Downex will stop grabbing browser links and exit completely.',
-      confirmButtonText: 'YES, STOP & EXIT',
-      confirmButtonLoading: 'STOPPING...',
+      confirmButtonText: 'Stop & Exit',
+      confirmButtonLoading: 'Stopping...',
       confirmButtonClass: 'bg-zinc-800 hover:bg-zinc-900 dark:bg-zinc-700 dark:hover:bg-zinc-600 text-white',
     },
   }[actionType];
