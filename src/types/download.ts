@@ -26,6 +26,7 @@ export interface DownloadItem {
   error_message?: string | null;
   checksum?: string | null;
   media_type?: string | null;
+  supports_ranges?: boolean;
   created_at: number;
   updated_at: number;
   segments?: SegmentSnapshot[];

@@ -23,6 +23,8 @@ pub async fn probe_url(
     // Request first byte: Range: bytes=0-0 to test Range support directly
     let res = req
         .header(RANGE, "bytes=0-0")
+        .header(reqwest::header::ACCEPT_ENCODING, "identity")
+        .header("Cache-Control", "no-cache")
         .send()
         .await?;
 

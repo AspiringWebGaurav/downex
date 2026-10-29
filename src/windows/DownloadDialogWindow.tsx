@@ -63,6 +63,22 @@ export const DownloadDialogWindow: React.FC = () => {
   const [submitting, setSubmitting] = useState(false);
   const [copiedUrl, setCopiedUrl] = useState(false);
   const [incomingHeaders, setIncomingHeaders] = useState<Record<string, string> | undefined>();
+  const [isCloseHovered, setIsCloseHovered] = useState(false);
+
+  // Cleanly reset hover state on window blur, focus, or visibility changes
+  useEffect(() => {
+    const clearHover = () => setIsCloseHovered(false);
+    window.addEventListener('blur', clearHover);
+    window.addEventListener('focus', clearHover);
+    document.addEventListener('visibilitychange', clearHover);
+    window.addEventListener('mouseleave', clearHover);
+    return () => {
+      window.removeEventListener('blur', clearHover);
+      window.removeEventListener('focus', clearHover);
+      document.removeEventListener('visibilitychange', clearHover);
+      window.removeEventListener('mouseleave', clearHover);
+    };
+  }, []);
 
   // Sync theme immediately and show window gracefully
   useEffect(() => {
@@ -188,6 +204,10 @@ export const DownloadDialogWindow: React.FC = () => {
   };
 
   const handleClose = async () => {
+    setIsCloseHovered(false);
+    if (document.activeElement instanceof HTMLElement) {
+      document.activeElement.blur();
+    }
     await closeDownloadDialog();
   };
 
@@ -283,8 +303,14 @@ export const DownloadDialogWindow: React.FC = () => {
         </div>
         <button
           onClick={handleClose}
+          onMouseEnter={() => setIsCloseHovered(true)}
+          onMouseLeave={() => setIsCloseHovered(false)}
           title="Close (Esc)"
-          className="w-6 h-6 rounded-md flex items-center justify-center text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200 hover:bg-zinc-200/60 dark:hover:bg-zinc-800 transition-colors cursor-pointer"
+          className={`w-6 h-6 rounded-md flex items-center justify-center transition-colors cursor-pointer focus:outline-none ${
+            isCloseHovered
+              ? 'bg-rose-500 text-white dark:bg-rose-600'
+              : 'text-zinc-400 dark:text-zinc-500 bg-transparent'
+          }`}
         >
           <X className="w-3.5 h-3.5" />
         </button>

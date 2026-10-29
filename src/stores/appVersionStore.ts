@@ -131,6 +131,7 @@ export const useAppVersionStore = create<AppVersionStore>((set, get) => {
             localStorage.removeItem('downex_recently_updated');
           }
           localStorage.setItem('downex_last_known_version', cleaned);
+          localStorage.setItem('downex_persisted_version', cleaned);
         } catch {}
 
         // Restore persisted update status across refreshes/restarts

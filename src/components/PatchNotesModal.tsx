@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import { X, Sparkles, CheckCircle2, ArrowRight } from 'lucide-react';
 import { useAppVersionStore } from '../stores/appVersionStore';
 
@@ -6,6 +6,7 @@ export const PatchNotesModal: React.FC = () => {
   const isPatchNotesOpen = useAppVersionStore((state) => state.isPatchNotesOpen);
   const patchNotes = useAppVersionStore((state) => state.patchNotes);
   const closePatchNotes = useAppVersionStore((state) => state.closePatchNotes);
+  const [isCloseHovered, setIsCloseHovered] = useState(false);
 
   useEffect(() => {
     if (!isPatchNotesOpen) return;
@@ -47,8 +48,17 @@ export const PatchNotesModal: React.FC = () => {
         {/* Header Celebration Banner */}
         <div className="relative px-6 pt-6 pb-4 bg-gradient-to-b from-emerald-500/10 via-emerald-500/5 to-transparent border-b border-zinc-100 dark:border-zinc-800/60">
           <button
-            onClick={closePatchNotes}
-            className="absolute top-4 right-4 p-1.5 rounded-lg text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors cursor-pointer"
+            onClick={() => {
+              setIsCloseHovered(false);
+              closePatchNotes();
+            }}
+            onMouseEnter={() => setIsCloseHovered(true)}
+            onMouseLeave={() => setIsCloseHovered(false)}
+            className={`absolute top-4 right-4 p-1.5 rounded-lg transition-colors cursor-pointer focus:outline-none ${
+              isCloseHovered
+                ? 'bg-rose-500 text-white dark:bg-rose-600'
+                : 'text-zinc-400 dark:text-zinc-500 bg-transparent'
+            }`}
             title="Close"
           >
             <X className="w-4 h-4" />

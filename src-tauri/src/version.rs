@@ -246,6 +246,14 @@ pub fn resolve_installed_version<R: tauri::Runtime>(
             }
         }
 
+        // 4. Windows Registry DisplayVersion (OS persistent record)
+        #[cfg(target_os = "windows")]
+        if let Some(reg_ver) = read_registry_installed_version() {
+            if reg_ver != "0.0.0" {
+                candidates.push(reg_ver);
+            }
+        }
+
         // Determine highest semantic version
         let mut resolved = base_version.clone();
         for cand in candidates {

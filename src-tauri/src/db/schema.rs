@@ -70,5 +70,26 @@ pub const MIGRATIONS: &[Migration] = &[
         ALTER TABLE downloads ADD COLUMN media_type TEXT;
         "#,
     },
+    Migration {
+        version: 3,
+        description: "Add supports_ranges column to downloads table",
+        sql: r#"
+        ALTER TABLE downloads ADD COLUMN supports_ranges INTEGER NOT NULL DEFAULT 1;
+        "#,
+    },
+    Migration {
+        version: 4,
+        description: "Add patch_notes table for dynamic release notes persistence",
+        sql: r#"
+        CREATE TABLE IF NOT EXISTS patch_notes (
+            version TEXT PRIMARY KEY,
+            title TEXT NOT NULL,
+            release_date TEXT NOT NULL,
+            highlights_json TEXT NOT NULL,
+            raw_notes TEXT,
+            is_custom INTEGER NOT NULL DEFAULT 0,
+            updated_at INTEGER NOT NULL
+        );
+        "#,
+    },
 ];
-

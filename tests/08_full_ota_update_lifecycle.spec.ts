@@ -488,8 +488,8 @@ test.describe('Downex Base Application — Complete In-Process OTA Update Lifecy
     shouldFail = false;
     await retryBtn.click();
 
-    // Verify update re-checks and allows download to succeed
-    await expect(page.locator('h4:has-text("Update Available")')).toBeVisible({ timeout: 6000 });
+    // Verify update re-attempts and transitions to downloading or ready
+    await expect(page.locator('h4:has-text("Downloading update..."), h4:has-text("Update Ready to Install")')).toBeVisible({ timeout: 8000 });
   });
 
   test('Stage 12: Data & Settings Integrity — User downloads, queues and settings are 100% preserved', async ({ page }) => {

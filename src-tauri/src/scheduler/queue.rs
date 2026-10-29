@@ -116,6 +116,7 @@ impl QueueManager {
             error_message: None,
             checksum: None,
             media_type: None,
+            supports_ranges: probe.supports_ranges,
             created_at: now,
             updated_at: now,
         };
@@ -266,13 +267,15 @@ impl QueueManager {
                 .and_then(|s| s.parse::<u32>().ok())
                 .unwrap_or(32); // Max throughput saturation for 200Mbps+ plans
 
+            let supports_ranges = record.supports_ranges && record.total_bytes.is_some();
+
             let res = pool
                 .execute_download(
                     task_id.clone(),
                     record.url,
                     record.destination_path,
                     record.total_bytes,
-                    true, // Range supported
+                    supports_ranges,
                     headers,
                     max_conns,
                     progress_tx,

@@ -123,8 +123,27 @@ fn main() {
         }
     }
 
-    // 4. Background Startup Mode
-    if is_background {
+    let is_restarted_after_update = args.iter().any(|a| a == "--restarted-after-update");
+    let is_rollback_recovery = args.iter().any(|a| a == "--rollback-recovery");
+    let is_update_handoff = is_restarted_after_update || is_rollback_recovery;
+
+    if is_update_handoff {
+        // We are resuming execution after an in-process OTA update or rollback recovery.
+        // If an old instance is still responding on port 18888, instruct it to stop gracefully.
+        if let Ok(mut stream) = std::net::TcpStream::connect_timeout(
+            &std::net::SocketAddr::from(([127, 0, 0, 1], 18888)),
+            std::time::Duration::from_millis(500),
+        ) {
+            use std::io::{Read, Write};
+            let req = "POST /api/stop HTTP/1.1\r\nHost: 127.0.0.1:18888\r\nConnection: close\r\nContent-Length: 0\r\n\r\n";
+            let _ = stream.write_all(req.as_bytes());
+            let mut resp = String::new();
+            let _ = stream.read_to_string(&mut resp);
+            std::thread::sleep(std::time::Duration::from_millis(300));
+        }
+        // Proceed directly to downex_lib::run() as the newly upgraded authoritative instance!
+    } else if is_background {
+        // 4. Background Startup Mode
         if let Ok(_) = std::net::TcpStream::connect_timeout(
             &std::net::SocketAddr::from(([127, 0, 0, 1], 18888)),
             std::time::Duration::from_millis(500),

@@ -7,14 +7,15 @@
  * (e.g. node scripts/ship.mjs 0.1.0 -m "v0.1.0: Multi-connection engine & Browser Extension")
  * 
  * Process:
+ * 0. Enforces Pre-Flight Smoke Test against permanent immutable base installer on GPHost.
  * 1. Preserves 0.0.0 as the immutable local base version.
  * 2. Temporarily synchronizes version for compilation: package.json, Cargo.toml, tauri.conf.json.
  * 3. Compiles frontend (tsc && vite build) + Native Windows binary (tauri build --no-bundle).
  * 4. Encrypts native executable into AES-256-GCM container: update<version>.downex.bin (Magic: DWNX_OTA).
  * 5. Generates authentic Minisign Ed25519 cryptographic signature (.tauri/downex.key).
- * 6. Streams container directly to Cloudflare R2 on GPHost (folder: downex, noShareLink: true).
- * 7. Identifies and safeguards Base 0.0.0 installer; archives previous OTA release to downex/OLD/.
- * 8. Publishes atomic release manifest to GPHost (POST /api/v1/releases/downex/publish).
+ * 6. Streams container to Cloudflare R2 on GPHost in dedicated folder: downex-dynamic-binaries/releases/v<version>/.
+ * 7. Identifies and safeguards Base 0.0.0 installer; preserves previous OTA release in downex-dynamic-binaries/OLD/v<prev>/.
+ * 8. Publishes atomic release manifest to GPHost with explicit baseFileId (POST /api/v1/releases/downex/publish).
  * 9. Performs pre-flight smoke test against live manifest and binary URL.
  * 10. Reverts repository back to immutable 0.0.0 base version!
  */
@@ -79,11 +80,62 @@ if (!GPHOST_API_KEY) {
 }
 
 const GPHOST_FOLDER = process.env.GPHOST_FOLDER || 'downex-dynamic-binaries';
+const GPHOST_BASE_FOLDER = 'downex-immutable-base';
 const GPHOST_APP_SLUG = process.env.GPHOST_APP_SLUG || 'downex';
+
+/**
+ * STRICT SECURITY AUDIT:
+ * Base 0.0.0 installer and companion files are completely immutable and isolated.
+ * Under NO circumstances may ship.mjs move, archive, patch, or delete any base asset.
+ */
+function isProtectedBaseFile(file) {
+  if (!file) return false;
+  const folder = file.folder || '';
+  const name = (file.filename || file.sanitized_name || '').toLowerCase();
+  const slug = file.slug || '';
+  const id = file.id || '';
+  return (
+    folder.startsWith(GPHOST_BASE_FOLDER) ||
+    folder.includes('immutable') ||
+    folder.includes('base') ||
+    slug === 'downex-desktop' ||
+    slug === 'downex-extension' ||
+    slug === 'downex-app' ||
+    name.includes('setup') ||
+    name.includes('0.0.0') ||
+    name.includes('extension') ||
+    id === '7845eb8f-a4e6-4d7f-bf43-608ca690077e' ||
+    id === '0d4c06a4-285d-4e9b-8712-439ebdffadea' ||
+    id === 'ade9d316-d190-4377-a052-44e10220dc45' ||
+    id === '241b1293-091f-4df8-8afb-04468f6e8e5a' ||
+    id === '12a9d2f5-ab90-41d0-8ed1-9faec4365790' ||
+    id === '3504558c-cc5a-4356-ac95-14a5d5e2be6f'
+  );
+}
 
 console.log('\n===============================================================');
 console.log(`   Downex Download Manager — Shipping OTA Release v${targetVersion}`);
+console.log(`   Storage Separation: OTA in [${GPHOST_FOLDER}] | Base in [${GPHOST_BASE_FOLDER}]`);
 console.log('===============================================================\n');
+
+// 0. Pre-Flight Verification of Permanent Base Application on GPHost
+console.log('[0/8] Enforcing Pre-Flight verification of permanent Base application...');
+try {
+  const baseProbe = await fetch('https://gphost.eu.cc/raw/downex-desktop', {
+    method: 'GET',
+    headers: { 'User-Agent': 'Downex-ReleasePipeline/1.0 (Windows NT 10.0; Win64; x64)', Range: 'bytes=0-1024' },
+  });
+  if (!baseProbe.ok && baseProbe.status !== 206) {
+    throw new Error(`Permanent base application probe returned HTTP ${baseProbe.status}`);
+  }
+  console.log(`  ✓ Permanent Base 0.0.0 installer verified reachable at https://gphost.eu.cc/raw/downex-desktop (HTTP ${baseProbe.status})`);
+} catch (preFlightErr) {
+  console.error('\n🛑 CRITICAL ABORT: Permanent Base 0.0.0 installer is NOT reachable on GPHost!');
+  console.error(`   Endpoint: https://gphost.eu.cc/raw/downex-desktop`);
+  console.error(`   Error: ${preFlightErr.message}`);
+  console.error('   Release pipeline halted immediately to prevent releasing without base foundation.\n');
+  process.exit(1);
+}
 
 const pkgJsonPath = path.join(rootDir, 'package.json');
 const tauriConfPath = path.join(rootDir, 'src-tauri', 'tauri.conf.json');
@@ -111,7 +163,7 @@ function setProjectVersion(ver) {
 
 try {
   // 3. Temporarily Synchronize Version for Target Build
-  console.log('[1/8] Synchronizing build definitions to target v' + targetVersion + '...');
+  console.log('\n[1/8] Synchronizing build definitions to target v' + targetVersion + '...');
   setProjectVersion(targetVersion);
   console.log(`  ✓ Version configured to ${targetVersion} for compilation.`);
 
@@ -204,39 +256,40 @@ try {
     const filesRes = await fetch('https://gphost.eu.cc/api/v1/files', {
       headers: {
         Authorization: `Bearer ${GPHOST_API_KEY}`,
-        'User-Agent': 'curl/8.4.0',
+        'User-Agent': 'Downex-ReleasePipeline/1.0 (Windows NT 10.0; Win64; x64)',
       },
     });
     if (filesRes.ok) {
       const filesData = await filesRes.json();
-      allGPHostFiles = (filesData.files || []).filter(
-        (f) => f.folder === GPHOST_FOLDER || f.folder?.startsWith(GPHOST_FOLDER)
-      );
+      allGPHostFiles = filesData.files || [];
 
-      // Locate immutable base file
+      // Locate immutable base file in isolated GPHOST_BASE_FOLDER or by permanent slug/name
       const baseFile = allGPHostFiles.find(
         (f) =>
-          f.folder === `${GPHOST_FOLDER}/base` ||
-          f.slug === 'downex-base' ||
-          f.slug === 'downex-app' ||
-          f.filename?.includes('base') ||
-          f.filename?.includes('0.0.0') ||
-          f.sanitized_name?.includes('0.0.0')
+          f.slug === 'downex-desktop' ||
+          f.folder?.startsWith(GPHOST_BASE_FOLDER) ||
+          f.id === '7845eb8f-a4e6-4d7f-bf43-608ca690077e' ||
+          (f.filename?.toLowerCase().includes('setup') && f.filename?.includes('0.0.0'))
       );
 
       if (baseFile) {
         baseInstallerFileId = baseFile.id;
-        console.log(`  ✓ Permanent Base 0.0.0 installer safeguarded (ID: ${baseInstallerFileId}, Name: ${baseFile.filename})`);
+        console.log(`  ✓ Permanent Base 0.0.0 installer isolated & safeguarded:`);
+        console.log(`    Folder: ${baseFile.folder} | ID: ${baseInstallerFileId} | Slug: ${baseFile.slug} | Name: ${baseFile.filename}`);
       }
     }
   } catch (e) {
     console.warn('  Notice: Could not list GPHost files:', e.message);
   }
 
+  if (!baseInstallerFileId) {
+    throw new Error('CRITICAL ABORT: Permanent Base 0.0.0 installer was not detected in GPHost file registry. Publication aborted to protect base immutability.');
+  }
+
   // Check previous active release via manifest
   try {
     const latestRes = await fetch(`https://gphost.eu.cc/api/v1/releases/${GPHOST_APP_SLUG}/latest`, {
-      headers: { 'Cache-Control': 'no-cache', 'User-Agent': 'curl/8.4.0' },
+      headers: { 'Cache-Control': 'no-cache', 'User-Agent': 'Downex-ReleasePipeline/1.0 (Windows NT 10.0; Win64; x64)' },
     });
     if (latestRes.ok) {
       const latestData = await latestRes.json();
@@ -250,15 +303,16 @@ try {
     console.warn('  Notice: Could not query previous release:', e.message);
   }
 
-  // 8. Stream Encrypted Container to Cloudflare R2 on GPHost
-  console.log(`\n[7/8] Streaming ${containerFilename} to Cloudflare R2 in ${GPHOST_FOLDER}/...`);
+  // 8. Stream Encrypted Container to Cloudflare R2 in Dedicated Version Folder
+  const targetReleaseFolder = `${GPHOST_FOLDER}/releases/v${targetVersion}`;
+  console.log(`\n[7/8] Streaming ${containerFilename} to Cloudflare R2 in ${targetReleaseFolder}/...`);
   async function uploadToGPHostR2(payloadBytes, filename, folder) {
     const initRes = await fetch('https://gphost.eu.cc/api/v1/upload', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${GPHOST_API_KEY}`,
-        'User-Agent': 'curl/8.4.0',
+        'User-Agent': 'Downex-ReleasePipeline/1.0 (Windows NT 10.0; Win64; x64)',
       },
       body: JSON.stringify({
         filename,
@@ -267,6 +321,7 @@ try {
         folder,
         noShareLink: true,
         isPermanent: true,
+        expiry_preset: 'never',
         overwrite: true,
       }),
     });
@@ -293,7 +348,7 @@ try {
       headers: {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${GPHOST_API_KEY}`,
-        'User-Agent': 'curl/8.4.0',
+        'User-Agent': 'Downex-ReleasePipeline/1.0 (Windows NT 10.0; Win64; x64)',
       },
       body: JSON.stringify({
         fileId,
@@ -310,10 +365,10 @@ try {
     return fileId;
   }
 
-  const uploadedFileId = await uploadToGPHostR2(containerPayload, containerFilename, GPHOST_FOLDER);
+  const uploadedFileId = await uploadToGPHostR2(containerPayload, containerFilename, targetReleaseFolder);
   console.log(`  ✓ Binary streamed and verified successfully! (File ID: ${uploadedFileId})`);
 
-  // Safely archive previous release to OLD/ folder (Never archive base 0.0.0 file)
+  // Safely archive previous active release to OLD/v<previousVersion>/ (Never delete any release)
   if (
     previousActiveFileId &&
     previousActiveFileId !== baseInstallerFileId &&
@@ -321,25 +376,27 @@ try {
     previousVersion !== targetVersion &&
     previousVersion !== '0.0.0'
   ) {
+    const archiveFolder = `${GPHOST_FOLDER}/OLD/v${previousVersion}`;
+    console.log(`  Safely archiving previous active release v${previousVersion} to ${archiveFolder}/...`);
     try {
       const patchRes = await fetch(`https://gphost.eu.cc/api/v1/files/${previousActiveFileId}`, {
         method: 'PATCH',
         headers: {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${GPHOST_API_KEY}`,
-          'User-Agent': 'curl/8.4.0',
+          'User-Agent': 'Downex-ReleasePipeline/1.0 (Windows NT 10.0; Win64; x64)',
         },
-        body: JSON.stringify({ folder: `${GPHOST_FOLDER}/OLD` }),
+        body: JSON.stringify({ folder: archiveFolder }),
       });
       if (patchRes.ok) {
-        console.log(`  ✓ Previous active release v${previousVersion} archived to ${GPHOST_FOLDER}/OLD/`);
+        console.log(`  ✓ Previous active release v${previousVersion} safely preserved in ${archiveFolder}/`);
       }
     } catch (moveErr) {
       console.warn('  Archive notice:', moveErr.message);
     }
   }
 
-  // 9. Publish Atomic Release Manifest on GPHost
+  // 9. Publish Atomic Release Manifest on GPHost with Guaranteed baseFileId
   console.log('\n[8/8] Publishing release manifest to GPHost API...');
   const publishPayload = {
     version: targetVersion,
@@ -352,7 +409,7 @@ try {
     allowOverwrite: true,
     force: true,
     size: containerPayload.length,
-    ...(baseInstallerFileId ? { baseFileId: baseInstallerFileId } : {}),
+    baseFileId: baseInstallerFileId, // Mandatory explicit reference
   };
 
   const publishRes = await fetch(`https://gphost.eu.cc/api/v1/releases/${GPHOST_APP_SLUG}/publish`, {
@@ -360,7 +417,7 @@ try {
     headers: {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${GPHOST_API_KEY}`,
-      'User-Agent': 'curl/8.4.0',
+      'User-Agent': 'Downex-ReleasePipeline/1.0 (Windows NT 10.0; Win64; x64)',
     },
     body: JSON.stringify(publishPayload),
   });
@@ -372,35 +429,41 @@ try {
 
   console.log(`  ✓ Manifest published! Downex v${targetVersion} is now LIVE on GPHost!`);
 
-  // Pre-flight Smoke Test: Probe live manifest & binary HEAD
+  // Pre-flight Smoke Test: Probe live manifest & Cloudflare R2 binary availability
   console.log('  Verifying live release manifest and Cloudflare R2 binary availability...');
   try {
     const probeRes = await fetch(`https://gphost.eu.cc/api/v1/releases/${GPHOST_APP_SLUG}/latest`, {
-      headers: { 'Cache-Control': 'no-cache', 'User-Agent': 'curl/8.4.0' },
+      headers: { 'Cache-Control': 'no-cache', 'User-Agent': 'Downex-ReleasePipeline/1.0 (Windows NT 10.0; Win64; x64)' },
     });
-    if (probeRes.ok) {
-      const liveManifest = await probeRes.json();
-      const downloadUrl = liveManifest.url || liveManifest.platforms?.['windows-x86_64']?.url;
-      if (downloadUrl) {
-        try {
-          const controller = new AbortController();
-          const binProbe = await fetch(downloadUrl, {
-            method: 'GET',
-            headers: { 'User-Agent': 'curl/8.4.0', Range: 'bytes=0-1024' },
-            signal: controller.signal,
-          });
-          controller.abort();
-          if (binProbe.ok || binProbe.status === 206) {
-            console.log(`  ✓ Smoke test passed: Live download operational at ${downloadUrl} (HTTP ${binProbe.status})`);
-          }
-        } catch (probeFetchErr) {
-          if (probeFetchErr.name !== 'AbortError') throw probeFetchErr;
-          console.log(`  ✓ Smoke test passed: Live download reachable at ${downloadUrl}`);
-        }
-      }
+    if (!probeRes.ok) {
+      throw new Error(`Live manifest probe failed: HTTP ${probeRes.status}`);
     }
+    const liveManifest = await probeRes.json();
+    const downloadUrl = liveManifest.url || liveManifest.platforms?.['windows-x86_64']?.url;
+    if (!downloadUrl) {
+      throw new Error('Live manifest is missing windows-x86_64 download URL');
+    }
+
+    console.log(`  Probing binary download URL: ${downloadUrl}`);
+    const binProbe = await fetch(downloadUrl, {
+      method: 'GET',
+      headers: { 'User-Agent': 'Downex-ReleasePipeline/1.0 (Windows NT 10.0; Win64; x64)', Range: 'bytes=0-1024' },
+    });
+
+    if (!binProbe.ok && binProbe.status !== 206) {
+      const probeBody = await binProbe.text();
+      throw new Error(`Live binary download probe returned HTTP ${binProbe.status}: ${probeBody.slice(0, 200)}`);
+    }
+
+    const chunk = Buffer.from(await binProbe.arrayBuffer());
+    const magic = chunk.subarray(0, 8).toString('utf8');
+    if (magic !== 'DWNX_OTA') {
+      throw new Error(`Live binary validation failed: Expected magic DWNX_OTA, received "${magic}"`);
+    }
+    console.log(`  ✓ Smoke test passed: Live download verified operational with DWNX_OTA magic header (HTTP ${binProbe.status})!`);
   } catch (probeErr) {
-    console.warn('  Smoke test notice:', probeErr.message);
+    console.error('  ✗ FATAL SMOKE TEST FAILURE:', probeErr.message);
+    throw probeErr;
   }
 
 } finally {
@@ -412,7 +475,8 @@ try {
 
 console.log('\n===============================================================');
 console.log(` [SUCCESS] OTA Release v${targetVersion} is LIVE on GPHost!`);
-console.log('   - Storage: Cloudflare R2 (downex/)');
+console.log(`   - Storage: Cloudflare R2 (${GPHOST_FOLDER}/releases/v${targetVersion}/)`);
+console.log(`   - Base Foundation: ${GPHOST_BASE_FOLDER}/ (Slug: downex-desktop)`);
 console.log('   - Manifest: https://gphost.eu.cc/api/v1/releases/downex/latest');
 console.log('   - Installed Downex applications will now detect this update!');
 console.log('===============================================================\n');

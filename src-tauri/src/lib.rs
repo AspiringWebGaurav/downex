@@ -1,3 +1,4 @@
+pub mod autostart;
 pub mod bridge;
 pub mod commands;
 pub mod db;
@@ -46,6 +47,9 @@ pub fn run() {
         .pool_max_idle_per_host(64)
         .tcp_nodelay(true)
         .tcp_keepalive(Some(std::time::Duration::from_secs(30)))
+        .no_gzip()
+        .no_brotli()
+        .no_deflate()
         .build()
         .expect("Failed to build HTTP client");
 
@@ -132,6 +136,9 @@ pub fn run() {
             if let Ok(tray) = tray::setup_system_tray(app.handle()) {
                 app.manage(tray);
             }
+
+            // Sync Windows Startup autostart entry with current executable and SQLite setting
+            crate::autostart::sync_autostart_on_boot(&db);
 
             // Ensure main downloader window is displayed and focused on initial launch (unless background boot)
             if let Some(main_win) = app.get_webview_window("main") {
@@ -271,6 +278,8 @@ pub fn run() {
             cmd_set_default_download_dir,
             cmd_set_max_segments,
             cmd_get_max_segments,
+            cmd_is_autostart_enabled,
+            cmd_set_autostart,
             cmd_change_download_destination,
             cmd_open_folder_picker,
             cmd_probe_url,
@@ -291,6 +300,11 @@ pub fn run() {
             cmd_close_download_complete,
             cmd_get_download_complete_payload,
             cmd_notify_dom_ready,
+            cmd_show_restarting_window,
+            cmd_get_restarting_payload,
+            cmd_get_patch_notes,
+            cmd_save_patch_note,
+            cmd_delete_patch_note,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Downex application");

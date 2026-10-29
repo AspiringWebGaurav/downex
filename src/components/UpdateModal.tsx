@@ -11,13 +11,14 @@ export const UpdateModal: React.FC = () => {
   const installAndRestart = useAppVersionStore((state) => state.installAndRestart);
 
   const [isLoading, setIsLoading] = useState(false);
+  const [isCloseHovered, setIsCloseHovered] = useState(false);
 
-  if (!isModalOpen) return null;
+  if (!isModalOpen || status.state === 'restarting') return null;
 
   const targetVersion = status.targetVersion ? `v${status.targetVersion}` : 'New Version';
   const isDownloading = status.state === 'downloading' || status.state === 'verifying';
   const isReady = status.state === 'ready';
-  const isInstalling = status.state === 'installing' || status.state === 'restarting';
+  const isInstalling = status.state === 'installing';
   const percent = status.progress?.percentage || 0;
 
   const handleDownload = async () => {
@@ -52,8 +53,17 @@ export const UpdateModal: React.FC = () => {
             </span>
           </div>
           <button
-            onClick={closeModal}
-            className="w-6 h-6 rounded-md flex items-center justify-center text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200 hover:bg-zinc-200/60 dark:hover:bg-zinc-800 transition-colors cursor-pointer"
+            onClick={() => {
+              setIsCloseHovered(false);
+              closeModal();
+            }}
+            onMouseEnter={() => setIsCloseHovered(true)}
+            onMouseLeave={() => setIsCloseHovered(false)}
+            className={`w-6 h-6 rounded-md flex items-center justify-center transition-colors cursor-pointer focus:outline-none ${
+              isCloseHovered
+                ? 'bg-rose-500 text-white dark:bg-rose-600'
+                : 'text-zinc-400 dark:text-zinc-500 bg-transparent'
+            }`}
             title="Close"
           >
             <X className="w-3.5 h-3.5" />

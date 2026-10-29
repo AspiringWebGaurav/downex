@@ -3,18 +3,27 @@ import ReactDOM from 'react-dom/client';
 import App from './App';
 import { DownloadDialogWindow } from './windows/DownloadDialogWindow';
 import { DownloadCompleteWindow } from './windows/DownloadCompleteWindow';
+import { RestartingWindow } from './windows/RestartingWindow';
 import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
+import './App.css';
+
+function getInitialWindowLabel(): string {
+  try {
+    const internalLabel =
+      (window as any).__TAURI_INTERNALS__?.metadata?.currentWebview?.label ||
+      (window as any).__TAURI_INTERNALS__?.metadata?.currentWindow?.label;
+    if (internalLabel) return internalLabel;
+    const current = getCurrentWebviewWindow();
+    if (current && current.label) return current.label;
+  } catch {}
+  if (window.location.search.includes('window=download_dialog')) return 'download_dialog';
+  if (window.location.search.includes('window=download_complete')) return 'download_complete';
+  if (window.location.search.includes('window=restarting')) return 'restarting';
+  return 'main';
+}
 
 function Root() {
-  const [windowLabel, setWindowLabel] = useState<string>(() => {
-    if (window.location.search.includes('window=download_dialog')) {
-      return 'download_dialog';
-    }
-    if (window.location.search.includes('window=download_complete')) {
-      return 'download_complete';
-    }
-    return 'main';
-  });
+  const [windowLabel, setWindowLabel] = useState<string>(getInitialWindowLabel);
 
   useEffect(() => {
     try {
@@ -33,6 +42,10 @@ function Root() {
 
   if (windowLabel === 'download_complete' || window.location.search.includes('window=download_complete')) {
     return <DownloadCompleteWindow />;
+  }
+
+  if (windowLabel === 'restarting' || window.location.search.includes('window=restarting')) {
+    return <RestartingWindow />;
   }
 
   return <App />;

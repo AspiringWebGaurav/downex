@@ -23,6 +23,7 @@
     },
     "zeroPlainSecretsRule": "Never commit unencrypted .env.local, .tauri/*.key, or reference/ to version control.",
     "gitPushPermissionRule": "NEVER execute git push, publish branches, or push tags to remote repositories without explicit user permission.",
+    "binaryPushPermissionRule": "NEVER execute npm run ship, compile/publish OTA release binaries, or push installers to GPHost / remote distribution without explicit user permission in the active session.",
     "reaDefinitionRule": "When the user writes 'REA' in all-caps, it strictly means Reverse Engineering / Reverse Engineer Anything (morluto/rea, rea-agents), NEVER React."
   },
   "components": {
@@ -106,9 +107,11 @@
   "otaPipeline": {
     "appSlug": "downex",
     "gphostFolder": "downex-dynamic-binaries",
+    "gphostBaseFolder": "downex-immutable-base",
     "apiBase": "https://gphost.eu.cc",
     "triggerCommand": "npm run ship <target_version> -m '<release_notes>'",
     "currentBaseVersion": "0.0.0",
+    "storageIsolation": "Base app 0.0.0 installer and companion files are permanently isolated in downex-immutable-base/ with expiry_preset: 'never'. Dynamic OTA release containers are isolated in downex-dynamic-binaries/. ship.mjs has a strict guard refusing to touch or archive any base file.",
     "buildSteps": [
       "1. Synchronize version in package.json, src-tauri/Cargo.toml, and src-tauri/tauri.conf.json",
       "2. Compile frontend bundle (tsc && vite build)",
@@ -116,7 +119,7 @@
       "4. Encrypt binary into AES-256-GCM OTA container (Magic: DWNX_OTA)",
       "5. Generate Minisign Ed25519 cryptographic signature (.tauri/downex.key)",
       "6. Stream container to Cloudflare R2 on GPHost (folder: downex-dynamic-binaries, noShareLink: true)",
-      "7. Identify and safeguard Base 0.0.0 installer in downex-dynamic-binaries/base/; archive previous version to downex-dynamic-binaries/OLD/",
+      "7. Enforce strict isolation: Safeguard Base 0.0.0 installer in downex-immutable-base/; archive only previous OTA update containers to downex-dynamic-binaries/OLD/",
       "8. Publish atomic release manifest: POST /api/v1/releases/downex/publish",
       "9. Smoke test live HTTP 200 manifest and container endpoints",
       "10. Revert local repository back to immutable base version 0.0.0"

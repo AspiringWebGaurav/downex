@@ -1,9 +1,10 @@
 import React, { useState, useEffect } from 'react';
-import { Settings, Eye, HardDrive, Cpu, ShieldCheck, FolderOpen, Check, Link2, Zap, Minimize2 } from 'lucide-react';
+import { Settings, Eye, HardDrive, Cpu, ShieldCheck, FolderOpen, Check, Link2, Zap, Minimize2, Power, ChevronRight, FileText } from 'lucide-react';
 import { useDownloadStore } from '../stores/downloadStore';
 import { TelemetryWidget } from './TelemetryWidget';
-import { getDefaultDownloadDir, getMaxSegments, openFolderPicker, setDefaultDownloadDir, setMaxSegments as apiSetMaxSegments } from '../services/tauriService';
+import { getDefaultDownloadDir, getMaxSegments, openFolderPicker, setDefaultDownloadDir, setMaxSegments as apiSetMaxSegments, isAutostartEnabled, setAutostartEnabled } from '../services/tauriService';
 import { useAppVersionStore } from '../stores/appVersionStore';
+import { PatchNotesView } from './Views/PatchNotesView';
 
 interface SettingsViewProps {
   darkMode?: boolean;
@@ -41,7 +42,9 @@ export const SettingsView: React.FC<SettingsViewProps> = () => {
       return true;
     }
   });
+  const [autostart, setAutostart] = useState<boolean>(true);
   const [savedFeedback, setSavedFeedback] = useState(false);
+  const [activeSubView, setActiveSubView] = useState<'settings' | 'patch-notes'>('settings');
 
   useEffect(() => {
     getDefaultDownloadDir()
@@ -53,6 +56,12 @@ export const SettingsView: React.FC<SettingsViewProps> = () => {
     getMaxSegments()
       .then((count) => {
         if (count) setMaxSegments(count);
+      })
+      .catch(() => {});
+
+    isAutostartEnabled()
+      .then((enabled) => {
+        setAutostart(enabled);
       })
       .catch(() => {});
   }, []);
@@ -92,10 +101,24 @@ export const SettingsView: React.FC<SettingsViewProps> = () => {
     triggerSaved();
   };
 
+  const handleAutostartToggle = async (val: boolean) => {
+    setAutostart(val);
+    try {
+      await setAutostartEnabled(val);
+    } catch (e) {
+      console.warn('Failed to toggle autostart:', e);
+    }
+    triggerSaved();
+  };
+
   const triggerSaved = () => {
     setSavedFeedback(true);
     setTimeout(() => setSavedFeedback(false), 2000);
   };
+
+  if (activeSubView === 'patch-notes') {
+    return <PatchNotesView onBack={() => setActiveSubView('settings')} />;
+  }
 
   return (
     <div className="flex-1 h-full overflow-y-auto px-6 py-5 select-none bg-white dark:bg-zinc-950">
@@ -229,6 +252,37 @@ export const SettingsView: React.FC<SettingsViewProps> = () => {
             </button>
           </div>
 
+          {/* Toggle 4: Launch Downex on Windows Startup (Run silently in background tray) */}
+          <div className="p-4 flex items-center justify-between gap-4">
+            <div className="space-y-0.5">
+              <div className="flex items-center gap-2">
+                <Power className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                <span className="text-xs font-semibold text-zinc-900 dark:text-zinc-100">
+                  Launch on Windows Startup
+                </span>
+                <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-emerald-100 dark:bg-emerald-950/80 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800">
+                  Silent Background Tray
+                </span>
+              </div>
+              <p className="text-[11px] text-zinc-500 dark:text-zinc-400 max-w-xl">
+                Automatically start Downex in the background when Windows boots up so browser downloads are captured immediately without opening a window.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => handleAutostartToggle(!autostart)}
+              className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                autostart ? 'bg-emerald-600' : 'bg-zinc-300 dark:bg-zinc-700'
+              }`}
+            >
+              <span
+                className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-sm ring-0 transition duration-200 ease-in-out ${
+                  autostart ? 'translate-x-5' : 'translate-x-0'
+                }`}
+              />
+            </button>
+          </div>
+
           {/* Option 4: Max Parallel TCP Connections per Download */}
           <div className="p-4 flex items-center justify-between gap-4">
             <div className="space-y-0.5">
@@ -258,6 +312,35 @@ export const SettingsView: React.FC<SettingsViewProps> = () => {
                 </button>
               ))}
             </div>
+          </div>
+
+          
+          {/* Option: Release Changelogs & Patch Notes */}
+          <div className="p-4 flex items-center justify-between gap-4">
+            <div className="space-y-0.5">
+              <div className="flex items-center gap-2">
+                <FileText className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                <span className="text-xs font-semibold text-zinc-900 dark:text-zinc-100">
+                  Release Changelogs & Patch Notes
+                </span>
+                <span className="px-1.5 py-0.2 rounded text-[10px] font-mono font-medium bg-emerald-100 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-800">
+                  All Versions
+                </span>
+              </div>
+              <p className="text-[11px] text-zinc-500 dark:text-zinc-400">
+                Inspect detailed version changelogs across all releases, or author and manage release notes in-app.
+              </p>
+            </div>
+
+            <button
+              type="button"
+              id="view-patch-notes-btn"
+              onClick={() => setActiveSubView('patch-notes')}
+              className="px-3.5 py-1.5 rounded-lg border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-zinc-800 dark:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-700 text-xs font-semibold flex items-center gap-1.5 cursor-pointer shadow-xs transition-all shrink-0"
+            >
+              <span>View Patch Notes</span>
+              <ChevronRight className="w-3.5 h-3.5" />
+            </button>
           </div>
 
           {/* Option 5: Default Download Directory (IDM Lifecycle Pattern) */}

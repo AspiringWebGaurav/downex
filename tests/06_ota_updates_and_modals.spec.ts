@@ -159,4 +159,36 @@ test.describe('Downex Base Application — OTA Updates, Notifications & Patch No
 
     expect(errors).toEqual([]);
   });
+
+  test('5-second RestartingModal renders countdown ring, version handoff, and service telemetry', async ({ page }) => {
+    const errors = captureConsoleErrors(page);
+
+    // Trigger state: 'restarting'
+    await page.evaluate(() => {
+      const store = (window as any).__DOWNEX_VERSION_STORE__;
+      if (store) {
+        store.setState({
+          status: {
+            state: 'restarting',
+            targetVersion: '0.0.5',
+          },
+        });
+      }
+    });
+
+    // 1. Verify modal title and explanation
+    await expect(page.locator('text=Please wait, apps and services restarting...')).toBeVisible();
+    await expect(page.locator('text=v0.0.5')).toBeVisible();
+
+    // 2. Verify all service telemetry steps are displayed
+    await expect(page.locator('text=Pausing active downloads & queue state')).toBeVisible();
+    await expect(page.locator('text=Flushing SQLite database & WAL transactions')).toBeVisible();
+    await expect(page.locator('text=Releasing single-instance socket & IPC handles')).toBeVisible();
+    await expect(page.locator('text=Launching updated Downex engine...')).toBeVisible();
+
+    // 3. Verify progress updates over time
+    await expect(page.locator('text=Restarting services')).toBeVisible();
+
+    expect(errors).toEqual([]);
+  });
 });

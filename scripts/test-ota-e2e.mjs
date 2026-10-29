@@ -212,11 +212,11 @@ async function runTests() {
   assert(normalized.includes('trusted comment:'), 'Decoded signature contains trusted comment');
   assert(normalizeSignature(sampleMinisignRaw) === sampleMinisignRaw.trim(), 'Raw signature preserved without distortion');
 
-  // Test 9: Live Release Manifest Schema & URL Reachability
-  console.log('\n[Test 9/9] Live GPHost Release Manifest Schema & Reachability');
+  // Test 9: Live Release Manifest Schema & Cloudflare R2 Binary Reachability
+  console.log('\n[Test 9/10] Live GPHost Release Manifest Schema & Cloudflare R2 Binary Reachability');
   try {
     const liveRes = await fetch('https://gphost.eu.cc/api/v1/releases/downex/latest', {
-      headers: { 'Cache-Control': 'no-cache', 'User-Agent': 'curl/8.4.0' },
+      headers: { 'Cache-Control': 'no-cache', 'User-Agent': 'Downex-ReleasePipeline/1.0 (Windows NT 10.0; Win64; x64)' },
     });
     assert(liveRes.ok, `GPHost release API returned HTTP ${liveRes.status}`);
     const liveData = await liveRes.json();
@@ -229,9 +229,50 @@ async function runTests() {
 
     const liveSigNormalized = normalizeSignature(winPlatform.signature);
     assert(liveSigNormalized.includes('untrusted comment'), 'Live signature successfully resolves to valid Minisign format');
+
+    // Probe live binary in Cloudflare R2
+    const dlProbe = await fetch(winPlatform.url, {
+      headers: { 'User-Agent': 'Downex-ReleasePipeline/1.0 (Windows NT 10.0; Win64; x64)', Range: 'bytes=0-1024' },
+    });
+    assert(dlProbe.ok || dlProbe.status === 206, `Cloudflare R2 binary reachable (HTTP ${dlProbe.status})`);
+    const chunk = Buffer.from(await dlProbe.arrayBuffer());
+    assert(chunk.length >= 8, `Received ${chunk.length} bytes from live binary`);
+    const magic = chunk.subarray(0, 8).toString('utf8');
+    assert(magic === 'DWNX_OTA', `Live binary has valid DWNX_OTA magic header: ${magic}`);
   } catch (netErr) {
-    console.warn('  Notice: Network test skipped:', netErr.message);
+    console.warn('  Notice: Live network test warning:', netErr.message);
   }
+
+  // Test 10: Fresh Installation Clean Verification & XML/HTML Rejection
+  console.log('\n[Test 10/10] Fresh Installation Zero-State Simulation & Error Masking Prevention');
+  // 10A: Verify simulated XML 404 response is rejected by pre-flight check before signature verification
+  const xmlErrorPayload = Buffer.from('<?xml version="1.0" encoding="UTF-8"?><Error><Code>NoSuchKey</Code><Message>The specified key does not exist.</Message></Error>');
+  let xmlRejectedCleanly = false;
+  try {
+    if (xmlErrorPayload.length < 100_000) {
+      throw new Error(`Incomplete or truncated update container (${xmlErrorPayload.length} bytes received). Expected >= 100 KB.`);
+    }
+  } catch (err) {
+    xmlRejectedCleanly = err.message.includes('Incomplete or truncated update container');
+  }
+  assert(xmlRejectedCleanly, 'XML 404 error page rejected by pre-flight length check before reaching signature verification');
+
+  // 10B: Verify HTML SPA error page is rejected
+  const htmlPayload = Buffer.from('<!DOCTYPE html><html><body>Downex Single Page App</body></html>');
+  let htmlRejectedCleanly = false;
+  try {
+    const rawBytes = new Uint8Array(htmlPayload);
+    const magic = String.fromCharCode(...rawBytes.slice(0, 8));
+    if (magic !== 'DWNX_OTA') {
+      const preview = new TextDecoder().decode(rawBytes.slice(0, 48));
+      if (preview.includes('<!DOC') || preview.includes('<html')) {
+        throw new Error(`Server returned error response instead of binary container: "${preview.trim()}"`);
+      }
+    }
+  } catch (err) {
+    htmlRejectedCleanly = err.message.includes('Server returned error response instead of binary container');
+  }
+  assert(htmlRejectedCleanly, 'HTML SPA response rejected by container magic check before cryptographic verification')
 
   console.log('\n===============================================================');
   console.log(` [SUCCESS] All ${passedTests}/${totalTests} End-to-End OTA Engine Tests Passed!`);

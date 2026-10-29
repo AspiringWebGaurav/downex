@@ -43,6 +43,22 @@ export const DownloadCompleteWindow: React.FC = () => {
     }
   });
   const [copiedField, setCopiedField] = useState<'url' | 'path' | null>(null);
+  const [isCloseHovered, setIsCloseHovered] = useState(false);
+
+  // Cleanly reset hover state on window blur, focus, or visibility changes
+  useEffect(() => {
+    const clearHover = () => setIsCloseHovered(false);
+    window.addEventListener('blur', clearHover);
+    window.addEventListener('focus', clearHover);
+    document.addEventListener('visibilitychange', clearHover);
+    window.addEventListener('mouseleave', clearHover);
+    return () => {
+      window.removeEventListener('blur', clearHover);
+      window.removeEventListener('focus', clearHover);
+      document.removeEventListener('visibilitychange', clearHover);
+      window.removeEventListener('mouseleave', clearHover);
+    };
+  }, []);
 
   // Apply dark mode theme from localStorage
   useEffect(() => {
@@ -117,6 +133,10 @@ export const DownloadCompleteWindow: React.FC = () => {
   }, []);
 
   const handleClose = async () => {
+    setIsCloseHovered(false);
+    if (document.activeElement instanceof HTMLElement) {
+      document.activeElement.blur();
+    }
     if (isTauri) {
       await closeDownloadCompleteDialog();
     } else {
@@ -177,7 +197,13 @@ export const DownloadCompleteWindow: React.FC = () => {
           <button
             type="button"
             onClick={handleClose}
-            className="w-6 h-6 rounded flex items-center justify-center text-zinc-500 hover:bg-rose-500 hover:text-white dark:hover:bg-rose-600 transition-colors cursor-pointer"
+            onMouseEnter={() => setIsCloseHovered(true)}
+            onMouseLeave={() => setIsCloseHovered(false)}
+            className={`w-6 h-6 rounded flex items-center justify-center transition-colors cursor-pointer focus:outline-none ${
+              isCloseHovered
+                ? 'bg-rose-500 text-white dark:bg-rose-600'
+                : 'text-zinc-500 bg-transparent'
+            }`}
             title="Close (Esc)"
           >
             <X className="w-3.5 h-3.5" />

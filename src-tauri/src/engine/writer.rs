@@ -8,7 +8,11 @@ pub struct PositionalWriter {
 }
 
 impl PositionalWriter {
-    pub fn new<P: AsRef<Path>>(path: P, preallocate_bytes: Option<u64>) -> Result<Self, std::io::Error> {
+    pub fn new<P: AsRef<Path>>(
+        path: P,
+        preallocate_bytes: Option<u64>,
+        is_resume: bool,
+    ) -> Result<Self, std::io::Error> {
         let path = path.as_ref().to_path_buf();
         if let Some(parent) = path.parent() {
             let _ = std::fs::create_dir_all(parent);
@@ -23,9 +27,21 @@ impl PositionalWriter {
         opts.share_mode(7); // FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE
         let file = opts.open(&path)?;
 
-        if let Some(total_size) = preallocate_bytes {
-            // Preallocate file length upfront (sparse / direct allocation on Windows)
-            let _ = file.set_len(total_size);
+        if !is_resume {
+            // Fresh download: Clean truncate any existing stale file / clusters to 0 bytes
+            let _ = file.set_len(0);
+            if let Some(total_size) = preallocate_bytes {
+                if total_size > 0 {
+                    let _ = file.set_len(total_size);
+                }
+            }
+        } else if let Some(total_size) = preallocate_bytes {
+            // Resuming: ensure file length is at least total_size without wiping existing data
+            if let Ok(meta) = file.metadata() {
+                if meta.len() < total_size {
+                    let _ = file.set_len(total_size);
+                }
+            }
         }
 
         Ok(Self {
@@ -39,7 +55,14 @@ impl PositionalWriter {
         #[cfg(target_os = "windows")]
         {
             use std::os::windows::fs::FileExt;
-            self.file.seek_write(data, offset)?;
+            let mut total_written = 0;
+            while total_written < data.len() {
+                let n = self.file.seek_write(&data[total_written..], offset + total_written as u64)?;
+                if n == 0 {
+                    return Err(std::io::Error::new(std::io::ErrorKind::WriteZero, "failed to write whole buffer"));
+                }
+                total_written += n;
+            }
         }
 
         #[cfg(not(target_os = "windows"))]
@@ -49,6 +72,10 @@ impl PositionalWriter {
         }
 
         Ok(())
+    }
+
+    pub fn set_len(&self, size: u64) -> Result<(), std::io::Error> {
+        self.file.set_len(size)
     }
 
     pub fn sync(&self) -> Result<(), std::io::Error> {

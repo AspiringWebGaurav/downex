@@ -30,6 +30,12 @@ export const DeleteConfirmModal: React.FC<DeleteConfirmModalProps> = ({
       return false;
     }
   });
+  const [isCloseHovered, setIsCloseHovered] = useState(false);
+
+  // Cleanly reset hover state whenever modal opens/closes
+  useEffect(() => {
+    setIsCloseHovered(false);
+  }, [isOpen]);
 
   // Handle ESC key to dismiss modal
   useEffect(() => {
@@ -78,8 +84,17 @@ export const DeleteConfirmModal: React.FC<DeleteConfirmModalProps> = ({
             </span>
           </div>
           <button
-            onClick={onClose}
-            className="p-1 rounded text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors cursor-pointer"
+            onClick={() => {
+              setIsCloseHovered(false);
+              onClose();
+            }}
+            onMouseEnter={() => setIsCloseHovered(true)}
+            onMouseLeave={() => setIsCloseHovered(false)}
+            className={`p-1 rounded transition-colors cursor-pointer focus:outline-none ${
+              isCloseHovered
+                ? 'bg-rose-500 text-white dark:bg-rose-600'
+                : 'text-zinc-400 dark:text-zinc-500 bg-transparent'
+            }`}
           >
             <X className="w-4 h-4" />
           </button>

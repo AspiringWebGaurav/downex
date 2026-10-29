@@ -111,14 +111,65 @@ Downex is an independent, multi-process desktop download manager consisting of:
 
 ---
 
-## 📦 Step 6: Strict Sequential Versioning & Binary Hygiene Rules
+## 📦 Step 6: Strict Sequential Versioning & Release Retention Rules
 
 - **Strict Sequential Semver:** Never use arbitrary or jumping version orders (e.g., jumping from `0.0.0` directly to `0.1.0`). Release versions must strictly follow monotonic sequential patch numbers:
   - **Base App:** `0.0.0` (immutable base installer).
   - **First OTA Update:** `0.0.1`.
   - **Next OTA Update:** `0.0.2` (then `0.0.3`, `0.0.4`, etc.).
-- **Binary Hygiene:**
-  - Only keep the immutable base installer (`0.0.0`), the latest browser companion extension (`downex-extension`), and the single active target OTA release (e.g., `0.0.1`) on GPHost and in release catalogs.
-  - Purge all stale, intermediate, or out-of-order binaries from storage.
+- **Independent Release Retention (Never Delete Releases):**
+  - Every release is stored independently without replacing, overwriting, or destroying previous releases.
+  - Active releases reside in `downex-dynamic-binaries/releases/v<version>/`.
+  - Outdated binaries MUST be safely moved to and retained in their respective old release folders: `downex-dynamic-binaries/OLD/v<version>/`.
+  - NEVER execute blanket deletion, unlinking, or purging of release binaries from storage.
 
+---
 
+## 🛑 Step 7: Strict Binary Push & Release Permission Rule
+
+- **NEVER PUSH OR SHIP BINARIES WITHOUT EXPLICIT PERMISSION:** Agents, scripts, and workflows must **NEVER** execute `npm run ship`, compile/publish OTA release binaries, or upload installers to GPHost / Cloudflare R2 / remote release endpoints without explicit, direct user permission in the active session.
+- Even if a fix or feature is fully developed, tested, and verified, all changes must **REMAIN STRICTLY LOCAL** until the user explicitly commands: *"Push binary"* or *"Ship binary"*.
+- **Never auto-ship on bug fixes:** Never assume that diagnosing and fixing a bug entitles the agent to publish a live production binary.
+
+---
+
+## 🛡️ Step 8: Strict Base App Isolation & Permanent Immutability Rules
+
+- **Zero-Deletion & Absolute Immutability:**
+  - The Base 0.0.0 application installer (`Downex-0.0.0-Setup.exe`, slug: `downex-desktop`) and companion extension (`downex-extension.zip`, slug: `downex-extension`) MUST remain permanently immutable.
+  - **NEVER** delete, overwrite, move, rename, disassociate, or modify the original base application binary under any circumstance.
+- **Total Storage Folder Hierarchy:**
+  - The immutable Base 0.0.0 installer and companion assets MUST strictly reside in their dedicated isolated folder: `downex-immutable-base/`.
+  - Active OTA update releases MUST strictly reside in their dedicated version folder: `downex-dynamic-binaries/releases/v<version>/`.
+  - Outdated releases MUST be safely preserved in: `downex-dynamic-binaries/OLD/v<version>/`.
+  - `ship.mjs` is strictly prohibited from touching, modifying, archiving, or deleting any file within `downex-immutable-base/` or matching protected base file IDs/slugs.
+- **Mandatory Pre-Flight Guard:**
+  - Every release pipeline script (`ship.mjs`) MUST execute a Pre-Flight smoke test against `https://gphost.eu.cc/raw/downex-desktop`.
+  - If the base binary is unreachable or missing from GPHost, the release pipeline MUST fail-closed and abort immediately.
+- **Permanent Expiry Preset & Explicit Base Registration:**
+  - All base app assets uploaded to GPHost / Cloudflare R2 MUST explicitly include `expiry_preset: 'never'` and `isPermanent: true`.
+  - When publishing releases via `POST /api/v1/releases/downex/publish`, `baseFileId` pointing to the verified Base 0.0.0 file MUST ALWAYS be explicitly included in the payload.
+- **Prohibition of Indiscriminate Wipe Scripts:**
+  - Never author or run wildcard deletion scripts (such as blanket regex filters matching `downex`) that could delete the base binary.
+
+---
+
+## 🛡️ Step 9: Antivirus & Windows Defender Heuristic Safety Protocols (Zero False Positives)
+
+To permanently eliminate false positive malware triggers (such as Microsoft Defender `Trojan:Win32/Commando.A!ml` or AMSI heuristic behavioral flags) across local development, release pipelines, and GitHub pushes:
+
+1. **PROHIBITION OF INLINE COMMAND-LINE EVALUATION (`node -e` / `powershell -c`):**
+   - **NEVER** execute inline scripts performing network fetch, download, or payload execution via `node -e "..."` or PowerShell one-liners from the command line.
+   - Windows Defender heuristic ML engines monitor command lines (`CmdLine`). Launching `node.exe -e` with inline fetch/network calls triggers automated trojan dropper heuristics (`Commando.A!ml`).
+   - All tests, probes, and release routines MUST be authored as dedicated, well-structured `.mjs` or `.ts` files on disk (in `scripts/` or `scratch/`) and executed as `node scripts/<script>.mjs`.
+
+2. **LEGITIMATE USER-AGENT & HEADER HYGIENE:**
+   - **NEVER** hardcode, spoof, or copy-paste CLI/scraper User-Agents like `'User-Agent': 'curl/8.4.0'` into application source code, Rust HTTP clients (`reqwest`), or automation scripts.
+   - Use authentic application identifiers or standard browser headers:
+     - For Desktop App / Rust reqwest: `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36`
+     - For Release Scripts / Pipelines: `Downex-ReleasePipeline/1.0 (Windows NT 10.0; Win64; x64)`
+
+3. **CLEAN BINARY ARTIFACT & SIGNATURE HYGIENE:**
+   - Always sign release containers with authentic Minisign Ed25519 keys (`.tauri/downex.key`).
+   - Never commit or stage dynamic eval wrappers, dropper patterns, or unverified base64 binaries in the repository.
+   - Audit all code and scripts prior to Git push to eliminate false positive flags.

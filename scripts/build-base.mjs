@@ -53,9 +53,11 @@ if (!GPHOST_API_KEY) {
 }
 
 const GPHOST_FOLDER = process.env.GPHOST_FOLDER || 'downex-dynamic-binaries';
+const GPHOST_BASE_FOLDER = 'downex-immutable-base';
 
 console.log('\n===============================================================');
 console.log('   Downex — Building Permanent Immutable Base 0.0.0 Binary');
+console.log('   Storage Isolation: Base files stored in ' + GPHOST_BASE_FOLDER);
 console.log('===============================================================\n');
 
 // 2. Verify 0.0.0 in all project manifests
@@ -151,7 +153,7 @@ async function uploadToGPHost(bytes, filename, slug, folder, noShareLink = true)
     headers: {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${GPHOST_API_KEY}`,
-      'User-Agent': 'curl/8.4.0',
+      'User-Agent': 'Downex-ReleasePipeline/1.0 (Windows NT 10.0; Win64; x64)',
     },
     body: JSON.stringify({
       filename,
@@ -161,6 +163,7 @@ async function uploadToGPHost(bytes, filename, slug, folder, noShareLink = true)
       slug,
       noShareLink,
       isPermanent: true,
+      expiry_preset: 'never',
       overwrite: true,
     }),
   });
@@ -187,12 +190,13 @@ async function uploadToGPHost(bytes, filename, slug, folder, noShareLink = true)
     headers: {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${GPHOST_API_KEY}`,
-      'User-Agent': 'curl/8.4.0',
+      'User-Agent': 'Downex-ReleasePipeline/1.0 (Windows NT 10.0; Win64; x64)',
     },
     body: JSON.stringify({
       fileId,
       noShareLink,
       isPermanent: true,
+      expiry_preset: 'never',
     }),
   });
 
@@ -212,13 +216,13 @@ async function uploadToGPHost(bytes, filename, slug, folder, noShareLink = true)
 
 try {
   const baseFilename = 'downex-base-0.0.0.exe';
-  const baseUpload = await uploadToGPHost(binaryBytes, baseFilename, 'downex-base', `${GPHOST_FOLDER}/base`, true);
+  const baseUpload = await uploadToGPHost(binaryBytes, baseFilename, 'downex-base', `${GPHOST_BASE_FOLDER}/standalone`, true);
   console.log(`  ✓ Standalone Base binary uploaded: ${baseFilename} (ID: ${baseUpload.fileId})`);
 
   let installerUpload = null;
   if (nsisInstallerPath && fs.existsSync(nsisInstallerPath)) {
     const installerBytes = fs.readFileSync(nsisInstallerPath);
-    installerUpload = await uploadToGPHost(installerBytes, 'Downex-0.0.0-Setup.exe', 'downex-app', `${GPHOST_FOLDER}/base`, false);
+    installerUpload = await uploadToGPHost(installerBytes, 'Downex-0.0.0-Setup.exe', 'downex-desktop', GPHOST_BASE_FOLDER, false);
     console.log(`  ✓ NSIS Setup Installer uploaded: Downex-0.0.0-Setup.exe (ID: ${installerUpload.fileId})`);
   }
 

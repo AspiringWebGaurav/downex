@@ -2,7 +2,7 @@
  * Downex — In-Process OTA Update Service
  * 
  * 1:1 Implementation derived from proven GPN architecture:
- * - Dual-channel release discovery (Native Rust reqwest with curl/8.4.0 + web fallback)
+ * - Dual-channel release discovery (Native Rust reqwest with standard browser + web fallback)
  * - Machine instance ID tracking
  * - High-throughput binary download
  * - Memory AES-256-GCM authenticated container unpacking + PE MZ header validation
@@ -21,6 +21,8 @@ import {
   applyInProcessUpdate,
   setTrayIcon,
   verifyUpdateSignature,
+  pauseDownload,
+  showRestartingWindow,
 } from './tauriService';
 import { unpackOtaPayload } from './otaContainer';
 import { ReleaseManifest } from '../types/download';
@@ -384,7 +386,7 @@ class UpdateService {
       }, 35);
     });
 
-    // 3. Execute wire download (Native Rust reqwest with curl/8.4.0 UA primary, web fetch secondary)
+    // 3. Execute wire download (Native Rust reqwest with standard browser UA primary, web fetch secondary)
     try {
       let rawBytes: Uint8Array;
       try {
@@ -406,6 +408,10 @@ class UpdateService {
             const res = await fetch(urlWithTs);
             if (!res.ok) {
               throw new Error(`Server returned HTTP ${res.status}: ${res.statusText}`);
+            }
+            const contentType = res.headers.get('content-type') || '';
+            if (contentType.includes('text/html') || contentType.includes('application/xml') || contentType.includes('text/xml')) {
+              throw new Error(`Server returned ${contentType} error page instead of binary package`);
             }
             fetchRes = res;
             break;
@@ -492,6 +498,24 @@ class UpdateService {
     });
 
     try {
+      // 0. Container pre-flight integrity check
+      if (rawBuffer.byteLength < 100_000) {
+        throw new Error(`Incomplete or truncated update container (${rawBuffer.byteLength} bytes received). Expected >= 100 KB.`);
+      }
+
+      const rawBytes = new Uint8Array(rawBuffer);
+      const isOta = rawBytes.length >= 8 &&
+        rawBytes[0] === 0x44 && rawBytes[1] === 0x57 && rawBytes[2] === 0x4E && rawBytes[3] === 0x58 &&
+        rawBytes[4] === 0x5F && rawBytes[5] === 0x4F && rawBytes[6] === 0x54 && rawBytes[7] === 0x41;
+      const isPe = rawBytes.length >= 2 && rawBytes[0] === 0x4D && rawBytes[1] === 0x5A;
+
+      if (!isOta && !isPe) {
+        const headerPreview = new TextDecoder().decode(rawBytes.slice(0, 48)).replace(/[\r\n\t]/g, ' ');
+        if (headerPreview.includes('<?xml') || headerPreview.includes('<html') || headerPreview.includes('<!DOC')) {
+          throw new Error(`Server returned error response instead of binary container: "${headerPreview.trim()}"`);
+        }
+        throw new Error(`Invalid container format: expected DWNX_OTA container or PE executable, received: "${headerPreview.trim()}"`);
+      }
       // 1. Minisign Ed25519 / SHA-256 cryptographic signature verification
       if (this.status.manifest?.signature) {
         try {
@@ -570,6 +594,9 @@ class UpdateService {
         errorMessage: undefined,
       });
 
+      // Show dedicated restarting window immediately and pass targetVersion & stagedBinaryPath
+      await showRestartingWindow(targetVersion, this.stagedBinaryPath || undefined);
+
       // Save post-update celebration marker with release notes
       try {
         const manifestNotes =
@@ -587,8 +614,21 @@ class UpdateService {
         );
       } catch {}
 
-      // Intentional calibrated pacing: hold restarting state for 1.5 seconds before handoff
-      await new Promise((resolve) => setTimeout(resolve, 1500));
+      // Gracefully pause any downloading items to ensure clean SQLite WAL flush and avoid lock contention
+      try {
+        const { useDownloadStore } = await import('../stores/downloadStore');
+        const activeItems = useDownloadStore.getState().items.filter(
+          (i) => i.status === 'downloading' || i.status === 'probing'
+        );
+        for (const item of activeItems) {
+          await pauseDownload(item.id).catch(() => {});
+        }
+      } catch {}
+
+      // Intentional calibrated pacing: hold restarting state for 7.0 seconds (user requested dedicated UX)
+      // Gives the user visual feedback ("Please wait, apps and services restarting...")
+      // and gives OS, SQLite WAL, and single-instance sockets time to cleanly flush and disconnect
+      await new Promise((resolve) => setTimeout(resolve, 7000));
 
       await applyInProcessUpdate({
         stagingPath: this.stagedBinaryPath,

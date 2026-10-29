@@ -227,6 +227,34 @@ export async function setMaxSegments(count: number): Promise<number> {
   return await invoke<number>('cmd_set_max_segments', { count });
 }
 
+export async function isAutostartEnabled(): Promise<boolean> {
+  if (!isTauri) {
+    try {
+      const v = localStorage.getItem('downex_autostart_enabled');
+      return v !== 'false'; // Default to true
+    } catch {
+      return true;
+    }
+  }
+  try {
+    return await invoke<boolean>('cmd_is_autostart_enabled');
+  } catch (e) {
+    console.warn('[Downex Autostart] Error checking status:', e);
+    return false;
+  }
+}
+
+export async function setAutostartEnabled(enabled: boolean): Promise<boolean> {
+  if (!isTauri) {
+    try {
+      localStorage.setItem('downex_autostart_enabled', String(enabled));
+    } catch {}
+    return enabled;
+  }
+  return await invoke<boolean>('cmd_set_autostart', { enabled });
+}
+
+
 export async function changeDownloadDestination(id: string, newFolder: string): Promise<boolean> {
   if (!isTauri) {
     const list = loadMockDownloads().map((item) => {
@@ -284,32 +312,46 @@ export async function fetchUpdateManifest(url: string): Promise<string> {
 }
 
 export async function downloadUpdateBinary(url: string): Promise<Uint8Array> {
-  try {
-    const bytes = await invoke<number[]>('cmd_download_update_binary', { url });
-    return new Uint8Array(bytes);
-  } catch (nativeErr) {
-    console.warn('[Downex OTA] Native download binary notice:', nativeErr);
+  // 1. Primary: Native Rust reqwest client with standard browser User-Agent and stream chunks
+  if (isTauri) {
     try {
-      const bytes = await invoke<number[]>('cmd_download_update_container', { url });
+      const bytes = await invoke<number[]>('cmd_download_update_binary', { url });
       return new Uint8Array(bytes);
-    } catch {}
-
-    const fetchUrl = url.startsWith('https://gphost.eu.cc')
-      ? url.replace('https://gphost.eu.cc', '')
-      : url;
-    try {
-      const res = await fetch(fetchUrl);
-      if (res.ok) {
-        const buf = await res.arrayBuffer();
-        return new Uint8Array(buf);
+    } catch (nativeErr: any) {
+      console.warn('[Downex OTA] Native download binary notice:', nativeErr);
+      try {
+        const bytes = await invoke<number[]>('cmd_download_update_container', { url });
+        return new Uint8Array(bytes);
+      } catch (containerErr: any) {
+        console.warn('[Downex OTA] Native download container notice:', containerErr);
       }
-    } catch {}
-
-    const res = await fetch(url);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const buf = await res.arrayBuffer();
-    return new Uint8Array(buf);
+    }
   }
+
+  // 2. Secondary fallback: Web fetch with absolute URL (NEVER strip domain or hit local SPA server)
+  const fullUrl = url.startsWith('http') ? url : `https://gphost.eu.cc${url}`;
+  const res = await fetch(fullUrl, {
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36',
+      'Accept': 'application/octet-stream, application/binary, */*',
+    },
+  });
+
+  if (!res.ok) {
+    throw new Error(`Update binary download failed: HTTP ${res.status} ${res.statusText}`);
+  }
+
+  const contentType = res.headers.get('content-type') || '';
+  if (contentType.includes('text/html') || contentType.includes('application/xml') || contentType.includes('text/xml')) {
+    throw new Error(`Invalid update response: Expected binary stream but server returned ${contentType} (HTTP ${res.status})`);
+  }
+
+  const buf = await res.arrayBuffer();
+  if (buf.byteLength < 100_000) {
+    throw new Error(`Update package truncated or invalid: received ${buf.byteLength} bytes (expected >= 100 KB)`);
+  }
+
+  return new Uint8Array(buf);
 }
 
 export async function getClipboardText(): Promise<string> {
@@ -711,8 +753,14 @@ export async function closeDownloadCompleteDialog(): Promise<void> {
 
 export async function getDownloadCompletePayload(): Promise<DownloadCompletePayload | null> {
   if (!isTauri) {
-    if (typeof window !== 'undefined' && (window as any).__DOWNEX_MOCK_COMPLETE_PAYLOAD__) {
-      return (window as any).__DOWNEX_MOCK_COMPLETE_PAYLOAD__;
+    if (typeof window !== 'undefined') {
+      if ((window as any).__DOWNEX_MOCK_COMPLETE_PAYLOAD__) {
+        return (window as any).__DOWNEX_MOCK_COMPLETE_PAYLOAD__;
+      }
+      try {
+        const stored = sessionStorage.getItem('downex_mock_complete_payload');
+        if (stored) return JSON.parse(stored);
+      } catch {}
     }
     return null;
   }
@@ -837,4 +885,122 @@ export function onCheckUpdatesFromTray(callback: () => void): () => void {
       unlistenFn = null;
     }
   };
+}
+
+export async function showRestartingWindow(
+  targetVersion?: string,
+  stagingPath?: string
+): Promise<void> {
+  if (!isTauri) return;
+  try {
+    await invoke('cmd_show_restarting_window', {
+      targetVersion: targetVersion || null,
+      stagingPath: stagingPath || null,
+    });
+  } catch (e) {
+    console.warn('Failed to show restarting window:', e);
+  }
+}
+
+export async function getRestartingPayload(): Promise<{ target_version?: string; staging_path?: string } | null> {
+  if (!isTauri) return null;
+  try {
+    return await invoke<{ target_version?: string; staging_path?: string } | null>('cmd_get_restarting_payload');
+  } catch {
+    return null;
+  }
+}
+
+export function onOpenRestartingModal(
+  callback: (payload: { target_version?: string; staging_path?: string }) => void
+): () => void {
+  if (!isTauri) return () => {};
+  let isCancelled = false;
+  let unlistenFn: (() => void) | null = null;
+
+  listen<{ target_version?: string; staging_path?: string }>('open-restarting-modal', (event) => {
+    if (!isCancelled && event.payload) {
+      callback(event.payload);
+    }
+  })
+    .then((fn) => {
+      if (isCancelled) {
+        fn();
+      } else {
+        unlistenFn = fn;
+      }
+    })
+    .catch((err) => {
+      console.error('[Downex] Error listening to open-restarting-modal:', err);
+    });
+
+  return () => {
+    isCancelled = true;
+    if (unlistenFn) {
+      unlistenFn();
+      unlistenFn = null;
+    }
+  };
+}
+
+export interface DbPatchNoteRecord {
+  version: string;
+  title: string;
+  release_date: string;
+  highlights_json: string;
+  raw_notes?: string | null;
+  is_custom: boolean;
+  updated_at: number;
+}
+
+export async function getDbPatchNotes(): Promise<DbPatchNoteRecord[]> {
+  if (!isTauri) {
+    try {
+      const stored = localStorage.getItem('downex_mock_patch_notes');
+      return stored ? JSON.parse(stored) : [];
+    } catch {
+      return [];
+    }
+  }
+  try {
+    return await invoke<DbPatchNoteRecord[]>('cmd_get_patch_notes');
+  } catch (err) {
+    console.warn('[Downex] Failed to get patch notes from DB:', err);
+    return [];
+  }
+}
+
+export async function saveDbPatchNote(note: DbPatchNoteRecord): Promise<void> {
+  if (!isTauri) {
+    try {
+      const existing = await getDbPatchNotes();
+      const filtered = existing.filter((n) => n.version !== note.version);
+      filtered.unshift(note);
+      localStorage.setItem('downex_mock_patch_notes', JSON.stringify(filtered));
+    } catch {}
+    return;
+  }
+  try {
+    await invoke('cmd_save_patch_note', { note });
+  } catch (err) {
+    console.error('[Downex] Failed to save patch note to DB:', err);
+    throw err;
+  }
+}
+
+export async function deleteDbPatchNote(version: string): Promise<void> {
+  if (!isTauri) {
+    try {
+      const existing = await getDbPatchNotes();
+      const filtered = existing.filter((n) => n.version !== version);
+      localStorage.setItem('downex_mock_patch_notes', JSON.stringify(filtered));
+    } catch {}
+    return;
+  }
+  try {
+    await invoke('cmd_delete_patch_note', { version });
+  } catch (err) {
+    console.error('[Downex] Failed to delete patch note from DB:', err);
+    throw err;
+  }
 }

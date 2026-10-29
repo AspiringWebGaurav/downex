@@ -130,6 +130,26 @@ pub fn cmd_get_max_segments(state: State<'_, AppState>) -> Result<u32, String> {
 }
 
 #[tauri::command]
+pub fn cmd_is_autostart_enabled(state: State<'_, AppState>) -> Result<bool, String> {
+    if let Ok(Some(val)) = state.db.get_setting("autostart_enabled") {
+        return Ok(val == "true");
+    }
+    // Fall back to actual registry status if not recorded in SQLite yet
+    Ok(crate::autostart::is_autostart_registered())
+}
+
+#[tauri::command]
+pub fn cmd_set_autostart(app: AppHandle, enabled: bool, state: State<'_, AppState>) -> Result<bool, String> {
+    state.db.set_setting("autostart_enabled", if enabled { "true" } else { "false" })
+        .map_err(|e| e.to_string())?;
+
+    crate::autostart::set_autostart_registered(enabled)?;
+
+    let _ = app.emit("autostart-status-changed", serde_json::json!({ "enabled": enabled }));
+    Ok(enabled)
+}
+
+#[tauri::command]
 pub async fn cmd_change_download_destination(
     id: String,
     new_folder: String,
@@ -175,7 +195,7 @@ pub fn cmd_open_folder_picker() -> Result<Option<String>, String> {
 #[tauri::command]
 pub async fn cmd_fetch_update_manifest(url: String) -> Result<String, String> {
     let client = reqwest::Client::builder()
-        .user_agent("curl/8.4.0")
+        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36")
         .connect_timeout(std::time::Duration::from_secs(8))
         .timeout(std::time::Duration::from_secs(12))
         .redirect(reqwest::redirect::Policy::limited(10))
@@ -207,7 +227,7 @@ pub async fn cmd_download_update_binary(app: AppHandle, url: String) -> Result<V
     use futures_util::StreamExt;
 
     let client = reqwest::Client::builder()
-        .user_agent("curl/8.4.0")
+        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36")
         .connect_timeout(std::time::Duration::from_secs(15))
         .timeout(std::time::Duration::from_secs(120))
         .redirect(reqwest::redirect::Policy::limited(10))
@@ -528,9 +548,38 @@ pub fn cmd_apply_in_process_update(
         use std::io::Write;
         use std::os::windows::process::CommandExt;
 
+        // Atomic guard so we never attempt duplicate swap
+        static UPDATE_APPLIED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        if UPDATE_APPLIED.swap(true, std::sync::atomic::Ordering::SeqCst) {
+            eprintln!("[Downex OTA] Update swap already in progress or completed, ignoring duplicate call");
+            return Ok(());
+        }
+
+        let effective_staging_path = staging_path.clone()
+            .or_else(|| {
+                LAST_RESTARTING_PAYLOAD.lock().ok()
+                    .and_then(|g| g.as_ref().and_then(|val| val.get("staging_path").and_then(|p| p.as_str().map(|s| s.to_string()))))
+                    .filter(|s| !s.is_empty())
+            })
+            .or_else(|| {
+                // Fallback: look in temp directory for any staged Downex binary
+                let temp_dir = std::env::temp_dir().join("com.downex.manager");
+                if let Ok(entries) = std::fs::read_dir(&temp_dir) {
+                    for entry in entries.flatten() {
+                        let path = entry.path();
+                        if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                            if name.starts_with("downex-v") && name.ends_with(".staged.exe") {
+                                return Some(path.to_string_lossy().to_string());
+                            }
+                        }
+                    }
+                }
+                None
+            });
+
         let bytes = if let Some(b) = binary_bytes {
             b
-        } else if let Some(ref path_str) = staging_path {
+        } else if let Some(ref path_str) = effective_staging_path {
             std::fs::read(path_str)
                 .map_err(|e| format!("Could not read staged binary from '{}': {}", path_str, e))?
         } else {
@@ -623,80 +672,89 @@ pub fn cmd_apply_in_process_update(
         let watchdog_file = temp_dir.join(format!("watchdog_{}.ps1", pid));
 
         let watchdog_content = format!(
-            "# Downex Self-Healing Watchdog Supervisor\r\n\
-             $oldPid = {pid}\r\n\
-             $exe = '{exe}'\r\n\
-             $old = '{old}'\r\n\
-             $dir = '{dir}'\r\n\
-             $log = Join-Path $env:TEMP 'com.downex.manager\\watchdog.log'\r\n\
-             \r\n\
-             function Write-Log($msg) {{\r\n\
-                 $ts = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss.fff')\r\n\
-                 Add-Content -Path $log -Value \"[$ts] $msg\" -ErrorAction SilentlyContinue\r\n\
-             }}\r\n\
-             \r\n\
-             Write-Log \"Watchdog started for PID $oldPid. Target exe: $exe\"\r\n\
-             \r\n\
-             # 1. Wait for old parent process to exit completely\r\n\
-             for ($i = 0; $i -lt 100; $i++) {{\r\n\
-                 if (-not (Get-Process -Id $oldPid -ErrorAction SilentlyContinue)) {{ break }}\r\n\
-                 Start-Sleep -Milliseconds 100\r\n\
-             }}\r\n\
-             Write-Log \"Old PID $oldPid terminated.\"\r\n\
-             \r\n\
-             # 2. Release cooldown for single-instance socket and WebView2 User Data locks\r\n\
-             Start-Sleep -Milliseconds 1500\r\n\
-             \r\n\
-             # 3. Launch updated application binary (with retry)\r\n\
-             $p = $null\r\n\
-             for ($attempt = 1; $attempt -le 3; $attempt++) {{\r\n\
-                 Write-Log \"Launch attempt $attempt for $exe...\"\r\n\
-                 $p = Start-Process -FilePath $exe -WorkingDirectory $dir -ArgumentList \"--restarted-after-update\" -PassThru\r\n\
-                 Start-Sleep -Milliseconds 1500\r\n\
-                 if ($p -and (-not $p.HasExited)) {{\r\n\
-                     Write-Log \"Application launched successfully with PID $($p.Id).\"\r\n\
-                     break\r\n\
-                 }}\r\n\
-                 Write-Log \"Attempt $attempt exited (ExitCode: $($p.ExitCode)). Waiting before retry...\"\r\n\
-                 Start-Sleep -Milliseconds 1000\r\n\
-             }}\r\n\
-             \r\n\
-             if (-not $p -or $p.HasExited) {{\r\n\
-                 Write-Log \"Failed to start updated binary after 3 attempts. Initiating rollback...\"\r\n\
-                 if (Test-Path $old) {{\r\n\
-                     Move-Item -Path $old -Destination $exe -Force\r\n\
-                     Start-Process -FilePath $exe -WorkingDirectory $dir -ArgumentList \"--rollback-recovery\"\r\n\
-                     Write-Log \"Rolled back to $old and restarted.\"\r\n\
-                 }}\r\n\
-                 exit\r\n\
-             }}\r\n\
-             \r\n\
-             # 4. Monitor process stability for 6 seconds\r\n\
-             $crashed = $false\r\n\
-             for ($j = 0; $j -lt 12; $j++) {{\r\n\
-                 Start-Sleep -Milliseconds 500\r\n\
-                 if ($p.HasExited) {{\r\n\
-                     $crashed = $true\r\n\
-                     break\r\n\
-                 }}\r\n\
-             }}\r\n\
-             \r\n\
-             # 5. Rollback on genuine crash during initial boot\r\n\
-             if ($crashed -and (Test-Path $old)) {{\r\n\
-                 Write-Log \"Process crashed during stability monitoring. Rolling back...\"\r\n\
-                 Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue\r\n\
-                 Start-Sleep -Milliseconds 500\r\n\
-                 Move-Item -Path $old -Destination $exe -Force\r\n\
-                 Start-Process -FilePath $exe -WorkingDirectory $dir -ArgumentList \"--rollback-recovery\"\r\n\
-                 Write-Log \"Rolled back to $old and launched recovery.\"\r\n\
-             }} else {{\r\n\
-                 Write-Log \"Application stable. Cleaning up $old...\"\r\n\
-                 Start-Sleep -Milliseconds 2000\r\n\
-                 if (Test-Path $old) {{\r\n\
-                     Remove-Item -Path $old -Force -ErrorAction SilentlyContinue\r\n\
-                 }}\r\n\
-                 Write-Log \"Update process completed successfully.\"\r\n\
-             }}\r\n",
+            r#"# Downex Self-Healing Watchdog Supervisor
+$oldPid = {pid}
+$exe = '{exe}'
+$old = '{old}'
+$dir = '{dir}'
+$log = Join-Path $env:TEMP 'com.downex.manager\watchdog.log'
+
+function Write-Log($msg) {{
+    $ts = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss.fff')
+    Add-Content -Path $log -Value "[$ts] $msg" -ErrorAction SilentlyContinue
+}}
+
+Write-Log "Watchdog started for PID $oldPid. Target exe: $exe"
+
+# 1. Wait for old parent process to exit completely (up to 3s)
+$terminated = $false
+for ($i = 0; $i -lt 30; $i++) {{
+    if (-not (Get-Process -Id $oldPid -ErrorAction SilentlyContinue)) {{
+        $terminated = $true
+        break
+    }}
+    Start-Sleep -Milliseconds 100
+}}
+if (-not $terminated) {{
+    Write-Log "Old PID $oldPid did not exit within 3s. Force terminating..."
+    Stop-Process -Id $oldPid -Force -ErrorAction SilentlyContinue
+    Start-Sleep -Milliseconds 400
+}}
+Write-Log "Old PID $oldPid terminated."
+
+# 2. Terminate any lingering background Downex instances so port 18888, single-instance pipes, and WebView2 locks are clean
+Get-Process -Name "Downex","downex" -ErrorAction SilentlyContinue | Where-Object {{ $_.Id -ne $PID }} | Stop-Process -Force -ErrorAction SilentlyContinue
+Start-Sleep -Milliseconds 600
+
+# 3. Launch updated application binary (with retry)
+$p = $null
+for ($attempt = 1; $attempt -le 3; $attempt++) {{
+    Write-Log "Launch attempt $attempt for $exe..."
+    $p = Start-Process -FilePath $exe -WorkingDirectory $dir -ArgumentList "--restarted-after-update" -PassThru
+    Start-Sleep -Milliseconds 1500
+    if ($p) {{
+        $proc = Get-Process -Id $p.Id -ErrorAction SilentlyContinue
+        if ($proc -and (-not $proc.HasExited)) {{
+            Write-Log "Application launched successfully with PID $($p.Id)."
+            break
+        }}
+    }}
+    Write-Log "Attempt $attempt process not confirmed running. Waiting before retry..."
+    Start-Sleep -Milliseconds 1000
+}}
+
+$proc = $null
+if ($p) {{
+    $proc = Get-Process -Id $p.Id -ErrorAction SilentlyContinue
+}}
+if (-not $proc -or $proc.HasExited) {{
+    Write-Log "Failed to start updated binary after 3 attempts. Initiating rollback..."
+    if (Test-Path $old) {{
+        Move-Item -Path $old -Destination $exe -Force
+        Start-Process -FilePath $exe -WorkingDirectory $dir -ArgumentList "--rollback-recovery"
+        Write-Log "Rolled back to $old and restarted."
+    }}
+    exit
+}}
+
+# 4. Verify initial health and clean up old binary
+Start-Sleep -Milliseconds 2500
+$finalCheck = Get-Process -Id $p.Id -ErrorAction SilentlyContinue
+if ($finalCheck -and (-not $finalCheck.HasExited)) {{
+    Write-Log "Application healthy and stable with PID $($p.Id). Cleaning up $old..."
+    if (Test-Path $old) {{
+        Remove-Item -Path $old -Force -ErrorAction SilentlyContinue
+    }}
+    Write-Log "Update process completed successfully."
+}} else {{
+    Write-Log "Application exited unexpectedly during startup check. Initiating recovery..."
+    if (Test-Path $old) {{
+        Move-Item -Path $old -Destination $exe -Force
+        Start-Process -FilePath $exe -WorkingDirectory $dir -ArgumentList "--rollback-recovery"
+        Write-Log "Rolled back to $old and launched recovery."
+    }}
+}}
+"#,
             pid = pid,
             exe = exe_str,
             old = old_str,
@@ -904,7 +962,7 @@ pub fn show_download_dialog<R: tauri::Runtime>(app: &tauri::AppHandle<R>, payloa
         let builder = tauri::WebviewWindowBuilder::new(
             app,
             "download_dialog",
-            tauri::WebviewUrl::App("index.html?window=download_dialog".into()),
+            tauri::WebviewUrl::default(),
         )
         .title("Downex - Download File Info")
         .inner_size(540.0, 440.0)
@@ -1075,7 +1133,7 @@ pub fn show_download_complete<R: tauri::Runtime>(app: &tauri::AppHandle<R>, payl
         let builder = tauri::WebviewWindowBuilder::new(
             app,
             "download_complete",
-            tauri::WebviewUrl::App("index.html?window=download_complete".into()),
+            tauri::WebviewUrl::default(),
         )
         .title("Download complete")
         .inner_size(520.0, 310.0)
@@ -1115,6 +1173,103 @@ pub fn cmd_close_download_complete(app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+static LAST_RESTARTING_PAYLOAD: Mutex<Option<serde_json::Value>> = Mutex::new(None);
 
+pub fn show_restarting_window(
+    app: &AppHandle,
+    target_version: Option<String>,
+    staging_path: Option<String>,
+) {
+    let clean_ver = target_version.clone().unwrap_or_else(|| "latest".to_string());
+    let payload = serde_json::json!({
+        "target_version": clean_ver,
+        "staging_path": staging_path.clone().unwrap_or_default(),
+    });
 
+    if let Ok(mut lock) = LAST_RESTARTING_PAYLOAD.lock() {
+        *lock = Some(payload.clone());
+    }
 
+    // 1. Immediately hide main application window and any child dialogs so the old app closes from view
+    if let Some(main_win) = app.get_webview_window("main") {
+        let _ = main_win.hide();
+    }
+    if let Some(dlg) = app.get_webview_window("download_dialog") {
+        let _ = dlg.hide();
+    }
+    if let Some(dlg) = app.get_webview_window("download_complete") {
+        let _ = dlg.hide();
+    }
+
+    // 2. Open or restore dedicated restarting window
+    if let Some(window) = app.get_webview_window("restarting") {
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.center();
+        let _ = window.set_always_on_top(true);
+        let _ = window.set_focus();
+    } else {
+        let builder = tauri::WebviewWindowBuilder::new(
+            app,
+            "restarting",
+            tauri::WebviewUrl::default(),
+        )
+        .title("Downex - Restarting Services")
+        .inner_size(480.0, 480.0)
+        .decorations(false)
+        .transparent(false)
+        .shadow(true)
+        .center()
+        .resizable(false)
+        .always_on_top(true)
+        .visible(true);
+
+        let _ = builder.build();
+    }
+
+    let _ = app.emit("open-restarting-modal", &payload);
+
+    // 3. Native Safety Watchdog: Spawns a background thread to ensure atomic swap executes even if UI timers stall
+    let app_handle = app.clone();
+    let staging_fallback = staging_path.clone();
+    let target_fallback = target_version.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(10000));
+        let _ = cmd_apply_in_process_update(
+            app_handle,
+            None,
+            staging_fallback,
+            target_fallback,
+        );
+    });
+}
+
+#[tauri::command]
+pub fn cmd_show_restarting_window(
+    app: AppHandle,
+    target_version: Option<String>,
+    staging_path: Option<String>,
+) -> Result<(), String> {
+    show_restarting_window(&app, target_version, staging_path);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn cmd_get_restarting_payload() -> Option<serde_json::Value> {
+    LAST_RESTARTING_PAYLOAD.lock().ok().and_then(|g| g.clone())
+}
+
+#[tauri::command]
+pub async fn cmd_get_patch_notes(state: State<'_, AppState>) -> Result<Vec<crate::db::PatchNoteRecord>, String> {
+    state.db.get_all_patch_notes().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn cmd_save_patch_note(note: crate::db::PatchNoteRecord, state: State<'_, AppState>) -> Result<(), String> {
+    state.db.save_patch_note(&note).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn cmd_delete_patch_note(version: String, state: State<'_, AppState>) -> Result<(), String> {
+    state.db.delete_patch_note(&version).map_err(|e| e.to_string())
+}

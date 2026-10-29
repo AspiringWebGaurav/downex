@@ -108,13 +108,13 @@ async function uploadToGPHost(bytes, filename, slug) {
     headers: {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${GPHOST_API_KEY}`,
-      'User-Agent': 'curl/8.4.0',
+      'User-Agent': 'Downex-ReleasePipeline/1.0 (Windows NT 10.0; Win64; x64)',
     },
     body: JSON.stringify({
       filename,
       byteSize: bytes.length,
       mimeType: 'application/zip',
-      folder: 'downex',
+      folder: 'downex-immutable-base',
       slug,
       noShareLink: false,
       isPermanent: true,
@@ -144,12 +144,14 @@ async function uploadToGPHost(bytes, filename, slug) {
     headers: {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${GPHOST_API_KEY}`,
-      'User-Agent': 'curl/8.4.0',
+      'User-Agent': 'Downex-ReleasePipeline/1.0 (Windows NT 10.0; Win64; x64)',
     },
     body: JSON.stringify({
       fileId,
+      slug: 'downex-extension',
       noShareLink: false,
       isPermanent: true,
+      expiry_preset: 'never',
     }),
   });
 
@@ -172,7 +174,7 @@ let shareUrl = `https://gphost.eu.cc/d/downex-extension`;
 
 try {
   const fileRes = await fetch(`https://gphost.eu.cc/api/v1/files/${fileId}`, {
-    headers: { Authorization: `Bearer ${GPHOST_API_KEY}`, 'User-Agent': 'curl/8.4.0' },
+    headers: { Authorization: `Bearer ${GPHOST_API_KEY}`, 'User-Agent': 'Downex-ReleasePipeline/1.0 (Windows NT 10.0; Win64; x64)' },
   });
   if (fileRes.ok) {
     const fileData = await fileRes.json();
@@ -190,7 +192,7 @@ console.log('\n[4/4] Verifying public availability...');
 try {
   const probe = await fetch(rawUrl, {
     method: 'GET',
-    headers: { 'User-Agent': 'curl/8.4.0', Range: 'bytes=0-512' },
+    headers: { 'User-Agent': 'Downex-ReleasePipeline/1.0 (Windows NT 10.0; Win64; x64)', Range: 'bytes=0-512' },
   });
   if (probe.ok || probe.status === 206) {
     console.log(`  ✓ Smoke test passed: Direct download accessible at ${rawUrl} (HTTP ${probe.status})`);

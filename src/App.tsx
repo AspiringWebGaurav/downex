@@ -10,6 +10,7 @@ import { useAppVersionStore } from './stores/appVersionStore';
 import { UpdateModal } from './components/UpdateModal';
 import { UpdateNotification } from './components/UpdateNotification';
 import { PatchNotesModal } from './components/PatchNotesModal';
+import { RestartingModal } from './components/RestartingModal';
 import { SettingsView } from './components/SettingsView';
 import { onOpenNewDownloadModal, showDownloadDialog, onNavigate, onCheckUpdatesFromTray, notifyDomReady } from './services/tauriService';
 import './App.css';
@@ -42,13 +43,23 @@ export const App: React.FC = () => {
     // Re-check updates when window regains focus if > 30s elapsed (GPN pattern)
     let lastFocusCheck = Date.now();
     const handleFocus = () => {
+      // Clear any stuck button focus state upon window regaining focus
+      if (document.activeElement instanceof HTMLElement && document.activeElement !== document.getElementById('search-input')) {
+        document.activeElement.blur();
+      }
       const now = Date.now();
       if (now - lastFocusCheck > 30000) {
         lastFocusCheck = now;
         useAppVersionStore.getState().checkForUpdates(true);
       }
     };
+    const handleBlur = () => {
+      if (document.activeElement instanceof HTMLElement && document.activeElement !== document.getElementById('search-input')) {
+        document.activeElement.blur();
+      }
+    };
     window.addEventListener('focus', handleFocus);
+    window.addEventListener('blur', handleBlur);
 
     // Notify native Rust backend that DOM is rendered: Rust reveals the window
     // smoothly if interactive boot, or keeps window hidden if --background/--silent boot
@@ -56,6 +67,7 @@ export const App: React.FC = () => {
 
     return () => {
       window.removeEventListener('focus', handleFocus);
+      window.removeEventListener('blur', handleBlur);
       unlisten();
     };
   }, [initVersion, loadItems, initListener]);
@@ -176,6 +188,7 @@ export const App: React.FC = () => {
       <UpdateModal />
       <UpdateNotification />
       <PatchNotesModal />
+      <RestartingModal />
     </div>
   );
 };
