@@ -1055,7 +1055,7 @@ pub fn show_download_dialog<R: tauri::Runtime>(app: &tauri::AppHandle<R>, payloa
             tauri::WebviewUrl::default(),
         )
         .title("Downex - Download File Info")
-        .inner_size(540.0, 440.0)
+        .inner_size(580.0, 440.0)
         .decorations(false)
         .transparent(false)
         .shadow(true)

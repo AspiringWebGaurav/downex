@@ -288,7 +288,7 @@ export const NewDownloadModal: React.FC<{ isStandalone?: boolean }> = ({ isStand
     <div className={`flex flex-col bg-white dark:bg-zinc-900 overflow-hidden ${
       isStandalone 
         ? 'w-full h-full' 
-        : 'w-[520px] rounded-xl border border-zinc-200 dark:border-zinc-800 shadow-2xl animate-in fade-in zoom-in-95 duration-150'
+        : 'w-[580px] rounded-xl border border-zinc-200 dark:border-zinc-800 shadow-2xl animate-in fade-in zoom-in-95 duration-150'
     }`}>
       {/* Title Bar */}
       <div 
@@ -308,7 +308,7 @@ export const NewDownloadModal: React.FC<{ isStandalone?: boolean }> = ({ isStand
                 <span className="absolute inline-flex h-full w-full rounded-full bg-emerald-400/80 animate-ping pointer-events-none" />
                 <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-emerald-500 shadow-[0_0_4px_rgba(16,185,129,0.8)]" />
               </span>
-              <span>Probing link...</span>
+              <span>Checking file size...</span>
             </span>
           )}
         </div>
@@ -359,29 +359,29 @@ export const NewDownloadModal: React.FC<{ isStandalone?: boolean }> = ({ isStand
           </div>
         </div>
 
-        {/* Row 2: Vital Metrics (Size & Acceleration Engine) */}
+        {/* Row 2: File Size & Download Parts */}
         <div className="grid grid-cols-2 gap-3">
-          {/* Card 1: File Size & Range Support */}
-          <div className="p-3 rounded-lg bg-zinc-50/70 dark:bg-zinc-950/50 border border-zinc-200/80 dark:border-zinc-800/80 flex flex-col justify-between gap-1">
-            <span className="text-[11px] font-medium text-zinc-500 dark:text-zinc-400">File Size</span>
-            <div className="text-sm font-semibold font-mono text-zinc-900 dark:text-zinc-100 tracking-tight">
+          {/* Card 1: File Size (Larger Digit) */}
+          <div className="p-3.5 rounded-xl bg-zinc-50/80 dark:bg-zinc-950/60 border border-zinc-200/90 dark:border-zinc-800/90 flex flex-col justify-between gap-1.5">
+            <span className="text-[11px] font-semibold text-zinc-500 dark:text-zinc-400">File Size</span>
+            <div className="text-xl font-bold font-mono text-zinc-900 dark:text-zinc-100 tracking-tight">
               {formatBytes(totalBytes)}
             </div>
-            <span className="text-[11px] text-emerald-600 dark:text-emerald-400 font-medium flex items-center gap-1">
-              {supportsRanges ? <CheckCircle2 className="w-3 h-3 shrink-0" /> : <AlertCircle className="w-3 h-3 text-amber-500 shrink-0" />}
-              {supportsRanges ? 'Resume supported' : 'Single connection'}
+            <span className="text-[11px] text-emerald-600 dark:text-emerald-400 font-medium flex items-center gap-1.5">
+              {supportsRanges ? <CheckCircle2 className="w-3.5 h-3.5 shrink-0" /> : <AlertCircle className="w-3.5 h-3.5 text-amber-500 shrink-0" />}
+              <span>{supportsRanges ? 'Can pause and resume' : 'Cannot pause or resume'}</span>
             </span>
           </div>
 
-          {/* Card 2: Acceleration */}
-          <div className="p-3 rounded-lg bg-zinc-50/70 dark:bg-zinc-950/50 border border-zinc-200/80 dark:border-zinc-800/80 flex flex-col justify-between gap-1">
-            <span className="text-[11px] font-medium text-zinc-500 dark:text-zinc-400">Transfer</span>
-            <div className="flex items-center gap-1.5 text-sm font-semibold font-mono text-zinc-900 dark:text-zinc-100">
-              <Layers className="w-3.5 h-3.5 text-sky-500 shrink-0" />
-              <span>{supportsRanges ? '8 Connections' : '1 Connection'}</span>
+          {/* Card 2: Download Parts */}
+          <div className="p-3.5 rounded-xl bg-zinc-50/80 dark:bg-zinc-950/60 border border-zinc-200/90 dark:border-zinc-800/90 flex flex-col justify-between gap-1.5">
+            <span className="text-[11px] font-semibold text-zinc-500 dark:text-zinc-400">Download Parts</span>
+            <div className="flex items-center gap-2 text-xl font-bold font-mono text-zinc-900 dark:text-zinc-100 tracking-tight">
+              <Layers className="w-4 h-4 text-sky-500 shrink-0" />
+              <span>{supportsRanges ? '8 Parts' : '1 Part'}</span>
             </div>
-            <span className="text-[11px] text-zinc-400 dark:text-zinc-500 truncate">
-              {supportsRanges ? 'Accelerated download' : 'Standard download'}
+            <span className="text-[11px] text-zinc-500 dark:text-zinc-400 truncate">
+              {supportsRanges ? 'Downloads in 8 parts at once' : 'Downloads in 1 part'}
             </span>
           </div>
         </div>
@@ -489,7 +489,7 @@ export const NewDownloadModal: React.FC<{ isStandalone?: boolean }> = ({ isStand
             size="md"
             icon={<Download className="w-3.5 h-3.5 stroke-[2.5]" />}
             loading={submitting}
-            loadingText="Connecting..."
+            loadingText="Starting download..."
             disabled={!url.trim()}
             onClick={() => handleCreateDownload(true)}
           >
