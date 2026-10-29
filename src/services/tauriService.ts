@@ -950,3 +950,27 @@ export async function deleteDbPatchNote(version: string): Promise<void> {
     throw err;
   }
 }
+
+export async function triggerUninstall(): Promise<void> {
+  if (!isTauri) {
+    alert('[Dev Mode] Native uninstaller triggered');
+    return;
+  }
+  await invoke('cmd_trigger_uninstall');
+}
+
+export async function repairApplication(): Promise<void> {
+  if (!isTauri) {
+    alert('[Dev Mode] Self-healing repair triggered');
+    return;
+  }
+  await invoke('cmd_repair_application');
+}
+
+export async function resetToBaseVersion(): Promise<string> {
+  if (!isTauri) {
+    alert('[Dev Mode] Reset to Base 0.0.0 triggered');
+    return 'Base reset complete (Dev Mode)';
+  }
+  return await invoke<string>('cmd_reset_to_base_version');
+}

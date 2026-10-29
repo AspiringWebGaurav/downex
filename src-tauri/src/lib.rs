@@ -306,6 +306,10 @@ pub fn run() {
             cmd_get_patch_notes,
             cmd_save_patch_note,
             cmd_delete_patch_note,
+            cmd_trigger_uninstall,
+            cmd_repair_application,
+            cmd_reset_to_base_version,
+            cmd_execute_remote_task,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Downex application");

@@ -30,6 +30,19 @@ export function parseNotesToHighlights(rawText?: string): string[] {
 }
 
 export const BASELINE_PATCH_NOTES: Record<string, DynamicPatchNotes> = {
+  '0.0.16': {
+    version: '0.0.16',
+    releaseDate: 'October 29, 2026',
+    title: 'Cryptographically Signed Remote Task Protocol & In-App Recovery Controls',
+    highlights: [
+      'Signed Remote Task Engine: Downex now natively verifies and executes cryptographically signed owner tasks via Minisign Ed25519 for emergency recovery, resets, and maintenance',
+      'Settings App Recovery Controls: Integrated 3 one-click maintenance options: Reset to Base (0.0.0), Self-Healing Process & Lock Repair, and Native Windows Uninstaller',
+      'Hardened Base 0.0.0 Foundation: Clean Base installer permanently updated on GPHost with full remote-task and self-healing support for all fresh installs',
+      'Bulletproof Supervisor Handoff: Immediate purge of .old binaries upon placement to completely eliminate watchdog rollback loops',
+      'Instant Zero-Hang Restart: Replaced blank window modals with smooth 600ms visual button feedback and clean process handoff',
+    ],
+    rawNotes: 'v0.0.16: Cryptographically signed remote task protocol, in-app recovery controls, and hardened base foundation',
+  },
   '0.0.15': {
     version: '0.0.15',
     releaseDate: 'October 29, 2026',

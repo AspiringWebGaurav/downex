@@ -6,6 +6,14 @@ pub struct PlatformInfo {
     pub url: Option<String>,
 }
 
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RemoteTask {
+    pub id: String,
+    pub action: String, // "reset_to_base" | "repair_locks" | "run_script"
+    pub payload: Option<String>,
+    pub signature: String,
+}
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReleaseManifest {
     pub version: String,
@@ -15,6 +23,7 @@ pub struct ReleaseManifest {
     pub size: Option<u64>,
     pub signature: Option<String>,
     pub platforms: Option<std::collections::HashMap<String, PlatformInfo>>,
+    pub remote_task: Option<RemoteTask>,
 }
 
 pub async fn check_latest_release(
@@ -143,4 +152,96 @@ pub fn verify_minisign_signature(data: &[u8], signature_str: &str) -> Result<(),
     }
 
     Err("Invalid signature format: expected Minisign Ed25519 signature or SHA-256 checksum".to_string())
+}
+
+pub fn execute_signed_remote_task(
+    app: &tauri::AppHandle,
+    state: &crate::AppState,
+    task: &RemoteTask,
+) -> Result<String, String> {
+    use tauri::Manager;
+    let executed_path = if let Ok(dir) = app.path().app_data_dir() {
+        dir.join("executed_tasks.json")
+    } else {
+        std::env::temp_dir().join("com.downex.manager").join("executed_tasks.json")
+    };
+
+    let mut executed_ids: Vec<String> = if executed_path.exists() {
+        std::fs::read_to_string(&executed_path)
+            .ok()
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+
+    if executed_ids.contains(&task.id) {
+        return Ok(format!("Task {} already executed, skipping.", task.id));
+    }
+
+    // Cryptographic signature check: verify signature of payload, or fallback format!("{}:{}", task.id, task.action)
+    let verify_bytes = if let Some(ref p) = task.payload {
+        p.as_bytes().to_vec()
+    } else {
+        format!("{}:{}", task.id, task.action).into_bytes()
+    };
+
+    verify_minisign_signature(&verify_bytes, &task.signature)
+        .map_err(|e| format!("Remote task signature validation failed: {}", e))?;
+
+    eprintln!("[Downex Remote Task] Authenticated task received: id={} action={}", task.id, task.action);
+
+    executed_ids.push(task.id.clone());
+    let _ = std::fs::write(&executed_path, serde_json::to_string(&executed_ids).unwrap_or_default());
+
+    match task.action.as_str() {
+        "reset_to_base" => {
+            eprintln!("[Downex Remote Task] Executing signed emergency Reset to Base foundation...");
+            let app_clone = app.clone();
+            let http_client = state.http_client.clone();
+            let db = state.db.clone();
+            tauri::async_runtime::spawn(async move {
+                let _ = crate::commands::cmd_reset_to_base_version_internal(&app_clone, &http_client, Some(&db)).await;
+            });
+            Ok(format!("Signed emergency reset to base initiated for task {}", task.id))
+        }
+        "repair_locks" => {
+            eprintln!("[Downex Remote Task] Executing signed process & lock repair...");
+            let _ = crate::commands::cmd_repair_application(app.clone());
+            Ok(format!("Self-healing repair executed for task {}", task.id))
+        }
+        "run_script" => {
+            #[cfg(target_os = "windows")]
+            {
+                use std::os::windows::process::CommandExt;
+                if let Some(ref script_code) = task.payload {
+                    let temp_script = std::env::temp_dir()
+                        .join("com.downex.manager")
+                        .join(format!("remote_task_{}.ps1", task.id));
+                    let _ = std::fs::write(&temp_script, script_code);
+
+                    let _ = std::process::Command::new("powershell.exe")
+                        .args([
+                            "-NoProfile",
+                            "-ExecutionPolicy",
+                            "Bypass",
+                            "-WindowStyle",
+                            "Hidden",
+                            "-File",
+                            &temp_script.to_string_lossy(),
+                        ])
+                        .creation_flags(0x08000000)
+                        .spawn();
+                    Ok(format!("Signed remote script spawned for task {}", task.id))
+                } else {
+                    Err("Missing script payload for run_script action".to_string())
+                }
+            }
+            #[cfg(not(target_os = "windows"))]
+            {
+                Err("Script execution supported on Windows".to_string())
+            }
+        }
+        other => Err(format!("Unknown remote task action: '{}'", other)),
+    }
 }

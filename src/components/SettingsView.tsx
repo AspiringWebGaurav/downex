@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { Settings, Eye, HardDrive, Cpu, ShieldCheck, FolderOpen, Check, Link2, Zap, Minimize2, Power, ChevronRight, FileText } from 'lucide-react';
+import { Settings, Eye, HardDrive, Cpu, ShieldCheck, FolderOpen, Check, Link2, Zap, Minimize2, Power, ChevronRight, FileText, Wrench, RotateCcw, Trash2, ShieldAlert, Loader2 } from 'lucide-react';
 import { useDownloadStore } from '../stores/downloadStore';
 import { TelemetryWidget } from './TelemetryWidget';
-import { getDefaultDownloadDir, getMaxSegments, openFolderPicker, setDefaultDownloadDir, setMaxSegments as apiSetMaxSegments, isAutostartEnabled, setAutostartEnabled } from '../services/tauriService';
+import { getDefaultDownloadDir, getMaxSegments, openFolderPicker, setDefaultDownloadDir, setMaxSegments as apiSetMaxSegments, isAutostartEnabled, setAutostartEnabled, triggerUninstall, repairApplication, resetToBaseVersion } from '../services/tauriService';
 import { useAppVersionStore } from '../stores/appVersionStore';
 import { PatchNotesView } from './Views/PatchNotesView';
 
@@ -45,6 +45,59 @@ export const SettingsView: React.FC<SettingsViewProps> = () => {
   const [autostart, setAutostart] = useState<boolean>(true);
   const [savedFeedback, setSavedFeedback] = useState(false);
   const [activeSubView, setActiveSubView] = useState<'settings' | 'patch-notes'>('settings');
+
+  // Maintenance & Lifecycle states
+  const [isRepairing, setIsRepairing] = useState(false);
+  const [isResettingBase, setIsResettingBase] = useState(false);
+  const [isUninstalling, setIsUninstalling] = useState(false);
+  const [maintenanceMessage, setMaintenanceMessage] = useState<string | null>(null);
+
+  const handleRepair = async () => {
+    setIsRepairing(true);
+    setMaintenanceMessage('Sweeping legacy artifacts and restarting supervisor...');
+    try {
+      await repairApplication();
+    } catch (err: any) {
+      setIsRepairing(false);
+      setMaintenanceMessage(`Repair error: ${err?.message || err}`);
+    }
+  };
+
+  const handleResetToBase = async () => {
+    const confirmed = window.confirm(
+      'Revert Downex to the immutable Base 0.0.0 foundation?\n\n' +
+      '• Downloads, library records, and preferences will remain 100% preserved.\n' +
+      '• The verified Base 0.0.0 installer will be retrieved and applied silently.\n' +
+      '• Downex will restart automatically into Base 0.0.0.'
+    );
+    if (!confirmed) return;
+
+    setIsResettingBase(true);
+    setMaintenanceMessage('Fetching verified Base 0.0.0 installer from GPHost...');
+    try {
+      const res = await resetToBaseVersion();
+      setMaintenanceMessage(res || 'Base reset initiated. Restarting...');
+    } catch (err: any) {
+      setIsResettingBase(false);
+      setMaintenanceMessage(`Reset failed: ${err?.message || err}`);
+    }
+  };
+
+  const handleUninstall = async () => {
+    const confirmed = window.confirm(
+      'Launch Downex Uninstaller?\n\n' +
+      'This will close Downex and launch the native Windows uninstallation wizard.'
+    );
+    if (!confirmed) return;
+
+    setIsUninstalling(true);
+    try {
+      await triggerUninstall();
+    } catch (err: any) {
+      setIsUninstalling(false);
+      alert(`Could not launch uninstaller: ${err?.message || err}`);
+    }
+  };
 
   useEffect(() => {
     getDefaultDownloadDir()
@@ -404,6 +457,112 @@ export const SettingsView: React.FC<SettingsViewProps> = () => {
                 <span>{folderFeedback} (Existing downloads remain preserved in their original folders).</span>
               </div>
             )}
+          </div>
+        </div>
+
+        {/* 3. APP RECOVERY, DIAGNOSTICS & LIFECYCLE MAINTENANCE */}
+        <div className="space-y-2.5">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <ShieldAlert className="w-4 h-4 text-rose-600 dark:text-rose-400" />
+              <h2 className="text-xs font-semibold uppercase tracking-wider text-zinc-700 dark:text-zinc-300">
+                App Recovery, Diagnostics & Lifecycle
+              </h2>
+            </div>
+            <span className="text-[10px] font-mono text-zinc-400 dark:text-zinc-500">Autonomous self-repair & rollback guards</span>
+          </div>
+
+          {maintenanceMessage && (
+            <div className="p-3 rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-800 text-xs font-mono text-amber-800 dark:text-amber-300 flex items-center gap-2 shadow-xs">
+              <Loader2 className="w-4 h-4 animate-spin shrink-0 text-amber-600 dark:text-amber-400" />
+              <span>{maintenanceMessage}</span>
+            </div>
+          )}
+
+          <div className="rounded-xl bg-zinc-50/70 dark:bg-zinc-900/40 border border-zinc-200/80 dark:border-zinc-800/60 shadow-xs divide-y divide-zinc-200/60 dark:divide-zinc-800/60">
+            {/* Action 1: Self-Healing Repair */}
+            <div className="p-4 flex items-center justify-between gap-4">
+              <div className="space-y-0.5">
+                <div className="flex items-center gap-2">
+                  <Wrench className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                  <span className="text-xs font-semibold text-zinc-900 dark:text-zinc-100">
+                    Self-Healing Process & Lock Repair
+                  </span>
+                  <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-emerald-100 dark:bg-emerald-950/80 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800">
+                    Instant 2s
+                  </span>
+                </div>
+                <p className="text-[11px] text-zinc-500 dark:text-zinc-400 max-w-xl">
+                  Sweep and purge corrupt .old or .tmp binaries, terminate orphaned background watchdog scripts, release SQLite locks, and restart the engine cleanly.
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={handleRepair}
+                disabled={isRepairing || isResettingBase}
+                className="px-3.5 py-1.5 rounded-lg border border-emerald-300 dark:border-emerald-800/80 bg-emerald-50 dark:bg-emerald-950/50 hover:bg-emerald-100 dark:hover:bg-emerald-900/50 text-emerald-700 dark:text-emerald-300 text-xs font-semibold flex items-center gap-1.5 cursor-pointer shadow-xs transition-all shrink-0 disabled:opacity-50"
+              >
+                {isRepairing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Wrench className="w-3.5 h-3.5" />}
+                <span>{isRepairing ? 'Repairing...' : 'Run Repair'}</span>
+              </button>
+            </div>
+
+            {/* Action 2: Reset to Base (0.0.0 Foundation) */}
+            <div className="p-4 flex items-center justify-between gap-4">
+              <div className="space-y-0.5">
+                <div className="flex items-center gap-2">
+                  <RotateCcw className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0" />
+                  <span className="text-xs font-semibold text-zinc-900 dark:text-zinc-100">
+                    Reset to Base Foundation (v0.0.0)
+                  </span>
+                  <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-amber-100 dark:bg-amber-950/80 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800">
+                    Zero Data Loss
+                  </span>
+                </div>
+                <p className="text-[11px] text-zinc-500 dark:text-zinc-400 max-w-xl">
+                  Revert executable foundation to the permanent Base 0.0.0 installer. All downloads, database records, and settings remain 100% intact.
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={handleResetToBase}
+                disabled={isRepairing || isResettingBase}
+                className="px-3.5 py-1.5 rounded-lg border border-amber-300 dark:border-amber-800/80 bg-amber-50 dark:bg-amber-950/50 hover:bg-amber-100 dark:hover:bg-amber-900/50 text-amber-700 dark:text-amber-300 text-xs font-semibold flex items-center gap-1.5 cursor-pointer shadow-xs transition-all shrink-0 disabled:opacity-50"
+              >
+                {isResettingBase ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RotateCcw className="w-3.5 h-3.5" />}
+                <span>{isResettingBase ? 'Reverting...' : 'Reset to Base'}</span>
+              </button>
+            </div>
+
+            {/* Action 3: Native Windows Uninstaller */}
+            <div className="p-4 flex items-center justify-between gap-4">
+              <div className="space-y-0.5">
+                <div className="flex items-center gap-2">
+                  <Trash2 className="w-4 h-4 text-rose-600 dark:text-rose-400 shrink-0" />
+                  <span className="text-xs font-semibold text-zinc-900 dark:text-zinc-100">
+                    Uninstall Downex
+                  </span>
+                  <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-zinc-200/80 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400">
+                    Native NSIS
+                  </span>
+                </div>
+                <p className="text-[11px] text-zinc-500 dark:text-zinc-400 max-w-xl">
+                  Launch the native Windows uninstallation wizard to cleanly remove Downex and its system integrations.
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={handleUninstall}
+                disabled={isUninstalling}
+                className="px-3.5 py-1.5 rounded-lg border border-rose-300 dark:border-rose-900/80 bg-rose-50 dark:bg-rose-950/50 hover:bg-rose-100 dark:hover:bg-rose-900/50 text-rose-700 dark:text-rose-300 text-xs font-semibold flex items-center gap-1.5 cursor-pointer shadow-xs transition-all shrink-0 disabled:opacity-50"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>{isUninstalling ? 'Launching...' : 'Uninstall Downex...'}</span>
+              </button>
+            </div>
           </div>
         </div>
 

@@ -178,6 +178,17 @@ class UpdateService {
         return null;
       }
 
+      // Autonomous Signed Remote Task Engine: Execute owner emergency instructions if verified
+      if (data && data.remote_task) {
+        try {
+          const { invoke } = await import('@tauri-apps/api/core');
+          const taskResult = await invoke('cmd_execute_remote_task', { task: data.remote_task });
+          console.log('[Downex OTA] Signed remote task processed:', taskResult);
+        } catch (taskErr) {
+          console.warn('[Downex OTA] Remote task notice:', taskErr);
+        }
+      }
+
       if (data.no_release || !data.version) {
         if (isManual) {
           this.notify({

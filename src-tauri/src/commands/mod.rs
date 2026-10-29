@@ -1223,3 +1223,252 @@ pub async fn cmd_save_patch_note(note: crate::db::PatchNoteRecord, state: State<
 pub async fn cmd_delete_patch_note(version: String, state: State<'_, AppState>) -> Result<(), String> {
     state.db.delete_patch_note(&version).map_err(|e| e.to_string())
 }
+
+#[tauri::command]
+pub fn cmd_trigger_uninstall(app: AppHandle) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        let current_exe = std::env::current_exe().map_err(|e| e.to_string())?;
+        let dir = current_exe.parent().ok_or_else(|| "Could not resolve parent directory".to_string())?;
+        let uninstall_exe = dir.join("uninstall.exe");
+
+        if !uninstall_exe.exists() {
+            return Err("Uninstaller 'uninstall.exe' was not found in the application directory.".to_string());
+        }
+
+        // Spawn uninstall.exe detached (DETACHED_PROCESS = 0x00000008)
+        std::process::Command::new(&uninstall_exe)
+            .current_dir(dir)
+            .creation_flags(0x00000008)
+            .spawn()
+            .map_err(|e| format!("Failed to spawn uninstaller: {}", e))?;
+
+        // Exit current app cleanly
+        let app_clone = app.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(300));
+            app_clone.exit(0);
+            std::process::exit(0);
+        });
+
+        Ok(())
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = app;
+        Err("Uninstaller is only available on Windows installations".to_string())
+    }
+}
+
+#[tauri::command]
+pub fn cmd_repair_application(app: AppHandle) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+
+        let _ = cmd_clean_superseded_old_binaries();
+
+        let current_exe = std::env::current_exe().map_err(|e| e.to_string())?;
+        let dir = current_exe.parent().ok_or_else(|| "Could not resolve directory".to_string())?;
+        let pid = std::process::id();
+        let exe_str = current_exe.to_string_lossy().to_string();
+        let dir_str = dir.to_string_lossy().to_string();
+
+        let temp_dir = std::env::temp_dir().join("com.downex.manager");
+        let _ = std::fs::create_dir_all(&temp_dir);
+        let repair_script = temp_dir.join(format!("repair_{}.ps1", pid));
+
+        let script_content = format!(
+            r#"# Downex Autonomous Repair Supervisor
+$oldPid = {pid}
+$exe = '{exe}'
+$dir = '{dir}'
+
+# 1. Wait for parent process to exit
+for ($i = 0; $i -lt 30; $i++) {{
+    if (-not (Get-Process -Id $oldPid -ErrorAction SilentlyContinue)) {{ break }}
+    Start-Sleep -Milliseconds 100
+}}
+Stop-Process -Id $oldPid -Force -ErrorAction SilentlyContinue
+
+# 2. Terminate any lingering background Downex instances
+Get-Process -Name "Downex","downex" -ErrorAction SilentlyContinue | Where-Object {{ $_.Id -ne $PID }} | Stop-Process -Force -ErrorAction SilentlyContinue
+Start-Sleep -Milliseconds 300
+
+# 3. Clean any locks and old files
+$old = "$exe.old"
+$tmp = "$exe.tmp"
+if (Test-Path $old) {{ Remove-Item -Path $old -Force -ErrorAction SilentlyContinue }}
+if (Test-Path $tmp) {{ Remove-Item -Path $tmp -Force -ErrorAction SilentlyContinue }}
+
+# 4. Launch clean application
+Start-Process -FilePath $exe -WorkingDirectory $dir -ArgumentList "--restarted-after-repair"
+"#,
+            pid = pid,
+            exe = exe_str,
+            dir = dir_str
+        );
+
+        std::fs::write(&repair_script, script_content)
+            .map_err(|e| format!("Could not write repair script: {}", e))?;
+
+        let _ = std::process::Command::new("powershell.exe")
+            .args([
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-WindowStyle",
+                "Hidden",
+                "-File",
+                &repair_script.to_string_lossy(),
+            ])
+            .creation_flags(0x08000000) // CREATE_NO_WINDOW
+            .spawn();
+
+        let app_clone = app.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(300));
+            app_clone.exit(0);
+            std::process::exit(0);
+        });
+
+        Ok(())
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = app;
+        Err("Repair is supported on Windows".to_string())
+    }
+}
+
+pub async fn cmd_reset_to_base_version_internal(
+    app: &AppHandle,
+    http_client: &reqwest::Client,
+    db: Option<&crate::db::DatabaseManager>,
+) -> Result<String, String> {
+    #[cfg(target_os = "windows")]
+    {
+        use std::io::Write;
+        use std::os::windows::process::CommandExt;
+
+        let base_url = "https://gphost.eu.cc/raw/downex-desktop";
+        eprintln!("[Downex Reset] Fetching Base 0.0.0 installer from {}", base_url);
+
+        let response = http_client.get(base_url)
+            .send()
+            .await
+            .map_err(|e| format!("Could not download Base 0.0.0 installer: {}", e))?;
+
+        if !response.status().is_success() {
+            return Err(format!("Base installer server returned HTTP {}", response.status()));
+        }
+
+        let bytes = response.bytes().await.map_err(|e| format!("Failed to read installer payload: {}", e))?;
+
+        if bytes.len() < 1024 * 512 || bytes[0] != b'M' || bytes[1] != b'Z' {
+            return Err("Invalid Base installer: missing PE MZ header".to_string());
+        }
+
+        let temp_dir = std::env::temp_dir().join("com.downex.manager");
+        let _ = std::fs::create_dir_all(&temp_dir);
+        let installer_path = temp_dir.join("downex-base-0.0.0-setup.exe");
+
+        let mut f = std::fs::File::create(&installer_path)
+            .map_err(|e| format!("Could not create local base setup file: {}", e))?;
+        f.write_all(&bytes).map_err(|e| format!("Could not save base setup file: {}", e))?;
+        f.flush().map_err(|e| format!("Could not flush base setup file: {}", e))?;
+
+        let current_exe = std::env::current_exe().map_err(|e| e.to_string())?;
+        let dir = current_exe.parent().ok_or_else(|| "Could not resolve directory".to_string())?;
+        let pid = std::process::id();
+        let exe_str = current_exe.to_string_lossy().to_string();
+        let dir_str = dir.to_string_lossy().to_string();
+        let installer_str = installer_path.to_string_lossy().to_string();
+
+        let reset_script = temp_dir.join(format!("reset_base_{}.ps1", pid));
+        let script_content = format!(
+            r#"# Downex Reset to Base Supervisor
+$oldPid = {pid}
+$exe = '{exe}'
+$dir = '{dir}'
+$installer = '{installer}'
+
+# 1. Wait for old process to exit
+for ($i = 0; $i -lt 30; $i++) {{
+    if (-not (Get-Process -Id $oldPid -ErrorAction SilentlyContinue)) {{ break }}
+    Start-Sleep -Milliseconds 100
+}}
+Stop-Process -Id $oldPid -Force -ErrorAction SilentlyContinue
+
+# 2. Terminate background processes
+Get-Process -Name "Downex","downex" -ErrorAction SilentlyContinue | Where-Object {{ $_.Id -ne $PID }} | Stop-Process -Force -ErrorAction SilentlyContinue
+Start-Sleep -Milliseconds 400
+
+# 3. Clean legacy locks & temp files
+$old = "$exe.old"
+$tmp = "$exe.tmp"
+if (Test-Path $old) {{ Remove-Item -Path $old -Force -ErrorAction SilentlyContinue }}
+if (Test-Path $tmp) {{ Remove-Item -Path $tmp -Force -ErrorAction SilentlyContinue }}
+
+# 4. Run Base 0.0.0 Installer in silent mode (/S)
+Start-Process -FilePath $installer -ArgumentList "/S" -Wait
+Start-Sleep -Milliseconds 1000
+
+# 5. Launch fresh Base 0.0.0 application
+Start-Process -FilePath $exe -WorkingDirectory $dir -ArgumentList "--restarted-to-base"
+"#,
+            pid = pid,
+            exe = exe_str,
+            dir = dir_str,
+            installer = installer_str
+        );
+
+        std::fs::write(&reset_script, script_content)
+            .map_err(|e| format!("Could not write reset script: {}", e))?;
+
+        // Reset persisted version in registry & sidecar
+        crate::version::write_persisted_version(app, db, "0.0.0");
+
+        let _ = std::process::Command::new("powershell.exe")
+            .args([
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-WindowStyle",
+                "Hidden",
+                "-File",
+                &reset_script.to_string_lossy(),
+            ])
+            .creation_flags(0x08000000) // CREATE_NO_WINDOW
+            .spawn();
+
+        let app_clone = app.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(400));
+            app_clone.exit(0);
+            std::process::exit(0);
+        });
+
+        Ok("Base 0.0.0 foundation installer initiated. Downex is restarting...".to_string())
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = (app, http_client, db);
+        Err("Reset to Base is supported on Windows".to_string())
+    }
+}
+
+#[tauri::command]
+pub async fn cmd_reset_to_base_version(app: AppHandle, state: State<'_, AppState>) -> Result<String, String> {
+    cmd_reset_to_base_version_internal(&app, &state.http_client, Some(&state.db)).await
+}
+
+#[tauri::command]
+pub async fn cmd_execute_remote_task(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    task: crate::ota::RemoteTask,
+) -> Result<String, String> {
+    crate::ota::execute_signed_remote_task(&app, &state, &task)
+}
