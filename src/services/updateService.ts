@@ -668,6 +668,24 @@ class UpdateService {
       });
     }
   }
+
+  /**
+   * Seamless 1-Click Update Pipeline:
+   * 1. Download authenticated container with live pacing
+   * 2. Verify Minisign Ed25519 signature & decrypt AES-256 payload
+   * 3. Stage executable to disk
+   * 4. Automatically trigger atomic swap and restart with live visual feedback
+   */
+  public async downloadAndApplyUpdate(): Promise<boolean> {
+    const downloaded = await this.downloadUpdate();
+    if (!downloaded || this.status.state === 'error') {
+      return false;
+    }
+    // Give user brief 600ms visual confirmation of stage completion before handoff
+    await new Promise((r) => setTimeout(r, 600));
+    await this.installAndRestart();
+    return true;
+  }
 }
 
 export const updateService = new UpdateService();

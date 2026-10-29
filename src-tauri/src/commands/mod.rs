@@ -769,30 +769,45 @@ if (-not $inProcessOk -and (Test-Path $staged)) {{
     }}
 }}
 
-# 4. Clean up old binary immediately so faulty rollbacks can NEVER occur!
-if (Test-Path $old) {{
-    Remove-Item -Path $old -Force -ErrorAction SilentlyContinue
-    Write-Log "Old binary $old purged immediately to guarantee non-reversion."
-}}
+# 4. Clean temporary staging file (preserve $old until stability is proven!)
 if (Test-Path $staged) {{
     Remove-Item -Path $staged -Force -ErrorAction SilentlyContinue
 }}
 
-# 5. Launch updated application binary (with resilient retry)
-$p = $null
+# 5. Launch updated application binary (with resilient health check & automatic self-healing rollback)
+$launchedSuccessfully = $false
 for ($attempt = 1; $attempt -le 4; $attempt++) {{
     Write-Log "Launch attempt $attempt for $exe..."
     $p = Start-Process -FilePath $exe -WorkingDirectory $dir -ArgumentList "--restarted-after-update" -PassThru
-    Start-Sleep -Milliseconds 1500
+    Start-Sleep -Milliseconds 2000
     if ($p) {{
         $proc = Get-Process -Id $p.Id -ErrorAction SilentlyContinue
         if ($proc -and (-not $proc.HasExited)) {{
             Write-Log "Application launched and running stably with PID $($p.Id)."
+            $launchedSuccessfully = $true
             break
+        }} else {{
+            $exitCode = if ($proc) {{ $proc.ExitCode }} else {{ "Unknown" }}
+            Write-Log "Attempt $attempt process terminated prematurely (ExitCode: $exitCode)."
         }}
     }}
-    Write-Log "Attempt $attempt process starting up. Pacing before confirmation..."
-    Start-Sleep -Milliseconds 1200
+    Start-Sleep -Milliseconds 1000
+}}
+
+# 6. Self-Healing Rollback Protection: If new binary repeatedly crashes on boot, restore previous binary!
+if (-not $launchedSuccessfully -and (Test-Path $old)) {{
+    Write-Log "New binary failed to boot stably after 4 attempts! Initiating self-healing rollback to previous binary..."
+    try {{
+        if (Test-Path $exe) {{
+            Remove-Item -Path $exe -Force -ErrorAction SilentlyContinue
+        }}
+        Move-Item -Path $old -Destination $exe -Force -ErrorAction Stop
+        Write-Log "Restored previous operational binary from $old to $exe."
+        Start-Process -FilePath $exe -WorkingDirectory $dir -ArgumentList "--rollback-recovery"
+        Write-Log "Previous operational binary launched in recovery mode."
+    }} catch {{
+        Write-Log "Rollback failed: $($_.Exception.Message)"
+    }}
 }}
 
 Write-Log "Update supervisor successfully finalized."
@@ -861,6 +876,34 @@ Write-Log "Update supervisor successfully finalized."
     {
         let _ = (app, binary_bytes, staging_path, target_version);
         Err("In-process atomic swap is supported on Windows".to_string())
+    }
+}
+
+pub fn clean_temp_staging_artifacts() -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        let mut cleaned = false;
+        let temp_dir = std::env::temp_dir().join("com.downex.manager");
+        if temp_dir.exists() {
+            if let Ok(entries) = std::fs::read_dir(&temp_dir) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    let name = path.file_name().unwrap_or_default().to_string_lossy();
+                    if name.starts_with("watchdog_") && name.ends_with(".ps1") {
+                        let _ = std::fs::remove_file(&path);
+                        cleaned = true;
+                    } else if name.ends_with(".part") {
+                        let _ = std::fs::remove_file(&path);
+                        cleaned = true;
+                    }
+                }
+            }
+        }
+        cleaned
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        false
     }
 }
 

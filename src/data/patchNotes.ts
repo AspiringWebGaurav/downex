@@ -44,6 +44,19 @@ export function getLatestCodebaseVersion(): string {
 }
 
 export const BASELINE_PATCH_NOTES: Record<string, DynamicPatchNotes> = {
+  '0.0.18': {
+    version: '0.0.18',
+    releaseDate: 'October 29, 2026',
+    title: 'Seamless 1-Click Update Pipeline & Autonomous Boot-Crash Rollback Protection',
+    highlights: [
+      'Seamless 1-Click Update Pipeline: Single "Download & Install Now" action triggers download, Ed25519 verification, AES-256 unpacking, and restart handoff in one fluid gesture',
+      'Continuous Live Restart Handoff: UpdateModal stays visible during restart handoff with real-time 3-step progress checklist and status feedback rather than abruptly disappearing',
+      'Autonomous Boot-Crash Self-Healing Rollback: Watchdog supervisor actively monitors new binary PID health; if new release crashes repeatedly on boot, it automatically restores Downex.exe.old and relaunches in recovery mode',
+      'Self-Healing Alert Banner: In-app notification detects rollback recovery and reassures users that their operational version was safely preserved',
+      'Deferred .old Binary Sweeping: Preserves previous operational binary through initial 60s of healthy boot uptime before cleanup to safeguard rollback availability',
+    ],
+    rawNotes: 'v0.0.18: Seamless 1-click update flow, live restart checklist, and watchdog crash-loop self-healing rollback',
+  },
   '0.0.17': {
     version: '0.0.17',
     releaseDate: 'October 29, 2026',

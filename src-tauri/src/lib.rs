@@ -29,8 +29,9 @@ pub fn run() {
         let _ = windows_sys::Win32::UI::Shell::SetCurrentProcessExplicitAppUserModelID(app_id.as_ptr());
     }
 
-    // Clean any superseded legacy artifacts immediately before anything else initializes
-    let _ = crate::commands::cmd_clean_superseded_old_binaries();
+    // Clean temporary staging scripts from previous runs immediately on boot
+    // (.old binary cleanup is deferred by 60s to safeguard self-healing rollback)
+    let _ = crate::commands::clean_temp_staging_artifacts();
 
     let (progress_tx, mut progress_rx) = mpsc::channel(256);
 

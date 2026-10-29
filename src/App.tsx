@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Search, Plus } from 'lucide-react';
+import { Search, Plus, ShieldAlert, X } from 'lucide-react';
 import { DownexWindowHeader } from './components/DownexWindowHeader';
 import { DownexSidebar } from './components/DownexSidebar';
 import { DownloadTable } from './components/DownloadTable';
@@ -12,7 +12,7 @@ import { UpdateNotification } from './components/UpdateNotification';
 import { PatchNotesModal } from './components/PatchNotesModal';
 import { SettingsView } from './components/SettingsView';
 import { TelemetryView } from './components/TelemetryView';
-import { onOpenNewDownloadModal, showDownloadDialog, onNavigate, onCheckUpdatesFromTray, notifyDomReady } from './services/tauriService';
+import { onOpenNewDownloadModal, showDownloadDialog, onNavigate, onCheckUpdatesFromTray, onOtaRollbackRecovered, notifyDomReady } from './services/tauriService';
 import './App.css';
 
 export const App: React.FC = () => {
@@ -30,6 +30,7 @@ export const App: React.FC = () => {
   const selectedView = useDownloadStore((state) => state.selectedView);
   const setSelectedView = useDownloadStore((state) => state.setSelectedView);
   const showTelemetryOnHome = useDownloadStore((state) => state.showTelemetryOnHome);
+  const [rollbackAlert, setRollbackAlert] = useState<string | null>(null);
 
   useEffect(() => {
     if (typeof window !== 'undefined') {
@@ -121,12 +122,17 @@ export const App: React.FC = () => {
       await useAppVersionStore.getState().checkForUpdates(false);
     });
 
+    const unlistenRollback = onOtaRollbackRecovered((payload) => {
+      setRollbackAlert(payload.version || 'Previous Stable');
+    });
+
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('downex-open-new-download', handleBrowserOpen);
       unlistenTrayModal();
       unlistenNavigate();
       unlistenCheckUpdates();
+      unlistenRollback();
     };
   }, [setNewModalOpen, openNewModalWithData, setSelectedView]);
 
@@ -142,6 +148,23 @@ export const App: React.FC = () => {
 
         {/* Center Workspace */}
         <main className="flex-1 flex flex-col overflow-hidden bg-white dark:bg-zinc-950">
+          {rollbackAlert && (
+            <div className="mx-4 mt-3 p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-700 dark:text-amber-300 flex items-center justify-between text-xs animate-in slide-in-from-top-2 shrink-0">
+              <div className="flex items-center gap-2.5">
+                <ShieldAlert className="w-4 h-4 text-amber-500 shrink-0" />
+                <span>
+                  <strong>Autonomous Rollback Safeguard:</strong> The latest update could not boot stably. Downex safely reverted your executable to verified operational version <strong>v{rollbackAlert}</strong>.
+                </span>
+              </div>
+              <button
+                onClick={() => setRollbackAlert(null)}
+                className="p-1 hover:bg-amber-500/20 rounded-md transition-colors cursor-pointer text-amber-600 dark:text-amber-400"
+                title="Dismiss"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          )}
           {selectedView === 'settings' ? (
             <SettingsView darkMode={darkMode} setDarkMode={setDarkMode} />
           ) : selectedView === 'telemetry' ? (

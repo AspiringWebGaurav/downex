@@ -30,6 +30,7 @@ interface AppVersionStore {
   initVersion: () => Promise<void>;
   checkForUpdates: (silent?: boolean) => Promise<void>;
   downloadUpdate: () => Promise<boolean>;
+  downloadAndApplyUpdate: () => Promise<boolean>;
   installAndRestart: () => Promise<void>;
   openModal: () => void;
   closeModal: () => void;
@@ -193,6 +194,10 @@ export const useAppVersionStore = create<AppVersionStore>((set, get) => {
 
     downloadUpdate: async () => {
       return await updateService.downloadUpdate();
+    },
+
+    downloadAndApplyUpdate: async () => {
+      return await updateService.downloadAndApplyUpdate();
     },
 
     installAndRestart: async () => {
