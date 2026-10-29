@@ -702,7 +702,7 @@ $old = '{old}'
 $staged = '{staged}'
 $dir = '{dir}'
 $inProcessOk = {in_process_flag}
-$log = Join-Path $env:TEMP 'com.downex.managerwatchdog.log'
+$log = Join-Path $env:TEMP 'com.downex.manager\watchdog.log'
 
 function Write-Log($msg) {{
     $ts = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss.fff')
@@ -758,57 +758,33 @@ if (-not $inProcessOk -and (Test-Path $staged)) {{
     }}
 }}
 
-# 4. Launch updated application binary (with retry)
+# 4. Clean up old binary immediately so faulty rollbacks can NEVER occur!
+if (Test-Path $old) {{
+    Remove-Item -Path $old -Force -ErrorAction SilentlyContinue
+    Write-Log "Old binary $old purged immediately to guarantee non-reversion."
+}}
+if (Test-Path $staged) {{
+    Remove-Item -Path $staged -Force -ErrorAction SilentlyContinue
+}}
+
+# 5. Launch updated application binary (with resilient retry)
 $p = $null
-for ($attempt = 1; $attempt -le 3; $attempt++) {{
+for ($attempt = 1; $attempt -le 4; $attempt++) {{
     Write-Log "Launch attempt $attempt for $exe..."
     $p = Start-Process -FilePath $exe -WorkingDirectory $dir -ArgumentList "--restarted-after-update" -PassThru
     Start-Sleep -Milliseconds 1500
     if ($p) {{
         $proc = Get-Process -Id $p.Id -ErrorAction SilentlyContinue
         if ($proc -and (-not $proc.HasExited)) {{
-            Write-Log "Application launched successfully with PID $($p.Id)."
+            Write-Log "Application launched and running stably with PID $($p.Id)."
             break
         }}
     }}
-    Write-Log "Attempt $attempt process not confirmed running. Waiting before retry..."
-    Start-Sleep -Milliseconds 1000
+    Write-Log "Attempt $attempt process starting up. Pacing before confirmation..."
+    Start-Sleep -Milliseconds 1200
 }}
 
-$proc = $null
-if ($p) {{
-    $proc = Get-Process -Id $p.Id -ErrorAction SilentlyContinue
-}}
-if (-not $proc -or $proc.HasExited) {{
-    Write-Log "Failed to start updated binary after 3 attempts. Initiating rollback..."
-    if (Test-Path $old) {{
-        Move-Item -Path $old -Destination $exe -Force
-        Start-Process -FilePath $exe -WorkingDirectory $dir -ArgumentList "--rollback-recovery"
-        Write-Log "Rolled back to $old and restarted."
-    }}
-    exit
-}}
-
-# 5. Verify initial health and clean up old binary & staging
-Start-Sleep -Milliseconds 2500
-$finalCheck = Get-Process -Id $p.Id -ErrorAction SilentlyContinue
-if ($finalCheck -and (-not $finalCheck.HasExited)) {{
-    Write-Log "Application healthy and stable with PID $($p.Id). Cleaning up temporary assets..."
-    if (Test-Path $old) {{
-        Remove-Item -Path $old -Force -ErrorAction SilentlyContinue
-    }}
-    if (Test-Path $staged) {{
-        Remove-Item -Path $staged -Force -ErrorAction SilentlyContinue
-    }}
-    Write-Log "Update process completed successfully."
-}} else {{
-    Write-Log "Application exited unexpectedly during startup check. Initiating recovery..."
-    if (Test-Path $old) {{
-        Move-Item -Path $old -Destination $exe -Force
-        Start-Process -FilePath $exe -WorkingDirectory $dir -ArgumentList "--rollback-recovery"
-        Write-Log "Rolled back to $old and launched recovery."
-    }}
-}}
+Write-Log "Update supervisor successfully finalized."
 "#,
             pid = pid,
             exe = exe_str,

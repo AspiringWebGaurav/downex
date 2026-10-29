@@ -29,6 +29,9 @@ pub fn run() {
         let _ = windows_sys::Win32::UI::Shell::SetCurrentProcessExplicitAppUserModelID(app_id.as_ptr());
     }
 
+    // Clean any superseded legacy artifacts immediately before anything else initializes
+    let _ = crate::commands::cmd_clean_superseded_old_binaries();
+
     let (progress_tx, mut progress_rx) = mpsc::channel(256);
 
     let is_background_boot = std::env::args().any(|arg| {

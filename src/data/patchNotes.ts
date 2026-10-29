@@ -30,6 +30,19 @@ export function parseNotesToHighlights(rawText?: string): string[] {
 }
 
 export const BASELINE_PATCH_NOTES: Record<string, DynamicPatchNotes> = {
+  '0.0.15': {
+    version: '0.0.15',
+    releaseDate: 'October 29, 2026',
+    title: 'Autonomous Self-Healing Bridge & Permanent Anti-Rollback Architecture',
+    highlights: [
+      'Autonomous Pre-Boot Self-Healing: Instantly sweeps and purges any superseded .old and .tmp binaries before application initialization',
+      'Guaranteed Non-Reversion Architecture: Permanently eliminates watchdog rollback traps, ensuring installed clients never revert to older versions',
+      'Bulletproof Supervisor Handoff: Watchdog supervisor now purges previous binary immediately upon placement and launches cleanly with multi-pass confirmation',
+      'Eradication of All Blank Window Traps: Native secondary windows and modals completely eliminated in favor of clean 600ms visual handoff',
+      'Permanent Base 0.0.0 installer and companion extension assets fully isolated and safeguarded',
+    ],
+    rawNotes: 'v0.0.15: Autonomous self-healing bridge, permanent anti-rollback architecture, and instant supervisor handoff',
+  },
   '0.0.14': {
     version: '0.0.14',
     releaseDate: 'October 29, 2026',
