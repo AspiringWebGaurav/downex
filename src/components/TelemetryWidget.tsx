@@ -56,7 +56,7 @@ export const TelemetryWidget: React.FC<TelemetryWidgetProps> = ({ layout = 'side
         <div className="p-3.5 rounded-xl bg-zinc-50/80 dark:bg-zinc-900/60 border border-zinc-200/80 dark:border-zinc-800/60 shadow-xs flex flex-col justify-between">
           <div>
             <div className="flex items-center justify-between text-zinc-400 dark:text-zinc-500 mb-1">
-              <span className="text-[10px] font-mono uppercase tracking-wider font-semibold">Total Bandwidth</span>
+              <span className="text-[10px] font-mono uppercase tracking-wider font-semibold">Download Speed</span>
               <Activity className="w-4 h-4 text-emerald-500" />
             </div>
             <div className="text-xl font-bold font-mono text-zinc-900 dark:text-zinc-100">
@@ -82,15 +82,15 @@ export const TelemetryWidget: React.FC<TelemetryWidgetProps> = ({ layout = 'side
         <div className="p-3.5 rounded-xl bg-zinc-50/80 dark:bg-zinc-900/60 border border-zinc-200/80 dark:border-zinc-800/60 shadow-xs flex flex-col justify-between">
           <div>
             <div className="flex items-center justify-between text-zinc-400 dark:text-zinc-500 mb-1">
-              <span className="text-[10px] font-mono uppercase tracking-wider font-semibold">Active Engine Sockets</span>
+              <span className="text-[10px] font-mono uppercase tracking-wider font-semibold">Active Connections</span>
               <Zap className="w-4 h-4 text-blue-500" />
             </div>
             <div className="text-xl font-bold font-mono text-zinc-900 dark:text-zinc-100">
-              {activeSegmentsCount} Parallel Workers
+              {activeSegmentsCount} Active Parts
             </div>
           </div>
           <div className="text-xs font-mono text-zinc-500 dark:text-zinc-400 mt-2">
-            Multi-threaded TCP chunk multiplexing active
+            Multi-part download acceleration active
           </div>
         </div>
 
@@ -138,7 +138,7 @@ export const TelemetryWidget: React.FC<TelemetryWidgetProps> = ({ layout = 'side
           <div className="mt-2 pt-2 border-t border-zinc-200/60 dark:border-zinc-800/60 flex items-center justify-between text-[11px] font-mono text-zinc-500 dark:text-zinc-400">
             <span className="flex items-center gap-1.5">
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-              SQLite Synced
+              Saved Locally
             </span>
             <span title="Downloaded during this session">
               +{formatBytes(sessionDownloadedBytes)} session
@@ -154,7 +154,7 @@ export const TelemetryWidget: React.FC<TelemetryWidgetProps> = ({ layout = 'side
       {/* Live Speed Card */}
       <div className="p-3 rounded-xl bg-white dark:bg-zinc-900/70 border border-zinc-200/80 dark:border-zinc-800/60 shadow-xs">
         <div className="flex items-center justify-between text-zinc-400 dark:text-zinc-500 mb-1">
-          <span className="text-[10px] font-mono uppercase tracking-wider">Total Bandwidth</span>
+          <span className="text-[10px] font-mono uppercase tracking-wider">Download Speed</span>
           <Activity className="w-3.5 h-3.5 text-emerald-500" />
         </div>
         <div className="text-lg font-bold font-mono text-zinc-900 dark:text-zinc-100">

@@ -101,9 +101,9 @@ pub fn build_dynamic_tray_menu<R: Runtime>(app: &AppHandle<R>) -> Result<Menu<R>
     let sep4 = PredefinedMenuItem::separator(app)?;
     menu.append(&sep4)?;
 
-    // 7. Exit Application
-    let quit_item = MenuItem::with_id(app, "quit", "❌ Quit Downex", true, None::<&str>)?;
-    menu.append(&quit_item)?;
+    // 7. Close Window (Keep running in background system tray)
+    let hide_item = MenuItem::with_id(app, "hide_to_tray", "✕ Close Window (Keep in Tray)", true, None::<&str>)?;
+    menu.append(&hide_item)?;
 
     Ok(menu)
 }
@@ -200,8 +200,16 @@ pub fn setup_system_tray<R: Runtime>(app: &AppHandle<R>) -> Result<TrayIcon<R>, 
                 }
                 let _ = refresh_tray_menu(app);
             }
-            "quit" => {
-                app.exit(0);
+            "hide_to_tray" | "quit" => {
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.hide();
+                    #[cfg(target_os = "windows")]
+                    {
+                        crate::commands::set_process_priority_background(true);
+                        crate::commands::trim_process_working_set();
+                    }
+                }
+                let _ = refresh_tray_menu(app);
             }
             _ => {}
         })

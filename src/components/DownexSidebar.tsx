@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { Download, PlayCircle, ListOrdered, CheckCircle2, Trash2, Settings, Power, Moon, Sun, Plus, ChevronLeft, RefreshCw, Check, Sparkles, Activity } from 'lucide-react';
+import { Download, PlayCircle, ListOrdered, CheckCircle2, Trash2, Settings, Minimize2, Moon, Sun, Plus, ChevronLeft, RefreshCw, Check, Sparkles, Activity } from 'lucide-react';
 import { useDownloadStore } from '../stores/downloadStore';
 import { useAppVersionStore } from '../stores/appVersionStore';
-import { quitApp } from '../services/tauriService';
+import { minimizeToBackground } from '../services/tauriService';
 import { compareSemver } from '../utils/version';
 
 interface DownexSidebarProps {
@@ -302,14 +302,14 @@ export const DownexSidebar: React.FC<DownexSidebarProps> = ({ darkMode, setDarkM
         </button>
 
         <button
-          onClick={quitApp}
-          title="Quit Downex"
-          className={`flex items-center rounded-lg text-xs text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/30 cursor-pointer transition-colors ${
+          onClick={minimizeToBackground}
+          title="Hide to System Tray (Keep running in background)"
+          className={`flex items-center rounded-lg text-xs text-zinc-600 dark:text-zinc-400 hover:bg-zinc-200/60 dark:hover:bg-zinc-800/50 cursor-pointer transition-colors ${
             isCollapsed ? 'w-10 h-10 justify-center' : 'gap-2.5 px-3 py-2'
           }`}
         >
-          <Power className="w-4 h-4 shrink-0" />
-          {!isCollapsed && <span className="truncate">Quit Downex</span>}
+          <Minimize2 className="w-4 h-4 shrink-0" />
+          {!isCollapsed && <span className="truncate">Hide to Tray</span>}
         </button>
       </div>
     </aside>

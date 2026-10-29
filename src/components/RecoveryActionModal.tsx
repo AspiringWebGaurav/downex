@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { X, Wrench, RotateCcw, Trash2, AlertTriangle, CheckCircle2, Loader2 } from 'lucide-react';
+import { X, Wrench, RotateCcw, Trash2, AlertTriangle, CheckCircle2, Loader2, Power } from 'lucide-react';
 
-export type RecoveryActionType = 'repair' | 'reset-base' | 'uninstall' | null;
+export type RecoveryActionType = 'repair' | 'reset-base' | 'uninstall' | 'stop-engine' | null;
 
 interface RecoveryActionModalProps {
   isOpen: boolean;
@@ -99,6 +99,26 @@ export const RecoveryActionModal: React.FC<RecoveryActionModalProps> = ({
       confirmButtonText: 'YES, UNINSTALL DOWNEX',
       confirmButtonLoading: 'LAUNCHING...',
       confirmButtonClass: 'bg-rose-600 hover:bg-rose-700 active:bg-rose-800 text-white',
+    },
+    'stop-engine': {
+      title: 'Stop Background Engine & Exit?',
+      badge: 'SHUT DOWN ALL BACKGROUND SERVICES',
+      badgeColor: 'bg-zinc-200 dark:bg-zinc-800 text-zinc-800 dark:text-zinc-200 border-zinc-300 dark:border-zinc-700',
+      icon: Power,
+      iconColor: 'text-rose-600 dark:text-rose-400',
+      iconBg: 'bg-rose-50 dark:bg-rose-950/40 border-rose-200 dark:border-rose-900/60',
+      description:
+        'This will completely shut down all Downex background processes, close the browser extension loopback bridge (port 18888), remove the system tray icon, and pause active downloads.',
+      bulletPoints: [
+        'Disconnects browser extension integration and stops link interception',
+        'Pauses active download queues safely to prevent data corruption',
+        'Removes Downex from the Windows system tray notification area',
+        'Completely terminates the application process until you open it again',
+      ],
+      checkboxLabel: 'I understand that Downex will stop grabbing browser links and exit completely.',
+      confirmButtonText: 'YES, STOP & EXIT',
+      confirmButtonLoading: 'STOPPING...',
+      confirmButtonClass: 'bg-zinc-800 hover:bg-zinc-900 dark:bg-zinc-700 dark:hover:bg-zinc-600 text-white',
     },
   }[actionType];
 

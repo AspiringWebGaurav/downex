@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Settings, Eye, HardDrive, Cpu, ShieldCheck, FolderOpen, Check, Link2, Zap, Minimize2, Power, ChevronRight, FileText, Wrench, RotateCcw, Trash2, ShieldAlert, Loader2, Shield, ExternalLink, ArrowUpRight } from 'lucide-react';
 import { useDownloadStore } from '../stores/downloadStore';
 import { TelemetryWidget } from './TelemetryWidget';
-import { getDefaultDownloadDir, getMaxSegments, openFolderPicker, setDefaultDownloadDir, setMaxSegments as apiSetMaxSegments, isAutostartEnabled, setAutostartEnabled, triggerUninstall, repairApplication, resetToBaseVersion, openExternalUrl } from '../services/tauriService';
+import { getDefaultDownloadDir, getMaxSegments, openFolderPicker, setDefaultDownloadDir, setMaxSegments as apiSetMaxSegments, isAutostartEnabled, setAutostartEnabled, triggerUninstall, repairApplication, resetToBaseVersion, openExternalUrl, quitApp } from '../services/tauriService';
 import { useAppVersionStore } from '../stores/appVersionStore';
 import { PatchNotesView } from './Views/PatchNotesView';
 import { RecoveryActionModal, RecoveryActionType } from './RecoveryActionModal';
@@ -87,6 +87,12 @@ export const SettingsView: React.FC<SettingsViewProps> = () => {
       } catch (err: any) {
         setIsUninstalling(false);
         setMaintenanceMessage(`Could not launch uninstaller: ${err?.message || err}`);
+      }
+    } else if (action === 'stop-engine') {
+      try {
+        await quitApp();
+      } catch (err: any) {
+        setMaintenanceMessage(`Could not stop background engine: ${err?.message || err}`);
       }
     }
   };
@@ -572,6 +578,35 @@ export const SettingsView: React.FC<SettingsViewProps> = () => {
               >
                 {isUninstalling ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
                 <span>{isUninstalling ? 'LAUNCHING...' : 'UNINSTALL'}</span>
+              </button>
+            </div>
+
+            {/* Action 4: Stop Background Engine & Exit (Guarded) */}
+            <div className="p-3 sm:p-3.5 flex items-center justify-between gap-4">
+              <div className="flex items-center gap-3 min-w-0 flex-1">
+                <div className="w-8 h-8 rounded-sm bg-zinc-200/80 dark:bg-zinc-800 border border-zinc-300 dark:border-zinc-700 flex items-center justify-center shrink-0">
+                  <Power className="w-4 h-4 text-zinc-700 dark:text-zinc-300" />
+                </div>
+                <div className="flex items-center gap-2 min-w-0 flex-1 truncate">
+                  <span className="text-xs font-bold text-zinc-900 dark:text-zinc-100 whitespace-nowrap">
+                    Stop Background Engine
+                  </span>
+                  <span className="text-[10px] font-mono px-1.5 py-0.5 rounded-xs bg-zinc-200/80 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400 shrink-0">
+                    Exit
+                  </span>
+                  <span className="text-[11px] text-zinc-400 dark:text-zinc-500 truncate">
+                    — Shut down browser link grabber, extension bridge, and tray icon
+                  </span>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setPendingAction('stop-engine')}
+                className="w-44 h-9 rounded-sm bg-zinc-700 hover:bg-zinc-800 active:bg-zinc-900 dark:bg-zinc-700 dark:hover:bg-zinc-600 text-white font-mono text-xs font-bold uppercase tracking-wider flex items-center justify-center gap-2 cursor-pointer shadow-xs transition-all shrink-0 active:scale-[0.98]"
+              >
+                <Power className="w-3.5 h-3.5" />
+                <span>STOP ENGINE</span>
               </button>
             </div>
           </div>

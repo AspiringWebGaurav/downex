@@ -112,10 +112,10 @@ export const TelemetryView: React.FC<TelemetryViewProps> = ({ onBack }) => {
             <Cpu className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
             <div>
               <h1 className="text-sm font-bold tracking-tight text-zinc-900 dark:text-zinc-100">
-                Engine Telemetry & Hardware Sensors
+                Live Speed & System Details
               </h1>
-              <p className="text-[10px] font-mono text-zinc-400 dark:text-zinc-500">
-                Real-time multi-socket bandwidth, disk I/O, and persistent database analytics
+              <p className="text-[10px] text-zinc-400 dark:text-zinc-500">
+                Real-time download speed, active tasks, and storage details
               </p>
             </div>
           </div>
@@ -124,7 +124,7 @@ export const TelemetryView: React.FC<TelemetryViewProps> = ({ onBack }) => {
         <div className="flex items-center gap-2.5">
           <div className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-200 dark:border-emerald-800 text-[11px] font-mono text-emerald-700 dark:text-emerald-400 font-semibold shadow-2xs">
             <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-            <span>Tokio Multi-Thread Engine Active</span>
+            <span>Download Engine Running</span>
           </div>
 
           <button
@@ -146,7 +146,7 @@ export const TelemetryView: React.FC<TelemetryViewProps> = ({ onBack }) => {
           <div className="p-4 rounded-2xl bg-zinc-50/80 dark:bg-zinc-900/60 border border-zinc-200/80 dark:border-zinc-800/60 shadow-xs flex flex-col justify-between hover:border-zinc-300 dark:hover:border-zinc-700 transition-all">
             <div>
               <div className="flex items-center justify-between text-zinc-400 dark:text-zinc-500 mb-1">
-                <span className="text-[10px] font-mono uppercase tracking-wider font-semibold">Total Bandwidth</span>
+                <span className="text-[10px] font-mono uppercase tracking-wider font-semibold">Current Speed</span>
                 <Activity className="w-4 h-4 text-emerald-500" />
               </div>
               <div className="text-2xl font-black font-mono text-zinc-900 dark:text-zinc-100">
@@ -167,11 +167,11 @@ export const TelemetryView: React.FC<TelemetryViewProps> = ({ onBack }) => {
           <div className="p-4 rounded-2xl bg-zinc-50/80 dark:bg-zinc-900/60 border border-zinc-200/80 dark:border-zinc-800/60 shadow-xs flex flex-col justify-between hover:border-zinc-300 dark:hover:border-zinc-700 transition-all">
             <div>
               <div className="flex items-center justify-between text-zinc-400 dark:text-zinc-500 mb-1">
-                <span className="text-[10px] font-mono uppercase tracking-wider font-semibold">Engine Sockets</span>
+                <span className="text-[10px] font-mono uppercase tracking-wider font-semibold">Active Connections</span>
                 <Zap className="w-4 h-4 text-blue-500" />
               </div>
               <div className="text-2xl font-black font-mono text-zinc-900 dark:text-zinc-100">
-                {activeSegmentsCount} <span className="text-sm font-semibold text-zinc-500">Workers</span>
+                {activeSegmentsCount} <span className="text-sm font-semibold text-zinc-500">Parts</span>
               </div>
             </div>
 
@@ -188,7 +188,7 @@ export const TelemetryView: React.FC<TelemetryViewProps> = ({ onBack }) => {
           <div className="p-4 rounded-2xl bg-zinc-50/80 dark:bg-zinc-900/60 border border-zinc-200/80 dark:border-zinc-800/60 shadow-xs flex flex-col justify-between hover:border-zinc-300 dark:hover:border-zinc-700 transition-all">
             <div>
               <div className="flex items-center justify-between text-zinc-400 dark:text-zinc-500 mb-1">
-                <span className="text-[10px] font-mono uppercase tracking-wider font-semibold">Storage Target</span>
+                <span className="text-[10px] font-mono uppercase tracking-wider font-semibold">Save Folder</span>
                 <HardDrive className="w-4 h-4 text-amber-500" />
               </div>
               <div className="text-xs font-mono font-medium text-zinc-800 dark:text-zinc-200 truncate mt-1" title={storagePath}>
@@ -228,7 +228,7 @@ export const TelemetryView: React.FC<TelemetryViewProps> = ({ onBack }) => {
             <div className="mt-4 pt-3 border-t border-zinc-200/60 dark:border-zinc-800/60 flex items-center justify-between text-[11px] font-mono text-zinc-500 dark:text-zinc-400">
               <span className="flex items-center gap-1">
                 <ShieldCheck className="w-3 h-3 text-emerald-500" />
-                SQLite Synced
+                Saved Locally
               </span>
               <span className="text-emerald-600 dark:text-emerald-400 font-semibold">
                 +{formatBytes(sessionDownloadedBytes)} session
@@ -243,7 +243,7 @@ export const TelemetryView: React.FC<TelemetryViewProps> = ({ onBack }) => {
             <div className="flex items-center gap-2">
               <Gauge className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
               <h2 className="text-xs font-semibold uppercase tracking-wider text-zinc-700 dark:text-zinc-300">
-                Live Throughput Timeline & Bandwidth Sensor
+                Speed History (Last 30 Seconds)
               </h2>
             </div>
             <div className="flex items-center gap-3 text-[10px] font-mono text-zinc-400 dark:text-zinc-500">
@@ -284,88 +284,88 @@ export const TelemetryView: React.FC<TelemetryViewProps> = ({ onBack }) => {
           </div>
         </div>
 
-        {/* ROW 3: Secondary Hardware & Task Breakdown Analytics */}
+        {/* ROW 3: Simple & Clean Status Cards (No Buzzwords, Robust Layout) */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          {/* Card 1: Task Queue Breakdown */}
+          {/* Card 1: Download Tasks */}
           <div className="p-4 rounded-2xl bg-zinc-50/80 dark:bg-zinc-900/60 border border-zinc-200/80 dark:border-zinc-800/60 shadow-xs space-y-3">
             <div className="flex items-center gap-2">
               <CheckCircle2 className="w-4 h-4 text-emerald-500" />
               <h3 className="text-xs font-semibold uppercase tracking-wider text-zinc-700 dark:text-zinc-300">
-                Task Queue Diagnostics
+                Download Tasks
               </h3>
             </div>
-            <div className="space-y-2 text-xs font-mono">
-              <div className="flex justify-between py-1 border-b border-zinc-200/40 dark:border-zinc-800/40">
-                <span className="text-zinc-500">Total Registered Tasks:</span>
-                <span className="font-bold text-zinc-800 dark:text-zinc-200">{items.length}</span>
+            <div className="space-y-1.5 text-xs font-mono">
+              <div className="flex items-center justify-between py-1.5 border-b border-zinc-200/40 dark:border-zinc-800/40 gap-2">
+                <span className="text-zinc-500 shrink-0">Total Files:</span>
+                <span className="font-bold text-zinc-800 dark:text-zinc-200 truncate">{items.length}</span>
               </div>
-              <div className="flex justify-between py-1 border-b border-zinc-200/40 dark:border-zinc-800/40">
-                <span className="text-zinc-500">Completed Downloads:</span>
-                <span className="font-bold text-emerald-600 dark:text-emerald-400">{completedDownloads.length}</span>
+              <div className="flex items-center justify-between py-1.5 border-b border-zinc-200/40 dark:border-zinc-800/40 gap-2">
+                <span className="text-zinc-500 shrink-0">Completed:</span>
+                <span className="font-bold text-emerald-600 dark:text-emerald-400 truncate">{completedDownloads.length}</span>
               </div>
-              <div className="flex justify-between py-1 border-b border-zinc-200/40 dark:border-zinc-800/40">
-                <span className="text-zinc-500">Queued in Scheduler:</span>
-                <span className="font-bold text-blue-600 dark:text-blue-400">{queuedDownloads.length}</span>
+              <div className="flex items-center justify-between py-1.5 border-b border-zinc-200/40 dark:border-zinc-800/40 gap-2">
+                <span className="text-zinc-500 shrink-0">In Queue:</span>
+                <span className="font-bold text-blue-600 dark:text-blue-400 truncate">{queuedDownloads.length}</span>
               </div>
-              <div className="flex justify-between py-1">
-                <span className="text-zinc-500">Active Downloading:</span>
-                <span className="font-bold text-zinc-900 dark:text-zinc-100">{activeDownloads.length}</span>
+              <div className="flex items-center justify-between py-1.5 gap-2">
+                <span className="text-zinc-500 shrink-0">Downloading Now:</span>
+                <span className="font-bold text-zinc-900 dark:text-zinc-100 truncate">{activeDownloads.length}</span>
               </div>
             </div>
           </div>
 
-          {/* Card 2: Engine Performance & Memory Architecture */}
+          {/* Card 2: Engine Performance */}
           <div className="p-4 rounded-2xl bg-zinc-50/80 dark:bg-zinc-900/60 border border-zinc-200/80 dark:border-zinc-800/60 shadow-xs space-y-3">
             <div className="flex items-center gap-2">
               <Server className="w-4 h-4 text-blue-500" />
               <h3 className="text-xs font-semibold uppercase tracking-wider text-zinc-700 dark:text-zinc-300">
-                Engine Architecture
+                Download Engine
               </h3>
             </div>
-            <div className="space-y-2 text-xs font-mono">
-              <div className="flex justify-between py-1 border-b border-zinc-200/40 dark:border-zinc-800/40">
-                <span className="text-zinc-500">Concurrency Model:</span>
-                <span className="font-semibold text-zinc-800 dark:text-zinc-200">Rust Tokio Asynchronous</span>
+            <div className="space-y-1.5 text-xs font-mono">
+              <div className="flex items-center justify-between py-1.5 border-b border-zinc-200/40 dark:border-zinc-800/40 gap-2">
+                <span className="text-zinc-500 shrink-0">Technology:</span>
+                <span className="font-semibold text-zinc-800 dark:text-zinc-200 truncate">Multi-Threaded (Fast)</span>
               </div>
-              <div className="flex justify-between py-1 border-b border-zinc-200/40 dark:border-zinc-800/40">
-                <span className="text-zinc-500">Chunk Segmentation:</span>
-                <span className="font-semibold text-zinc-800 dark:text-zinc-200">Up to 32 Parallel Parts</span>
+              <div className="flex items-center justify-between py-1.5 border-b border-zinc-200/40 dark:border-zinc-800/40 gap-2">
+                <span className="text-zinc-500 shrink-0">Max Connections:</span>
+                <span className="font-semibold text-zinc-800 dark:text-zinc-200 truncate">Up to 32 Parts</span>
               </div>
-              <div className="flex justify-between py-1 border-b border-zinc-200/40 dark:border-zinc-800/40">
-                <span className="text-zinc-500">Dynamic Multiplexing:</span>
-                <span className="font-semibold text-emerald-600 dark:text-emerald-400">Adaptive Range Probing</span>
+              <div className="flex items-center justify-between py-1.5 border-b border-zinc-200/40 dark:border-zinc-800/40 gap-2">
+                <span className="text-zinc-500 shrink-0">Split Downloads:</span>
+                <span className="font-semibold text-emerald-600 dark:text-emerald-400 truncate">Automatic</span>
               </div>
-              <div className="flex justify-between py-1">
-                <span className="text-zinc-500">TLS Encryption:</span>
-                <span className="font-semibold text-zinc-800 dark:text-zinc-200">Rustls Native Crypto</span>
+              <div className="flex items-center justify-between py-1.5 gap-2">
+                <span className="text-zinc-500 shrink-0">Security:</span>
+                <span className="font-semibold text-zinc-800 dark:text-zinc-200 truncate">Encrypted (HTTPS)</span>
               </div>
             </div>
           </div>
 
-          {/* Card 3: Storage & Local Database Health */}
+          {/* Card 3: Storage & Database (Clean, No Overlap, Simple Words) */}
           <div className="p-4 rounded-2xl bg-zinc-50/80 dark:bg-zinc-900/60 border border-zinc-200/80 dark:border-zinc-800/60 shadow-xs space-y-3">
             <div className="flex items-center gap-2">
               <Database className="w-4 h-4 text-violet-500" />
               <h3 className="text-xs font-semibold uppercase tracking-wider text-zinc-700 dark:text-zinc-300">
-                Database & I/O Optimization
+                Storage & Data Saving
               </h3>
             </div>
-            <div className="space-y-2 text-xs font-mono">
-              <div className="flex justify-between py-1 border-b border-zinc-200/40 dark:border-zinc-800/40">
-                <span className="text-zinc-500">Database Engine:</span>
-                <span className="font-semibold text-zinc-800 dark:text-zinc-200">SQLite WAL Pragma</span>
+            <div className="space-y-1.5 text-xs font-mono">
+              <div className="flex items-center justify-between py-1.5 border-b border-zinc-200/40 dark:border-zinc-800/40 gap-2">
+                <span className="text-zinc-500 shrink-0">Database:</span>
+                <span className="font-semibold text-zinc-800 dark:text-zinc-200 truncate">Saved on PC</span>
               </div>
-              <div className="flex justify-between py-1 border-b border-zinc-200/40 dark:border-zinc-800/40">
-                <span className="text-zinc-500">Disk Write Overhead:</span>
-                <span className="font-semibold text-emerald-600 dark:text-emerald-400">Ultra-Low (10s Debounce)</span>
+              <div className="flex items-center justify-between py-1.5 border-b border-zinc-200/40 dark:border-zinc-800/40 gap-2">
+                <span className="text-zinc-500 shrink-0">Disk Saving:</span>
+                <span className="font-semibold text-emerald-600 dark:text-emerald-400 truncate">Saves Every 10s</span>
               </div>
-              <div className="flex justify-between py-1 border-b border-zinc-200/40 dark:border-zinc-800/40">
-                <span className="text-zinc-500">Persistence Key:</span>
-                <span className="font-semibold text-zinc-800 dark:text-zinc-200">lifetime_downloaded_bytes</span>
+              <div className="flex items-center justify-between py-1.5 border-b border-zinc-200/40 dark:border-zinc-800/40 gap-2">
+                <span className="text-zinc-500 shrink-0">Total Data Saved:</span>
+                <span className="font-semibold text-zinc-800 dark:text-zinc-200 truncate">Tracked Accurately</span>
               </div>
-              <div className="flex justify-between py-1">
-                <span className="text-zinc-500">Crash Protection:</span>
-                <span className="font-semibold text-emerald-600 dark:text-emerald-400">ACID Atomic Flush</span>
+              <div className="flex items-center justify-between py-1.5 gap-2">
+                <span className="text-zinc-500 shrink-0">Crash Safety:</span>
+                <span className="font-semibold text-emerald-600 dark:text-emerald-400 truncate">Safe on Exit</span>
               </div>
             </div>
           </div>
