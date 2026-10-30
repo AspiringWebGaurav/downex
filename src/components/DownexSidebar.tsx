@@ -78,12 +78,12 @@ export const DownexSidebar: React.FC<DownexSidebarProps> = ({ darkMode, setDarkM
         isCollapsed ? 'w-14 p-2' : 'w-[196px] p-2.5'
       }`}
     >
-      {/* Dynamic Edge Arrow Button (Floating Pill on Divider) */}
+      {/* Dynamic Edge Arrow Button (Floating Pill on Divider Junction) */}
       <button
         type="button"
         onClick={toggleCollapse}
         title={isCollapsed ? 'Expand Sidebar (Ctrl+B)' : 'Pure View / Collapse Sidebar (Ctrl+B)'}
-        className="absolute -right-3 top-3.5 z-30 w-5.5 h-5.5 rounded-full bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 shadow-sm flex items-center justify-center text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 hover:bg-zinc-50 dark:hover:bg-zinc-700 active:scale-95 transition-all cursor-pointer group"
+        className="absolute -right-[11px] top-0 -translate-y-1/2 z-50 w-5.5 h-5.5 rounded-full bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 shadow-sm flex items-center justify-center text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 hover:bg-zinc-50 dark:hover:bg-zinc-700 active:scale-95 transition-all cursor-pointer group"
       >
         <ChevronLeft
           className={`w-3.5 h-3.5 transition-transform duration-300 ${

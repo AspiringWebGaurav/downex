@@ -158,7 +158,7 @@ export const App: React.FC = () => {
       <DownexWindowHeader />
 
       {/* Main App Body */}
-      <div className="flex-1 flex overflow-hidden">
+      <div className="flex-1 flex relative">
         {/* Left Navigation Sidebar */}
         <DownexSidebar darkMode={darkMode} setDarkMode={setDarkMode} />
 
