@@ -96,7 +96,19 @@ export const SettingsView: React.FC<SettingsViewProps> = () => {
     const action = pendingAction;
     setPendingAction(null);
 
-    if (action === 'repair') {
+    if (action === 'reset-defaults') {
+      await handleResetToDefaults();
+    } else if (action === 'reset-folder') {
+      try {
+        const res = await setDefaultDownloadDir('');
+        setDefaultDir(res);
+        setFolderFeedback(`Reset to default Downex folder: ${res}`);
+        triggerSaved();
+        setTimeout(() => setFolderFeedback(null), 5000);
+      } catch (e) {
+        console.warn(e);
+      }
+    } else if (action === 'repair') {
       setIsRepairing(true);
       setMaintenanceMessage('Sweeping legacy artifacts and restarting supervisor...');
       try {
@@ -280,7 +292,7 @@ export const SettingsView: React.FC<SettingsViewProps> = () => {
               variant="outline"
               size="sm"
               icon={<RotateCcw className="w-3.5 h-3.5" />}
-              onClick={handleResetToDefaults}
+              onClick={() => setPendingAction('reset-defaults')}
               title="Reset all settings to recommended defaults (System Tray & Startup ON)"
             >
               Reset to Defaults
@@ -454,17 +466,9 @@ export const SettingsView: React.FC<SettingsViewProps> = () => {
                     type="button"
                     variant="outline"
                     size="sm"
-                    onClick={async () => {
-                      try {
-                        const res = await setDefaultDownloadDir('');
-                        setDefaultDir(res);
-                        setFolderFeedback(`Reset to default Downex folder: ${res}`);
-                        triggerSaved();
-                        setTimeout(() => setFolderFeedback(null), 5000);
-                      } catch (e) {
-                        console.warn(e);
-                      }
-                    }}
+                    icon={<RotateCcw className="w-3.5 h-3.5" />}
+                    onClick={() => setPendingAction('reset-folder')}
+                    title="Reset download folder to default (%USERPROFILE%\Downloads\Downex)"
                   >
                     Reset
                   </Button>

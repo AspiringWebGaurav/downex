@@ -1,7 +1,14 @@
 import React, { useState, useEffect } from 'react';
-import { X, Wrench, RotateCcw, Trash2, AlertTriangle, CheckCircle2, Loader2, Power } from 'lucide-react';
+import { X, Wrench, RotateCcw, Trash2, AlertTriangle, CheckCircle2, Loader2, Power, FolderOpen } from 'lucide-react';
 
-export type RecoveryActionType = 'repair' | 'reset-base' | 'uninstall' | 'stop-engine' | null;
+export type RecoveryActionType =
+  | 'repair'
+  | 'reset-base'
+  | 'uninstall'
+  | 'stop-engine'
+  | 'reset-defaults'
+  | 'reset-folder'
+  | null;
 
 interface RecoveryActionModalProps {
   isOpen: boolean;
@@ -40,89 +47,151 @@ export const RecoveryActionModal: React.FC<RecoveryActionModalProps> = ({
   if (!isOpen || !actionType) return null;
 
   const config = {
+    'reset-defaults': {
+      title: 'Reset All Settings to Recommended Defaults?',
+      badge: 'RESTORE RECOMMENDED DEFAULTS',
+      badgeColor: 'bg-emerald-100 dark:bg-emerald-950/80 text-emerald-800 dark:text-emerald-300 border-emerald-300 dark:border-emerald-800',
+      icon: RotateCcw,
+      iconColor: 'text-emerald-600 dark:text-emerald-400',
+      iconBg: 'bg-emerald-50 dark:bg-emerald-950/40 border-emerald-200 dark:border-emerald-800/80',
+      description:
+        'This will reset your Downex preferences back to recommended factory settings. Your downloaded files, active tasks, and history are safe and will NOT be touched.',
+      bulletPoints: [
+        'Keep running in system tray on close: Set to ON (Recommended)',
+        'Start Downex with Windows: Set to ON (Recommended)',
+        'Clipboard URL auto-detection: Set to ON',
+        'Speed & Stats panel on home page: Set to OFF (Clean Mode)',
+        'Download acceleration: Reset to 16 parallel connections',
+        'Default download folder: Reset to %USERPROFILE%\\Downloads\\Downex',
+      ],
+      warningTitle: 'Preference Reset Confirmation',
+      warningDescription:
+        'Your custom preferences will be restored to recommended defaults. Downloaded files remain untouched.',
+      requiresCheckbox: false,
+      checkboxLabel: 'I want to reset my settings to recommended defaults.',
+      confirmButtonText: 'Reset to Defaults',
+      confirmButtonLoading: 'Resetting...',
+      confirmButtonClass: 'bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white',
+    },
+    'reset-folder': {
+      title: 'Reset Default Download Folder?',
+      badge: 'RESET FOLDER',
+      badgeColor: 'bg-zinc-200 dark:bg-zinc-800 text-zinc-800 dark:text-zinc-200 border-zinc-300 dark:border-zinc-700',
+      icon: FolderOpen,
+      iconColor: 'text-zinc-700 dark:text-zinc-300',
+      iconBg: 'bg-zinc-100 dark:bg-zinc-800 border-zinc-200 dark:border-zinc-700',
+      description:
+        'This will change the default folder where new downloads are saved back to your Windows user Downloads folder.',
+      bulletPoints: [
+        'New downloads will save to: %USERPROFILE%\\Downloads\\Downex',
+        'Files previously downloaded in your current folder will remain completely untouched',
+        'You can change this folder again at any time using "Change Folder..."',
+      ],
+      warningTitle: 'Folder Reset Confirmation',
+      warningDescription:
+        'Future downloads will save to the default folder instead of your current custom directory.',
+      requiresCheckbox: false,
+      checkboxLabel: 'Reset my default download folder to the standard location.',
+      confirmButtonText: 'Reset Folder',
+      confirmButtonLoading: 'Resetting...',
+      confirmButtonClass: 'bg-zinc-900 hover:bg-black dark:bg-zinc-700 dark:hover:bg-zinc-600 text-white',
+    },
     repair: {
-      title: 'Execute Process & Lock Repair?',
-      badge: 'SELF-HEALING MAINTENANCE',
+      title: 'Repair App & Clear Cache?',
+      badge: 'APP REPAIR & MAINTENANCE',
       badgeColor: 'bg-emerald-100 dark:bg-emerald-950/80 text-emerald-700 dark:text-emerald-300 border-emerald-300 dark:border-emerald-800',
       icon: Wrench,
       iconColor: 'text-emerald-600 dark:text-emerald-400',
       iconBg: 'bg-emerald-50 dark:bg-emerald-950/40 border-emerald-200 dark:border-emerald-800/80',
       description:
-        'This diagnostic routine will forcefully terminate any stuck background watchdog tasks, flush temporary files, release locked SQLite handles, and perform an instant clean restart.',
+        'This diagnostic routine will clear temporary cache files, release database locks, and restart Downex cleanly to resolve stuck tasks.',
       bulletPoints: [
-        'Terminates orphaned background processes and file watchers',
-        'Sweeps temporary and stale .tmp / .old update containers',
-        'Releases active SQLite database locks and resets socket pools',
-        'Preserves all active downloads and configuration settings',
+        'Clears temporary cache and stale update containers',
+        'Releases active database locks and resets socket pools',
+        'Restarts Downex fresh in the background',
+        'Preserves all active downloads, files, and settings',
       ],
-      checkboxLabel: 'I understand that Downex will terminate background processes and restart immediately.',
+      warningTitle: 'App Restart Required',
+      warningDescription: 'Downex will briefly close and restart to complete the repair routine.',
+      requiresCheckbox: true,
+      checkboxLabel: 'I understand that Downex will restart immediately to complete the repair.',
       confirmButtonText: 'Run Repair',
       confirmButtonLoading: 'Repairing...',
       confirmButtonClass: 'bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white',
     },
     'reset-base': {
-      title: 'Reset Executable to Base Foundation (v0.0.0)?',
-      badge: 'IRREVERSIBLE BINARY ROLLBACK',
+      title: 'Revert to Base Version (v0.0.0)?',
+      badge: 'VERSION ROLLBACK',
       badgeColor: 'bg-amber-100 dark:bg-amber-950/80 text-amber-800 dark:text-amber-300 border-amber-300 dark:border-amber-800',
       icon: RotateCcw,
       iconColor: 'text-amber-600 dark:text-amber-400',
       iconBg: 'bg-amber-50 dark:bg-amber-950/40 border-amber-200 dark:border-amber-800/80',
       description:
-        'This operation will replace your current executable binary with the verified immutable Base 0.0.0 foundation installer. Any dynamic OTA releases will be rolled back.',
+        'This will roll back your application executable to the clean original Base 0.0.0 installer. Use this if an update ever causes stability issues.',
       bulletPoints: [
-        'Replaces current Downex.exe on disk with clean Base 0.0.0 foundation',
-        'Clears any partially staged or incompatible dynamic update containers',
-        'Your download history, target files, and personal preferences remain 100% intact',
-        'Downex will shut down and immediately restart with base binaries',
+        'Replaces current Downex executable with verified Base 0.0.0 installer',
+        'Clears dynamic update packages and resets app binaries',
+        'Your download history, files, and settings remain 100% intact',
+        'Downex will restart immediately with base binaries',
       ],
-      checkboxLabel: 'I acknowledge that this action will revert Downex to version 0.0.0 and restart the application.',
-      confirmButtonText: 'YES, RESET TO BASE (v0.0.0)',
+      warningTitle: 'Rollback Confirmation',
+      warningDescription: 'All recent OTA updates will be rolled back to the original base foundation.',
+      requiresCheckbox: true,
+      checkboxLabel: 'I acknowledge that this action will revert Downex to version 0.0.0 and restart.',
+      confirmButtonText: 'Revert to v0.0.0',
       confirmButtonLoading: 'Reverting...',
       confirmButtonClass: 'bg-amber-600 hover:bg-amber-700 active:bg-amber-800 text-white',
     },
     uninstall: {
       title: 'Completely Uninstall Downex Desktop?',
-      badge: 'DESTRUCTIVE SYSTEM REMOVAL',
+      badge: 'UNINSTALL DOWNEX',
       badgeColor: 'bg-rose-100 dark:bg-rose-950/80 text-rose-800 dark:text-rose-300 border-rose-300 dark:border-rose-800',
       icon: Trash2,
       iconColor: 'text-rose-600 dark:text-rose-400',
       iconBg: 'bg-rose-50 dark:bg-rose-950/40 border-rose-200 dark:border-rose-800/80',
       description:
-        'This will immediately terminate Downex, unregister system protocol associations, and launch the native Windows uninstallation wizard to permanently remove Downex from your system.',
+        'This will close Downex, remove system startup services, and launch the Windows uninstallation wizard to remove the application.',
       bulletPoints: [
-        'Terminates all active downloads and background connection sockets',
-        'Removes Windows autostart entries, tray services, and shell associations',
-        'Launches the official Windows NSIS uninstaller to clean app binaries',
-        'Downloaded files stored on your PC will NOT be deleted',
+        'Pauses active downloads and disconnects browser extension',
+        'Removes Windows autostart entries and system tray services',
+        'Launches the official Windows uninstaller to remove app binaries',
+        'Files you already downloaded on your PC will NOT be deleted',
       ],
-      checkboxLabel: 'I confirm that I want to exit Downex and permanently remove the application from Windows.',
-      confirmButtonText: 'YES, UNINSTALL DOWNEX',
+      warningTitle: 'Permanent Removal',
+      warningDescription: 'This will remove Downex from your system. Downloaded files are kept safely.',
+      requiresCheckbox: true,
+      checkboxLabel: 'I confirm that I want to exit and uninstall Downex from Windows.',
+      confirmButtonText: 'Uninstall Downex',
       confirmButtonLoading: 'Launching...',
       confirmButtonClass: 'bg-rose-600 hover:bg-rose-700 active:bg-rose-800 text-white',
     },
     'stop-engine': {
-      title: 'Stop Background Engine & Exit?',
-      badge: 'SHUT DOWN ALL BACKGROUND SERVICES',
+      title: 'Exit Downex Completely?',
+      badge: 'EXIT APPLICATION',
       badgeColor: 'bg-zinc-200 dark:bg-zinc-800 text-zinc-800 dark:text-zinc-200 border-zinc-300 dark:border-zinc-700',
       icon: Power,
       iconColor: 'text-rose-600 dark:text-rose-400',
       iconBg: 'bg-rose-50 dark:bg-rose-950/40 border-rose-200 dark:border-rose-900/60',
       description:
-        'This will completely shut down all Downex background processes, close the browser extension loopback bridge (port 18888), remove the system tray icon, and pause active downloads.',
+        'This will close all Downex windows, remove the background system tray icon, and pause active downloads until you reopen the app.',
       bulletPoints: [
-        'Disconnects browser extension integration and stops link interception',
-        'Pauses active download queues safely to prevent data corruption',
+        'Pauses running downloads safely to prevent corrupted files',
         'Removes Downex from the Windows system tray notification area',
-        'Completely terminates the application process until you open it again',
+        'Disconnects browser extension download capture until reopened',
+        'Completely shuts down the application process',
       ],
-      checkboxLabel: 'I understand that Downex will stop grabbing browser links and exit completely.',
-      confirmButtonText: 'Stop & Exit',
-      confirmButtonLoading: 'Stopping...',
-      confirmButtonClass: 'bg-zinc-800 hover:bg-zinc-900 dark:bg-zinc-700 dark:hover:bg-zinc-600 text-white',
+      warningTitle: 'Background Service Termination',
+      warningDescription: 'Downex will not capture browser downloads while closed.',
+      requiresCheckbox: false,
+      checkboxLabel: 'I understand that Downex will exit completely.',
+      confirmButtonText: 'Exit App',
+      confirmButtonLoading: 'Exiting...',
+      confirmButtonClass: 'bg-zinc-900 hover:bg-black dark:bg-zinc-700 dark:hover:bg-zinc-600 text-white',
     },
   }[actionType];
 
   const IconComponent = config.icon;
+  const requiresCheckbox = config.requiresCheckbox === true;
 
   return (
     <div
@@ -170,7 +239,7 @@ export const RecoveryActionModal: React.FC<RecoveryActionModalProps> = ({
           {/* Impact Bullet Points */}
           <div className="rounded-xl bg-zinc-50 dark:bg-zinc-800/40 border border-zinc-200/80 dark:border-zinc-700/60 p-3.5 space-y-2">
             <span className="text-[10px] font-mono font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400 block mb-1">
-              Execution Impact Details:
+              Changes & Impact:
             </span>
             {config.bulletPoints.map((pt, idx) => (
               <div key={idx} className="flex items-start gap-2 text-xs text-zinc-700 dark:text-zinc-300">
@@ -180,32 +249,34 @@ export const RecoveryActionModal: React.FC<RecoveryActionModalProps> = ({
             ))}
           </div>
 
-          {/* Irreversibility Warning Banner */}
+          {/* Action Warning / Info Banner */}
           <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 flex items-start gap-2.5 text-xs text-amber-800 dark:text-amber-300">
             <AlertTriangle className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
             <div className="space-y-0.5">
               <span className="font-bold text-[11px] font-mono uppercase tracking-wider">
-                Irreversible Action Safety Guard
+                {config.warningTitle}
               </span>
               <p className="text-[11px] text-zinc-600 dark:text-zinc-400">
-                This operation is critical. You must explicitly acknowledge the safety statement below to unlock execution.
+                {config.warningDescription}
               </p>
             </div>
           </div>
 
-          {/* Mandatory Safety Checkbox */}
-          <label className="flex items-start gap-3 p-3 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-zinc-50/50 dark:bg-zinc-950/40 hover:bg-zinc-100/60 dark:hover:bg-zinc-800/40 transition-colors cursor-pointer select-none">
-            <input
-              type="checkbox"
-              checked={hasAcknowledged}
-              onChange={(e) => setHasAcknowledged(e.target.checked)}
-              disabled={isLoading}
-              className="mt-0.5 w-4 h-4 rounded-xs border-zinc-300 dark:border-zinc-700 text-zinc-900 dark:text-zinc-100 focus:ring-0 cursor-pointer"
-            />
-            <span className="text-xs font-medium text-zinc-800 dark:text-zinc-200 leading-snug">
-              {config.checkboxLabel}
-            </span>
-          </label>
+          {/* Optional Safety Checkbox (for destructive binary/uninstall actions) */}
+          {requiresCheckbox && (
+            <label className="flex items-start gap-3 p-3 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-zinc-50/50 dark:bg-zinc-950/40 hover:bg-zinc-100/60 dark:hover:bg-zinc-800/40 transition-colors cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={hasAcknowledged}
+                onChange={(e) => setHasAcknowledged(e.target.checked)}
+                disabled={isLoading}
+                className="mt-0.5 w-4 h-4 rounded-xs border-zinc-300 dark:border-zinc-700 text-zinc-900 dark:text-zinc-100 focus:ring-0 cursor-pointer"
+              />
+              <span className="text-xs font-medium text-zinc-800 dark:text-zinc-200 leading-snug">
+                {config.checkboxLabel}
+              </span>
+            </label>
+          )}
         </div>
 
         {/* Modal Footer Actions */}
@@ -214,16 +285,16 @@ export const RecoveryActionModal: React.FC<RecoveryActionModalProps> = ({
             type="button"
             onClick={onClose}
             disabled={isLoading}
-            className="h-10 px-4 rounded-sm border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 text-zinc-700 dark:text-zinc-300 font-mono text-xs font-semibold uppercase tracking-wider hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors cursor-pointer disabled:opacity-50"
+            className="h-9 px-4 rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 text-zinc-700 dark:text-zinc-300 text-xs font-semibold hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors cursor-pointer disabled:opacity-50"
           >
-            NO, CANCEL
+            Cancel
           </button>
 
           <button
             type="button"
             onClick={onConfirm}
-            disabled={!hasAcknowledged || isLoading}
-            className={`h-10 px-5 rounded-sm font-mono text-xs font-bold uppercase tracking-wider flex items-center justify-center gap-2 shadow-xs transition-all cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed ${config.confirmButtonClass}`}
+            disabled={(requiresCheckbox && !hasAcknowledged) || isLoading}
+            className={`h-9 px-5 rounded-lg text-xs font-semibold flex items-center justify-center gap-2 shadow-xs transition-all cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed ${config.confirmButtonClass}`}
           >
             {isLoading ? (
               <>
