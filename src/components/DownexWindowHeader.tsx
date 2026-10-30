@@ -49,17 +49,11 @@ export const DownexWindowHeader: React.FC = () => {
       {/* Draggable Titlebar Area: Underlying region handles native window movement */}
       <div data-tauri-drag-region className="absolute inset-0 z-0 pointer-events-auto" />
 
-      {/* Left Branding with Dynamic Version Resolution (Single Unified Robust Branding) */}
+      {/* Left Branding: Clean Pure Logo & Wordmark */}
       <div className="relative z-10 flex items-center gap-2 select-none">
-        <img src="/icon-arrow.png" alt="Downex" className="w-4.5 h-4.5 object-contain shrink-0" />
-        <span className="font-brand text-[20px] text-zinc-900 dark:text-zinc-100 tracking-wide leading-none pt-0.5">
+        <img src="/icon-arrow.png" alt="Downex" className="w-5 h-5 object-contain shrink-0" />
+        <span className="font-brand text-[21px] text-zinc-900 dark:text-zinc-100 tracking-wide leading-none pt-0.5">
           downex
-        </span>
-        <span
-          title="Dynamic runtime version (persisted & synced with Windows Registry)"
-          className="px-2 py-0.5 rounded-md text-[10px] font-mono bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 font-semibold border border-zinc-200/80 dark:border-zinc-700/80 pointer-events-auto shadow-2xs"
-        >
-          {formattedVersion}
         </span>
         {hasUpdate && (
           <span className="relative flex h-2 w-2 shrink-0 ml-0.5" title={`Update v${status.manifest?.version || ''} Available`}>
