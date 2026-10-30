@@ -158,12 +158,12 @@ export const App: React.FC = () => {
       <DownexWindowHeader />
 
       {/* Main App Body */}
-      <div className="flex-1 flex relative">
+      <div className="flex-1 flex relative min-h-0 overflow-hidden">
         {/* Left Navigation Sidebar */}
         <DownexSidebar darkMode={darkMode} setDarkMode={setDarkMode} />
 
         {/* Center Workspace */}
-        <main className="flex-1 flex flex-col overflow-hidden bg-white dark:bg-zinc-950">
+        <main className="flex-1 flex flex-col min-h-0 h-full overflow-hidden bg-white dark:bg-zinc-950">
           {rollbackAlert && (
             <div className="mx-4 mt-3 p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-700 dark:text-amber-300 flex items-center justify-between text-xs animate-in slide-in-from-top-2 shrink-0">
               <div className="flex items-center gap-2.5">

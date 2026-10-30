@@ -256,8 +256,8 @@ export const SettingsView: React.FC<SettingsViewProps> = () => {
   }
 
   return (
-    <div className="flex-1 h-full overflow-y-auto px-6 py-5 select-none bg-white dark:bg-zinc-950">
-      <div className="max-w-3xl mx-auto space-y-6">
+    <div className="flex-1 h-full min-h-0 overflow-y-auto px-6 py-5 select-none bg-white dark:bg-zinc-950">
+      <div className="max-w-3xl mx-auto space-y-6 pb-12">
         {/* Top Header with Reset to Defaults and Status Feedback */}
         <div className="flex items-center justify-between pb-4 border-b border-zinc-200/80 dark:border-zinc-800/80">
           <div>

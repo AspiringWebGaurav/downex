@@ -119,7 +119,7 @@ export const PatchNotesView: React.FC<PatchNotesViewProps> = ({ onBack }) => {
   };
 
   return (
-    <div className="flex-1 h-full overflow-y-auto px-6 py-5 select-none bg-white dark:bg-zinc-950 font-sans transition-colors duration-150">
+    <div className="flex-1 h-full min-h-0 overflow-y-auto px-6 py-5 select-none bg-white dark:bg-zinc-950 font-sans transition-colors duration-150">
       <div className="max-w-4xl mx-auto space-y-5 pb-12">
         {/* Navigation Breadcrumb & Header */}
         <div className="flex items-center justify-between pb-3 border-b border-zinc-200 dark:border-zinc-800">

@@ -93,7 +93,7 @@ export const TelemetryView: React.FC<TelemetryViewProps> = ({ onBack }) => {
   const chartAreaPoints = `0,90 ${chartPoints} 400,90`;
 
   return (
-    <div className="flex-1 flex flex-col h-full overflow-y-auto bg-white dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 select-none">
+    <div className="flex-1 flex flex-col h-full min-h-0 overflow-y-auto bg-white dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 select-none pb-12">
       {/* Top Header Bar */}
       <div className="h-14 px-6 flex items-center justify-between border-b border-zinc-200/80 dark:border-zinc-800/80 bg-zinc-50/50 dark:bg-zinc-900/30 shrink-0 sticky top-0 z-20 backdrop-blur-xs">
         <div className="flex items-center gap-3">

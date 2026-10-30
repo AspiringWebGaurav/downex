@@ -65,6 +65,18 @@ export function getLatestCodebaseVersion(): string {
 }
 
 export const BASELINE_PATCH_NOTES: Record<string, DynamicPatchNotes> = {
+  '0.0.24': {
+    version: '0.0.24',
+    releaseDate: 'October 30, 2026',
+    title: 'Workspace Flexbox min-h-0, Viewport Scroll Restoration & Single-View Queues UX',
+    highlights: [
+      'Viewport Scroll Restoration: Resolved flexbox min-height auto lockup on workspace body and main containers by enforcing min-h-0 and overflow-hidden constraints',
+      'Unlocked All Tab Scrollers: Enabled full vertical wheel and touch scrolling across Settings, Queues, Speed & Stats, Patch Notes, and Download Cards with generous bottom padding',
+      'Single-View Queues Architecture: Re-architected empty queue walkthrough into a clean 3-column horizontal grid fitting 100% in one view without vertical scrolling',
+      'Zero Layout Clipping: Prevented content from expanding beyond root window boundaries and being trapped behind outer window overflow rules',
+    ],
+    rawNotes: 'v0.0.24: Workspace flexbox min-h-0, viewport scroll restoration, and single-view queues UX',
+  },
   '0.0.23': {
     version: '0.0.23',
     releaseDate: 'October 30, 2026',

@@ -237,7 +237,7 @@ export const DownloadTable: React.FC = () => {
   if (displayItems.length === 0) {
     if (isSearchActive) {
       return (
-        <div className="flex-1 flex flex-col items-center justify-center p-6 text-center select-none max-w-lg mx-auto w-full my-auto animate-in fade-in duration-200">
+        <div className="flex-1 overflow-y-auto min-h-0 p-6 flex flex-col items-center justify-center text-center select-none max-w-lg mx-auto w-full my-auto animate-in fade-in duration-200">
           <div className="w-14 h-14 rounded-2xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800/60 flex items-center justify-center mb-3.5 text-amber-600 dark:text-amber-400 shadow-2xs">
             <SearchX className="w-7 h-7 stroke-[1.75]" />
           </div>
@@ -296,69 +296,69 @@ export const DownloadTable: React.FC = () => {
     }
 
     return (
-      <div className="flex-1 flex flex-col p-4">
+      <div className="flex-1 overflow-y-auto min-h-0 p-4 flex flex-col">
         {isQueuesView && renderQueueBanner()}
         {isQueuesView ? (
-          <div className="flex-1 flex flex-col items-center justify-center p-4 sm:p-6 select-none max-w-xl mx-auto w-full space-y-4 my-auto">
+          <div className="flex-1 flex flex-col items-center justify-center p-3 select-none max-w-3xl mx-auto w-full space-y-3.5 my-auto">
             <div className="text-center space-y-1">
-              <div className="w-10 h-10 rounded-xl bg-emerald-500/10 dark:bg-emerald-500/20 border border-emerald-500/20 text-emerald-600 dark:text-emerald-400 flex items-center justify-center mx-auto mb-2 shadow-2xs">
-                <ListOrdered className="w-5 h-5 stroke-[2.5]" />
+              <div className="w-9 h-9 rounded-xl bg-emerald-500/10 dark:bg-emerald-500/20 border border-emerald-500/20 text-emerald-600 dark:text-emerald-400 flex items-center justify-center mx-auto mb-1.5 shadow-2xs">
+                <ListOrdered className="w-4 h-4 stroke-[2.5]" />
               </div>
               <h3 className="text-sm font-bold text-zinc-900 dark:text-zinc-100">
                 How 1-by-1 Queue Works
               </h3>
-              <p className="text-xs text-zinc-500 dark:text-zinc-400">
+              <p className="text-xs text-zinc-500 dark:text-zinc-400 max-w-md mx-auto">
                 Downloads run one after another at maximum speed without slowing down your internet.
               </p>
             </div>
 
-            {/* 3 Step Cards */}
-            <div className="w-full grid grid-cols-1 gap-2.5 text-left">
-              <div className="p-3 rounded-xl bg-zinc-50/80 dark:bg-zinc-900/60 border border-zinc-200/80 dark:border-zinc-800 flex items-start gap-3 shadow-2xs">
-                <div className="w-6 h-6 rounded-full bg-zinc-900 text-white dark:bg-white dark:text-zinc-900 flex items-center justify-center text-xs font-bold shrink-0">
-                  1
-                </div>
-                <div>
-                  <span className="text-xs font-semibold text-zinc-900 dark:text-zinc-100 block">
-                    Add any file and click "Later"
-                  </span>
-                  <span className="text-[11px] text-zinc-500 dark:text-zinc-400 block mt-0.5">
-                    Click <strong>+ New Download</strong> (Ctrl+N), enter your URL, and click <strong>Later</strong> (🕒) instead of starting immediately.
+            {/* 3 Step Cards in 3-column horizontal grid */}
+            <div className="w-full grid grid-cols-1 sm:grid-cols-3 gap-2.5 text-left">
+              <div className="p-3 rounded-xl bg-zinc-50/80 dark:bg-zinc-900/60 border border-zinc-200/80 dark:border-zinc-800 flex flex-col gap-1.5 shadow-2xs">
+                <div className="flex items-center gap-2">
+                  <div className="w-5 h-5 rounded-full bg-zinc-900 text-white dark:bg-white dark:text-zinc-900 flex items-center justify-center text-[10px] font-bold shrink-0">
+                    1
+                  </div>
+                  <span className="text-xs font-semibold text-zinc-900 dark:text-zinc-100">
+                    Add & Choose Later
                   </span>
                 </div>
+                <p className="text-[11px] text-zinc-500 dark:text-zinc-400 leading-snug">
+                  Click <strong>+ New Download</strong> (Ctrl+N) and select <strong>Later</strong> (🕒) to enqueue.
+                </p>
               </div>
 
-              <div className="p-3 rounded-xl bg-zinc-50/80 dark:bg-zinc-900/60 border border-zinc-200/80 dark:border-zinc-800 flex items-start gap-3 shadow-2xs">
-                <div className="w-6 h-6 rounded-full bg-zinc-900 text-white dark:bg-white dark:text-zinc-900 flex items-center justify-center text-xs font-bold shrink-0">
-                  2
-                </div>
-                <div>
-                  <span className="text-xs font-semibold text-zinc-900 dark:text-zinc-100 block">
-                    Files line up in sequence
-                  </span>
-                  <span className="text-[11px] text-zinc-500 dark:text-zinc-400 block mt-0.5">
-                    Your queued downloads appear here in line, ready to download sequentially without competing for bandwidth.
+              <div className="p-3 rounded-xl bg-zinc-50/80 dark:bg-zinc-900/60 border border-zinc-200/80 dark:border-zinc-800 flex flex-col gap-1.5 shadow-2xs">
+                <div className="flex items-center gap-2">
+                  <div className="w-5 h-5 rounded-full bg-zinc-900 text-white dark:bg-white dark:text-zinc-900 flex items-center justify-center text-[10px] font-bold shrink-0">
+                    2
+                  </div>
+                  <span className="text-xs font-semibold text-zinc-900 dark:text-zinc-100">
+                    Lines Up in Order
                   </span>
                 </div>
+                <p className="text-[11px] text-zinc-500 dark:text-zinc-400 leading-snug">
+                  Queued files wait in sequence without competing for bandwidth.
+                </p>
               </div>
 
-              <div className="p-3 rounded-xl bg-emerald-50/60 dark:bg-emerald-950/30 border border-emerald-200/70 dark:border-emerald-800/60 flex items-start gap-3 shadow-2xs">
-                <div className="w-6 h-6 rounded-full bg-emerald-600 text-white dark:bg-emerald-500 dark:text-zinc-900 flex items-center justify-center text-xs font-bold shrink-0">
-                  3
-                </div>
-                <div>
-                  <span className="text-xs font-semibold text-emerald-950 dark:text-emerald-200 block">
-                    Click "Start Queue (1 by 1)"
-                  </span>
-                  <span className="text-[11px] text-emerald-800/90 dark:text-emerald-300/90 block mt-0.5">
-                    File #1 downloads at full 32-stream speed. As soon as it reaches 100%, file #2 starts automatically until all are complete.
+              <div className="p-3 rounded-xl bg-emerald-50/60 dark:bg-emerald-950/30 border border-emerald-200/70 dark:border-emerald-800/60 flex flex-col gap-1.5 shadow-2xs">
+                <div className="flex items-center gap-2">
+                  <div className="w-5 h-5 rounded-full bg-emerald-600 text-white dark:bg-emerald-500 dark:text-zinc-900 flex items-center justify-center text-[10px] font-bold shrink-0">
+                    3
+                  </div>
+                  <span className="text-xs font-semibold text-emerald-950 dark:text-emerald-200">
+                    Sequential 1-by-1
                   </span>
                 </div>
+                <p className="text-[11px] text-emerald-800/90 dark:text-emerald-300/90 leading-snug">
+                  Files download at full 32-stream speed one after another until done.
+                </p>
               </div>
             </div>
 
             {/* Quick Actions */}
-            <div className="flex flex-wrap items-center justify-center gap-2.5 pt-1">
+            <div className="flex flex-wrap items-center justify-center gap-2.5 pt-0.5">
               <Button
                 variant="primary-emerald"
                 size="md"
@@ -450,7 +450,7 @@ export const DownloadTable: React.FC = () => {
   }
 
   return (
-    <div className="flex-1 overflow-y-auto px-4 py-2 space-y-2.5">
+    <div className="flex-1 overflow-y-auto min-h-0 px-4 py-2 space-y-2.5 pb-8">
       {isQueuesView && renderQueueBanner()}
       {isSearchActive && (
         <div className="flex items-center justify-between px-3.5 py-2.5 rounded-xl bg-zinc-100/90 dark:bg-zinc-900/90 border border-zinc-200/80 dark:border-zinc-800/80 text-xs shadow-2xs">
