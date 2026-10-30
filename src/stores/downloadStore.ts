@@ -51,6 +51,8 @@ interface DownloadStore {
   openSettingsSubView: (subView: 'settings' | 'patch-notes') => void;
   setSearchQuery: (query: string) => void;
   setNewModalOpen: (open: boolean) => void;
+  isQueueGuideOpen: boolean;
+  setQueueGuideOpen: (open: boolean) => void;
   initListener: () => () => void;
 }
 
@@ -59,6 +61,8 @@ export const useDownloadStore = create<DownloadStore>((set, get) => ({
   selectedView: 'all',
   searchQuery: '',
   isNewModalOpen: false,
+  isQueueGuideOpen: false,
+  setQueueGuideOpen: (open: boolean) => set({ isQueueGuideOpen: open }),
   isStandaloneModal: false,
   setIsStandaloneModal: (val: boolean) => set({ isStandaloneModal: val }),
   totalSpeed: 0,

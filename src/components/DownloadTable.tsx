@@ -1,6 +1,6 @@
 import React, { useState, useRef } from 'react';
 import { Button } from './ui/Button';
-import { Play, Pause, Trash2, File, AlertCircle, FolderEdit, ListOrdered, ChevronDown, ChevronUp, ShieldCheck, FolderOpen, ExternalLink } from 'lucide-react';
+import { Play, Pause, Trash2, File, AlertCircle, FolderEdit, ListOrdered, ChevronDown, ChevronUp, ShieldCheck, FolderOpen, ExternalLink, HelpCircle, Plus, Sparkles } from 'lucide-react';
 import { useDownloadStore } from '../stores/downloadStore';
 import { openFolderPicker, openFile, openFileFolder, showDownloadCompleteDialog, isTauri, injectMockDownloadItem } from '../services/tauriService';
 import { DeleteConfirmModal } from './DeleteConfirmModal';
@@ -17,6 +17,8 @@ export const DownloadTable: React.FC = () => {
   const startQueue = useDownloadStore((state) => state.startQueue);
   const pauseQueue = useDownloadStore((state) => state.pauseQueue);
   const queueDownload = useDownloadStore((state) => state.queueDownload);
+  const setQueueGuideOpen = useDownloadStore((state) => state.setQueueGuideOpen);
+  const setNewModalOpen = useDownloadStore((state) => state.setNewModalOpen);
 
   const [expandedItemIds, setExpandedItemIds] = useState<Record<string, boolean>>({});
   const [showAllSegmentsMap, setShowAllSegmentsMap] = useState<Record<string, boolean>>({});
@@ -152,6 +154,16 @@ export const DownloadTable: React.FC = () => {
       </div>
 
       <div className="flex items-center gap-2">
+        <button
+          type="button"
+          onClick={() => setQueueGuideOpen(true)}
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-emerald-50 hover:bg-emerald-100 dark:bg-emerald-950/60 dark:hover:bg-emerald-900/60 text-emerald-700 dark:text-emerald-300 border border-emerald-300/80 dark:border-emerald-800 transition-colors cursor-pointer shadow-2xs"
+          title="Learn how 1-by-1 Queue works and how to add downloads"
+        >
+          <HelpCircle className="w-3.5 h-3.5 stroke-[2.5]" />
+          <span>How it works?</span>
+        </button>
+
         {isQueueRunning ? (
           <Button
             variant="warning"
@@ -180,41 +192,165 @@ export const DownloadTable: React.FC = () => {
     return (
       <div className="flex-1 flex flex-col p-4">
         {isQueuesView && renderQueueBanner()}
-        <div className="flex-1 flex flex-col items-center justify-center p-8 text-center select-none text-zinc-400 dark:text-zinc-600">
-          <div className="w-12 h-12 rounded-full bg-zinc-100 dark:bg-zinc-900 flex items-center justify-center mb-3">
-            {isQueuesView ? (
-              <ListOrdered className="w-6 h-6 stroke-[1.5]" />
-            ) : selectedView === 'trash' ? (
-              <Trash2 className="w-6 h-6 stroke-[1.5]" />
-            ) : (
-              <File className="w-6 h-6 stroke-[1.5]" />
-            )}
-          </div>
-          <p className="text-sm font-medium text-zinc-600 dark:text-zinc-400">
-            {isQueuesView
-              ? 'Queue is empty'
-              : selectedView === 'trash'
-              ? 'Trash is empty'
-              : selectedView === 'active'
-              ? 'No active downloads'
-              : selectedView === 'completed'
-              ? 'No completed downloads'
-              : 'No downloads found'}
-          </p>
-          <p className="text-xs text-zinc-400 dark:text-zinc-500 mt-1 max-w-sm">
-            {isQueuesView
-              ? 'Click "+ New Download" and choose "Download Later", or click the queue icon on any paused download.'
-              : selectedView === 'trash'
-              ? 'Failed or cancelled downloads will appear here.'
-              : selectedView === 'active'
-              ? 'Active and running downloads will appear here.'
-              : selectedView === 'completed'
-              ? 'Finished downloads will appear here.'
-              : 'Click "+ New Download" or copy any download link to start.'}
-          </p>
+        {isQueuesView ? (
+          <div className="flex-1 flex flex-col items-center justify-center p-4 sm:p-6 select-none max-w-xl mx-auto w-full space-y-4 my-auto">
+            <div className="text-center space-y-1">
+              <div className="w-10 h-10 rounded-xl bg-emerald-500/10 dark:bg-emerald-500/20 border border-emerald-500/20 text-emerald-600 dark:text-emerald-400 flex items-center justify-center mx-auto mb-2 shadow-2xs">
+                <ListOrdered className="w-5 h-5 stroke-[2.5]" />
+              </div>
+              <h3 className="text-sm font-bold text-zinc-900 dark:text-zinc-100">
+                How 1-by-1 Queue Works
+              </h3>
+              <p className="text-xs text-zinc-500 dark:text-zinc-400">
+                Downloads run one after another at maximum speed without slowing down your internet.
+              </p>
+            </div>
 
-          {!isTauri && (
-            <button
+            {/* 3 Step Cards */}
+            <div className="w-full grid grid-cols-1 gap-2.5 text-left">
+              <div className="p-3 rounded-xl bg-zinc-50/80 dark:bg-zinc-900/60 border border-zinc-200/80 dark:border-zinc-800 flex items-start gap-3 shadow-2xs">
+                <div className="w-6 h-6 rounded-full bg-zinc-900 text-white dark:bg-white dark:text-zinc-900 flex items-center justify-center text-xs font-bold shrink-0">
+                  1
+                </div>
+                <div>
+                  <span className="text-xs font-semibold text-zinc-900 dark:text-zinc-100 block">
+                    Add any file and click "Later"
+                  </span>
+                  <span className="text-[11px] text-zinc-500 dark:text-zinc-400 block mt-0.5">
+                    Click <strong>+ New Download</strong> (Ctrl+N), enter your URL, and click <strong>Later</strong> (🕒) instead of starting immediately.
+                  </span>
+                </div>
+              </div>
+
+              <div className="p-3 rounded-xl bg-zinc-50/80 dark:bg-zinc-900/60 border border-zinc-200/80 dark:border-zinc-800 flex items-start gap-3 shadow-2xs">
+                <div className="w-6 h-6 rounded-full bg-zinc-900 text-white dark:bg-white dark:text-zinc-900 flex items-center justify-center text-xs font-bold shrink-0">
+                  2
+                </div>
+                <div>
+                  <span className="text-xs font-semibold text-zinc-900 dark:text-zinc-100 block">
+                    Files line up in sequence
+                  </span>
+                  <span className="text-[11px] text-zinc-500 dark:text-zinc-400 block mt-0.5">
+                    Your queued downloads appear here in line, ready to download sequentially without competing for bandwidth.
+                  </span>
+                </div>
+              </div>
+
+              <div className="p-3 rounded-xl bg-emerald-50/60 dark:bg-emerald-950/30 border border-emerald-200/70 dark:border-emerald-800/60 flex items-start gap-3 shadow-2xs">
+                <div className="w-6 h-6 rounded-full bg-emerald-600 text-white dark:bg-emerald-500 dark:text-zinc-900 flex items-center justify-center text-xs font-bold shrink-0">
+                  3
+                </div>
+                <div>
+                  <span className="text-xs font-semibold text-emerald-950 dark:text-emerald-200 block">
+                    Click "Start Queue (1 by 1)"
+                  </span>
+                  <span className="text-[11px] text-emerald-800/90 dark:text-emerald-300/90 block mt-0.5">
+                    File #1 downloads at full 32-stream speed. As soon as it reaches 100%, file #2 starts automatically until all are complete.
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            {/* Quick Actions */}
+            <div className="flex flex-wrap items-center justify-center gap-2.5 pt-1">
+              <Button
+                variant="primary-emerald"
+                size="md"
+                icon={<Plus className="w-3.5 h-3.5 stroke-[2.5]" />}
+                onClick={() => setNewModalOpen(true)}
+              >
+                + Add Download to Queue
+              </Button>
+
+              <Button
+                variant="outline"
+                size="md"
+                icon={<Sparkles className="w-3.5 h-3.5 text-amber-500" />}
+                onClick={() => {
+                  const demoItems: DownloadItem[] = [
+                    {
+                      id: `queue-demo-1-${Date.now()}`,
+                      url: 'https://releases.ubuntu.com/24.04/ubuntu-24.04-desktop-amd64.iso',
+                      filename: 'ubuntu-24.04-desktop-amd64.iso',
+                      destination_path: 'C:\\Downloads\\Downex\\ubuntu-24.04-desktop-amd64.iso',
+                      total_bytes: 6144000000,
+                      downloaded_bytes: 0,
+                      status: 'queued',
+                      queue_id: 'default',
+                      speed_bytes_sec: 0,
+                      eta_seconds: 0,
+                      supports_ranges: true,
+                      created_at: Date.now(),
+                      updated_at: Date.now(),
+                      segments: [],
+                    },
+                    {
+                      id: `queue-demo-2-${Date.now()}`,
+                      url: 'https://code.visualstudio.com/sha/download?build=stable&os=win32-x64-user',
+                      filename: 'VSCodeUserSetup-x64-1.95.1.exe',
+                      destination_path: 'C:\\Downloads\\Downex\\VSCodeUserSetup-x64-1.95.1.exe',
+                      total_bytes: 98779136,
+                      downloaded_bytes: 0,
+                      status: 'queued',
+                      queue_id: 'default',
+                      speed_bytes_sec: 0,
+                      eta_seconds: 0,
+                      supports_ranges: true,
+                      created_at: Date.now() + 1000,
+                      updated_at: Date.now() + 1000,
+                      segments: [],
+                    },
+                  ];
+                  useDownloadStore.setState((state) => ({
+                    items: [...demoItems, ...state.items],
+                  }));
+                }}
+              >
+                Load Sample Queue
+              </Button>
+
+              <button
+                type="button"
+                onClick={() => setQueueGuideOpen(true)}
+                className="text-xs font-semibold text-emerald-600 dark:text-emerald-400 hover:underline px-2 py-1 cursor-pointer"
+              >
+                Learn More →
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className="flex-1 flex flex-col items-center justify-center p-8 text-center select-none text-zinc-400 dark:text-zinc-600">
+            <div className="w-12 h-12 rounded-full bg-zinc-100 dark:bg-zinc-900 flex items-center justify-center mb-3">
+              {selectedView === 'trash' ? (
+                <Trash2 className="w-6 h-6 stroke-[1.5]" />
+              ) : (
+                <File className="w-6 h-6 stroke-[1.5]" />
+              )}
+            </div>
+            <p className="text-sm font-medium text-zinc-600 dark:text-zinc-400">
+              {selectedView === 'trash'
+                ? 'Trash is empty'
+                : selectedView === 'active'
+                ? 'No active downloads'
+                : selectedView === 'completed'
+                ? 'No completed downloads'
+                : 'No downloads found'}
+            </p>
+            <p className="text-xs text-zinc-400 dark:text-zinc-500 mt-1 max-w-sm">
+              {selectedView === 'trash'
+                ? 'Failed or cancelled downloads will appear here.'
+                : selectedView === 'active'
+                ? 'Active and running downloads will appear here.'
+                : selectedView === 'completed'
+                ? 'Finished downloads will appear here.'
+                : 'Click "+ New Download" or copy any download link to start.'}
+            </p>
+
+          </div>
+        )}
+
+        {!isTauri && selectedView !== 'queues' && (
+          <button
               onClick={() => {
                 const sample: DownloadItem = {
                   id: 'mock-completed-setup',
@@ -251,7 +387,6 @@ export const DownloadTable: React.FC = () => {
             </button>
           )}
         </div>
-      </div>
     );
   }
 

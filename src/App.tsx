@@ -12,6 +12,7 @@ import { UpdateModal } from './components/UpdateModal';
 import { UpdateNotification } from './components/UpdateNotification';
 import { DevUpdateSimulator } from './components/DevUpdateSimulator';
 import { PatchNotesModal } from './components/PatchNotesModal';
+import { QueueGuideModal } from './components/Modals/QueueGuideModal';
 import { SettingsView } from './components/SettingsView';
 import { TelemetryView } from './components/TelemetryView';
 import { onOpenNewDownloadModal, restoreManagerWindow, onNavigate, onCheckUpdatesFromTray, onOtaRollbackRecovered, notifyDomReady } from './services/tauriService';
@@ -217,6 +218,7 @@ export const App: React.FC = () => {
       <UpdateModal />
       <UpdateNotification />
       <PatchNotesModal />
+      <QueueGuideModal />
       <DevUpdateSimulator />
     </div>
   );
