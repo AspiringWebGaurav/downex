@@ -183,11 +183,11 @@ export const SettingsView: React.FC<SettingsViewProps> = () => {
             <div className="flex items-center gap-2">
               <Settings className="w-5 h-5 text-zinc-900 dark:text-zinc-100" />
               <h1 className="text-base font-bold tracking-tight text-zinc-900 dark:text-zinc-100">
-                Downex Preferences & System Telemetry
+                Downex Preferences & Settings
               </h1>
             </div>
             <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-0.5">
-              Live hardware performance sensors and unified engine controls.
+              Live download speed, storage space, and engine preferences.
             </p>
           </div>
 
@@ -205,7 +205,7 @@ export const SettingsView: React.FC<SettingsViewProps> = () => {
             <div className="flex items-center gap-2">
               <Cpu className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
               <h2 className="text-xs font-semibold uppercase tracking-wider text-zinc-700 dark:text-zinc-300">
-                Live Engine Performance & Storage Telemetry
+                Live Download Speed & Storage
               </h2>
             </div>
             <div className="flex items-center gap-2">
@@ -215,7 +215,7 @@ export const SettingsView: React.FC<SettingsViewProps> = () => {
               <button
                 type="button"
                 onClick={() => setSelectedView('telemetry')}
-                title="Open dedicated telemetry & sensors dashboard"
+                title="Open dedicated speed & stats dashboard"
                 className="text-xs font-semibold text-emerald-600 dark:text-emerald-400 hover:text-emerald-700 dark:hover:text-emerald-300 flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-300/80 dark:border-emerald-800/60 shadow-2xs hover:bg-emerald-100/70 dark:hover:bg-emerald-900/40 transition-all cursor-pointer"
               >
                 <span>View All</span>
@@ -235,7 +235,7 @@ export const SettingsView: React.FC<SettingsViewProps> = () => {
               <div className="flex items-center gap-2">
                 <Eye className="w-4 h-4 text-blue-600 dark:text-blue-400 shrink-0" />
                 <span className="text-xs font-semibold text-zinc-900 dark:text-zinc-100">
-                  Show Telemetry Sidebar on Homepage
+                  Show Speed & Stats Panel on Homepage
                 </span>
                 <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-zinc-200/80 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400">
                   Default: Off (Clean Mode)

@@ -66,7 +66,7 @@ export const DownexSidebar: React.FC<DownexSidebarProps> = ({ darkMode, setDarkM
   const navItems = [
     { id: 'all', label: 'All Downloads', icon: Download, count: items.length },
     { id: 'queues', label: 'Queues', icon: ListOrdered, count: queuedCount, highlight: isQueueRunning && queuedCount > 0 },
-    { id: 'telemetry', label: 'Telemetry', icon: Activity },
+    { id: 'telemetry', label: 'Speed & Stats', icon: Activity },
     { id: 'add_url', label: 'Add URL', icon: Plus, isAction: true },
     { id: 'settings', label: 'Settings', icon: Settings },
     { id: 'trash', label: 'Trash', icon: Trash2, count: trashCount },
