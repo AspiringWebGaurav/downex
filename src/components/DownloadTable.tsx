@@ -513,10 +513,10 @@ export const DownloadTable: React.FC = () => {
                     <button
                       onClick={() => openFile(item.destination_path)}
                       className="px-2 py-0.5 rounded hover:bg-emerald-50 dark:hover:bg-emerald-950/40 text-emerald-600 dark:text-emerald-400 transition-colors cursor-pointer flex items-center gap-1 text-[11px] font-sans font-medium"
-                      title="Open file"
+                      title="Open with"
                     >
                       <ExternalLink className="w-3 h-3" />
-                      <span>Open</span>
+                      <span>Open with</span>
                     </button>
                     <button
                       onClick={() => openFileFolder(item.destination_path)}
