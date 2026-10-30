@@ -470,17 +470,17 @@ export const DownloadTable: React.FC = () => {
         return (
           <div
             key={item.id}
-            className="p-3 rounded-xl bg-white dark:bg-zinc-900/60 border border-zinc-200/80 dark:border-zinc-800/60 shadow-xs hover:border-zinc-300 dark:hover:border-zinc-700 transition-all flex flex-col gap-2.5"
+            className="p-3.5 rounded-xl bg-white dark:bg-zinc-900/60 border border-zinc-200/80 dark:border-zinc-800/60 shadow-xs hover:border-zinc-300 dark:hover:border-zinc-700 transition-all flex flex-col gap-2.5"
           >
             {/* Top row: Filename, Status Badge, Actions */}
             <div className="flex items-center justify-between gap-3">
-              <div className="flex items-center gap-2.5 min-w-0">
-                <div className="w-8 h-8 rounded-lg bg-zinc-100 dark:bg-zinc-800 flex items-center justify-center text-zinc-600 dark:text-zinc-300 shrink-0">
-                  <File className="w-4 h-4 stroke-[2]" />
+              <div className="flex items-center gap-3 min-w-0">
+                <div className="w-9 h-9 rounded-xl bg-zinc-100/90 dark:bg-zinc-800/80 border border-zinc-200/60 dark:border-zinc-700/60 flex items-center justify-center text-zinc-700 dark:text-zinc-200 shrink-0 shadow-2xs">
+                  <File className="w-4.5 h-4.5 stroke-[2]" />
                 </div>
-                <div className="min-w-0">
+                <div className="min-w-0 flex flex-col justify-center">
                   <div className="flex items-center gap-2">
-                    <h4 className="text-xs font-semibold text-zinc-900 dark:text-zinc-100 truncate">
+                    <h4 className="text-[14px] font-semibold text-zinc-900 dark:text-zinc-100 tracking-tight leading-snug truncate">
                       {item.filename}
                     </h4>
                     {queueBadgeText && (
@@ -489,7 +489,7 @@ export const DownloadTable: React.FC = () => {
                       </span>
                     )}
                   </div>
-                  <p className="text-[10px] text-zinc-400 dark:text-zinc-500 truncate font-mono">
+                  <p className="text-[11px] text-zinc-400 dark:text-zinc-500 truncate font-mono mt-0.5">
                     {item.destination_path}
                   </p>
                 </div>
