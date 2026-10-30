@@ -415,11 +415,11 @@ impl QueueManager {
 
     pub fn set_default_download_directory(&self, new_dir: &str) -> Result<String, String> {
         let trimmed = new_dir.trim();
-        if trimmed.is_empty() {
-            return Err("Download folder path cannot be empty".to_string());
-        }
-
-        let target_path = PathBuf::from(trimmed);
+        let target_path = if trimmed.is_empty() {
+            resolve_default_download_directory()
+        } else {
+            PathBuf::from(trimmed)
+        };
 
         // Verify folder write accessibility on disk (IDM validation pattern)
         std::fs::create_dir_all(&target_path)

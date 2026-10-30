@@ -208,10 +208,11 @@ export async function getDefaultDownloadDir(): Promise<string> {
 
 export async function setDefaultDownloadDir(newDir: string): Promise<string> {
   if (!isTauri) {
+    const target = newDir.trim() || 'C:\\Downloads\\Downex';
     try {
-      localStorage.setItem('downex_default_dir', newDir);
+      localStorage.setItem('downex_default_dir', target);
     } catch {}
-    return newDir;
+    return target;
   }
   return await invoke<string>('cmd_set_default_download_dir', { newDir });
 }
