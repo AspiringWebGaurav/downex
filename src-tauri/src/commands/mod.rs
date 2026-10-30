@@ -1123,6 +1123,7 @@ pub fn show_download_dialog<R: tauri::Runtime>(app: &tauri::AppHandle<R>, payloa
         .center()
         .resizable(false)
         .always_on_top(true)
+        .initialization_script("window.__DOWNEX_WINDOW_LABEL__ = 'download_dialog';")
         .visible(true);
 
         if let Ok(window) = builder.build() {
@@ -1298,6 +1299,7 @@ pub fn show_download_complete<R: tauri::Runtime>(app: &tauri::AppHandle<R>, payl
         .center()
         .resizable(false)
         .always_on_top(true)
+        .initialization_script("window.__DOWNEX_WINDOW_LABEL__ = 'download_complete';")
         .visible(true);
 
         if let Ok(window) = builder.build() {

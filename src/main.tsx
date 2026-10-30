@@ -7,14 +7,9 @@ import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
 import './App.css';
 
 function getInitialWindowLabel(): string {
-  try {
-    const internalLabel =
-      (window as any).__TAURI_INTERNALS__?.metadata?.currentWebview?.label ||
-      (window as any).__TAURI_INTERNALS__?.metadata?.currentWindow?.label;
-    if (internalLabel) return internalLabel;
-    const current = getCurrentWebviewWindow();
-    if (current && current.label) return current.label;
-  } catch {}
+  if (typeof window !== 'undefined' && (window as any).__DOWNEX_WINDOW_LABEL__) {
+    return (window as any).__DOWNEX_WINDOW_LABEL__;
+  }
   const search = window.location.search;
   const path = window.location.pathname;
   if (
@@ -33,6 +28,14 @@ function getInitialWindowLabel(): string {
   ) {
     return 'download_complete';
   }
+  try {
+    const internalLabel =
+      (window as any).__TAURI_INTERNALS__?.metadata?.currentWebview?.label ||
+      (window as any).__TAURI_INTERNALS__?.metadata?.currentWindow?.label;
+    if (internalLabel) return internalLabel;
+    const current = getCurrentWebviewWindow();
+    if (current && current.label) return current.label;
+  } catch {}
   return 'main';
 }
 

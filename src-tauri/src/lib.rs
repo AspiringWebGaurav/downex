@@ -87,15 +87,20 @@ pub fn run() {
         .on_window_event(|window, event| {
             match event {
                 tauri::WindowEvent::CloseRequested { api, .. } => {
-                    api.prevent_close();
-                    let _ = window.hide();
-                    #[cfg(target_os = "windows")]
-                    {
-                        crate::commands::set_process_priority_background(true);
-                        crate::commands::trim_process_working_set();
-                    }
                     if window.label() == "main" {
+                        api.prevent_close();
+                        let _ = window.hide();
+                        #[cfg(target_os = "windows")]
+                        {
+                            crate::commands::set_process_priority_background(true);
+                            crate::commands::trim_process_working_set();
+                        }
                         let _ = crate::tray::refresh_tray_menu(window.app_handle());
+                    } else {
+                        // Secondary dialogs (download_dialog, download_complete) MUST NOT prevent close!
+                        // This allows Taskbar "Close window", Alt+F4, and thumbnail X to close cleanly.
+                        let _ = window.set_always_on_top(false);
+                        let _ = window.hide();
                     }
                 }
                 tauri::WindowEvent::Focused(true) => {

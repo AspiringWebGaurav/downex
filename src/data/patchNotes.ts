@@ -65,6 +65,18 @@ export function getLatestCodebaseVersion(): string {
 }
 
 export const BASELINE_PATCH_NOTES: Record<string, DynamicPatchNotes> = {
+  '0.0.23': {
+    version: '0.0.23',
+    releaseDate: 'October 30, 2026',
+    title: 'In-App New Download Modal Routing, Secondary Window Close Lockup Fix & Native Shell Unblock',
+    highlights: [
+      'Native In-App New Download Modal: Clicking "+ New Download" or pressing Ctrl+N now opens the instant in-app modal directly in the main dashboard with zero webview delay or second OS window spawning',
+      'Taskbar & Window Close Fix: Resolved Win32 prevent_close lockup on secondary dialogs, allowing Windows Taskbar "Close window", Alt+F4, and window controls to cleanly dismiss dialogs without requiring Task Manager End Task',
+      'Zero-Latency Modal Performance: Instant clipboard auto-detection, folder picker, and disk space telemetry without separate process overhead',
+      'Multi-Window Lifecycle Resilience: Synchronous label injection prevents blank webview flash for external grabber dialogs while preserving immutable Base 0.0.0 compatibility',
+    ],
+    rawNotes: 'v0.0.23: In-app new download modal routing, secondary window close lockup fix, and zero-latency dialog performance',
+  },
   '0.0.22': {
     version: '0.0.22',
     releaseDate: 'October 30, 2026',

@@ -440,7 +440,7 @@ export const DownloadDialogWindow: React.FC = () => {
 
   // The Dialog Window Component
   const DialogContent = (
-    <div className="w-full flex flex-col bg-white dark:bg-zinc-900 text-zinc-900 dark:text-zinc-100 font-sans select-none overflow-hidden">
+    <div className="w-full h-full flex flex-col bg-white dark:bg-zinc-900 text-zinc-900 dark:text-zinc-100 font-sans select-none overflow-hidden">
       {/* Frameless Drag Title Bar */}
       <div 
         data-tauri-drag-region

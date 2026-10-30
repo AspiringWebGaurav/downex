@@ -14,7 +14,7 @@ import { DevUpdateSimulator } from './components/DevUpdateSimulator';
 import { PatchNotesModal } from './components/PatchNotesModal';
 import { SettingsView } from './components/SettingsView';
 import { TelemetryView } from './components/TelemetryView';
-import { onOpenNewDownloadModal, showDownloadDialog, onNavigate, onCheckUpdatesFromTray, onOtaRollbackRecovered, notifyDomReady } from './services/tauriService';
+import { onOpenNewDownloadModal, restoreManagerWindow, onNavigate, onCheckUpdatesFromTray, onOtaRollbackRecovered, notifyDomReady } from './services/tauriService';
 import './App.css';
 
 export const App: React.FC = () => {
@@ -96,7 +96,7 @@ export const App: React.FC = () => {
       }
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'n') {
         e.preventDefault();
-        showDownloadDialog();
+        setNewModalOpen(true);
       }
     };
     window.addEventListener('keydown', handleKeyDown);
@@ -112,7 +112,8 @@ export const App: React.FC = () => {
     window.addEventListener('downex-open-new-download', handleBrowserOpen);
 
     const unlistenTrayModal = onOpenNewDownloadModal(() => {
-      showDownloadDialog();
+      setNewModalOpen(true);
+      restoreManagerWindow().catch(() => {});
     });
 
     const unlistenNavigate = onNavigate((view) => {
@@ -193,7 +194,7 @@ export const App: React.FC = () => {
                   variant="primary"
                   size="md"
                   icon={<Plus className="w-4 h-4 stroke-[2.5]" />}
-                  onClick={() => showDownloadDialog()}
+                  onClick={() => setNewModalOpen(true)}
                 >
                   New Download
                 </Button>
