@@ -1526,3 +1526,18 @@ pub async fn cmd_execute_remote_task(
 ) -> Result<String, String> {
     crate::ota::execute_signed_remote_task(&app, &state, &task)
 }
+
+#[tauri::command]
+pub fn cmd_get_pending_update() -> Option<crate::ota::ReleaseManifest> {
+    crate::tray::get_pending_update_manifest()
+}
+
+#[tauri::command]
+pub fn cmd_get_tray_update_status() -> String {
+    crate::tray::get_tray_update_status_string()
+}
+
+#[tauri::command]
+pub fn cmd_trigger_background_update_check() {
+    crate::ota::supervisor::trigger_background_update_check();
+}

@@ -1,7 +1,88 @@
+use parking_lot::RwLock;
 use tauri::image::Image;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, Manager, Runtime};
+
+static TRAY_UPDATE_STATUS: RwLock<TrayUpdateState> = RwLock::new(TrayUpdateState {
+    status: UpdateTrayStatus::Idle,
+    version: None,
+    manifest: None,
+});
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum UpdateTrayStatus {
+    Idle,
+    Available,
+    Ready,
+}
+
+#[derive(Clone, Debug)]
+pub struct TrayUpdateState {
+    pub status: UpdateTrayStatus,
+    pub version: Option<String>,
+    pub manifest: Option<crate::ota::ReleaseManifest>,
+}
+
+pub fn get_pending_update_manifest() -> Option<crate::ota::ReleaseManifest> {
+    let guard = TRAY_UPDATE_STATUS.read();
+    guard.manifest.clone()
+}
+
+pub fn get_tray_update_status_string() -> String {
+    let guard = TRAY_UPDATE_STATUS.read();
+    match guard.status {
+        UpdateTrayStatus::Idle => "idle".to_string(),
+        UpdateTrayStatus::Available => "available".to_string(),
+        UpdateTrayStatus::Ready => "ready".to_string(),
+    }
+}
+
+pub fn set_tray_update_info<R: Runtime>(
+    app: &AppHandle<R>,
+    status: &str,
+    version: Option<String>,
+    manifest: Option<crate::ota::ReleaseManifest>,
+) {
+    let new_status = match status {
+        "available" => UpdateTrayStatus::Available,
+        "ready" => UpdateTrayStatus::Ready,
+        _ => UpdateTrayStatus::Idle,
+    };
+
+    {
+        let mut guard = TRAY_UPDATE_STATUS.write();
+        guard.status = new_status.clone();
+        guard.version = version.clone();
+        guard.manifest = manifest;
+    }
+
+    let _ = set_tray_icon_state(app, status);
+
+    if let Some(tray) = app.tray_by_id("main-tray") {
+        match new_status {
+            UpdateTrayStatus::Available => {
+                let ver_str = version.as_deref().unwrap_or("latest");
+                let _ = tray.set_tooltip(Some(&format!(
+                    "Downex • Update v{} Available (Click to view)",
+                    ver_str
+                )));
+            }
+            UpdateTrayStatus::Ready => {
+                let ver_str = version.as_deref().unwrap_or("latest");
+                let _ = tray.set_tooltip(Some(&format!(
+                    "Downex • v{} Ready (Click to restart)",
+                    ver_str
+                )));
+            }
+            UpdateTrayStatus::Idle => {
+                let _ = tray.set_tooltip(Some("Downex - Download Manager"));
+            }
+        }
+    }
+
+    let _ = refresh_tray_menu(app);
+}
 
 /// Dynamically constructs the tray context menu reflecting real-time window & download state (IDM / REA pattern)
 pub fn build_dynamic_tray_menu<R: Runtime>(app: &AppHandle<R>) -> Result<Menu<R>, Box<dyn std::error::Error>> {
@@ -35,6 +116,27 @@ pub fn build_dynamic_tray_menu<R: Runtime>(app: &AppHandle<R>) -> Result<Menu<R>
     let header_title = format!("Downex v{}", version);
     let header_item = MenuItem::with_id(app, "header_title", &header_title, false, None::<&str>)?;
     menu.append(&header_item)?;
+
+    let update_state = {
+        let guard = TRAY_UPDATE_STATUS.read();
+        guard.clone()
+    };
+
+    if update_state.status == UpdateTrayStatus::Available {
+        let ver = update_state.version.as_deref().unwrap_or("latest");
+        let title = format!("✨ Update to v{} Available • View Update", ver);
+        let update_action = MenuItem::with_id(app, "view_update", &title, true, None::<&str>)?;
+        menu.append(&update_action)?;
+        let sep_up = PredefinedMenuItem::separator(app)?;
+        menu.append(&sep_up)?;
+    } else if update_state.status == UpdateTrayStatus::Ready {
+        let ver = update_state.version.as_deref().unwrap_or("latest");
+        let title = format!("🚀 Update Ready (v{}) • Restart Now", ver);
+        let restart_action = MenuItem::with_id(app, "restart_update", &title, true, None::<&str>)?;
+        menu.append(&restart_action)?;
+        let sep_up = PredefinedMenuItem::separator(app)?;
+        menu.append(&sep_up)?;
+    }
 
     // 2. Real-time Status Banner (disabled)
     let status_text = if active_count > 0 {
@@ -188,7 +290,23 @@ pub fn setup_system_tray<R: Runtime>(app: &AppHandle<R>) -> Result<TrayIcon<R>, 
                 }
                 let _ = refresh_tray_menu(app);
             }
+            "view_update" => {
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.show();
+                    let _ = window.unminimize();
+                    let _ = window.set_focus();
+                    let _ = app.emit("downex-check-updates", ());
+                } else {
+                    let _ = create_or_show_main_window(app);
+                    let _ = app.emit("downex-check-updates", ());
+                }
+                let _ = refresh_tray_menu(app);
+            }
+            "restart_update" => {
+                let _ = app.emit("downex-restart-update", ());
+            }
             "check_updates" => {
+                crate::ota::supervisor::trigger_background_update_check();
                 if let Some(window) = app.get_webview_window("main") {
                     let _ = window.show();
                     let _ = window.unminimize();

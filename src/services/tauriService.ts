@@ -554,6 +554,67 @@ export async function quitApp(): Promise<void> {
   }
 }
 
+export async function getPendingUpdate(): Promise<ReleaseManifest | null> {
+  if (isTauri) {
+    try {
+      return await invoke<ReleaseManifest | null>('cmd_get_pending_update');
+    } catch (e) {
+      console.warn('Failed to get pending update:', e);
+    }
+  }
+  return null;
+}
+
+export async function getTrayUpdateStatus(): Promise<string> {
+  if (isTauri) {
+    try {
+      return await invoke<string>('cmd_get_tray_update_status');
+    } catch (e) {
+      console.warn('Failed to get tray update status:', e);
+    }
+  }
+  return 'idle';
+}
+
+export async function triggerBackgroundUpdateCheck(): Promise<void> {
+  if (isTauri) {
+    try {
+      await invoke('cmd_trigger_background_update_check');
+    } catch (e) {
+      console.warn('Failed to trigger background update check:', e);
+    }
+  }
+}
+
+export function onUpdateDetected(callback: (manifest: ReleaseManifest) => void): () => void {
+  if (!isTauri) return () => {};
+  let isCancelled = false;
+  let unlistenFn: (() => void) | null = null;
+
+  listen<ReleaseManifest>('downex-update-detected', (event) => {
+    if (!isCancelled && event.payload) {
+      callback(event.payload);
+    }
+  })
+    .then((unlisten) => {
+      if (isCancelled) {
+        unlisten();
+      } else {
+        unlistenFn = unlisten;
+      }
+    })
+    .catch((err) => {
+      console.error('[Downex] Error listening to downex-update-detected:', err);
+    });
+
+  return () => {
+    isCancelled = true;
+    if (unlistenFn) {
+      unlistenFn();
+    }
+  };
+}
+
 export async function setTrayIcon(state: 'idle' | 'update_available' | 'downloading' | 'ready'): Promise<void> {
   if (isTauri) {
     try {

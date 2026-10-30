@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+pub mod supervisor;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlatformInfo {
     pub signature: Option<String>,

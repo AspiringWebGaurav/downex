@@ -133,8 +133,11 @@ pub fn run() {
             app.manage(AppState {
                 db: db.clone(),
                 queue_manager: queue_manager.clone(),
-                http_client: client,
+                http_client: client.clone(),
             });
+
+            // Spawn autonomous native background update supervisor
+            crate::ota::supervisor::spawn_update_supervisor(app.handle().clone(), client.clone());
 
             // Setup system tray AFTER AppState is managed so dynamic stats are accessible
             if let Ok(tray) = tray::setup_system_tray(app.handle()) {
@@ -313,6 +316,9 @@ pub fn run() {
             cmd_repair_application,
             cmd_reset_to_base_version,
             cmd_execute_remote_task,
+            cmd_get_pending_update,
+            cmd_get_tray_update_status,
+            cmd_trigger_background_update_check,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Downex application");

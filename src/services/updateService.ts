@@ -20,6 +20,8 @@ import {
   onOtaDownloadProgress,
   applyInProcessUpdate,
   setTrayIcon,
+  getPendingUpdate,
+  onUpdateDetected,
   verifyUpdateSignature,
   pauseDownload,
 } from './tauriService';
@@ -70,6 +72,35 @@ class UpdateService {
   private isBusy = false;
   private pacingInterval: any = null;
   private resetTimer: any = null;
+
+  constructor() {
+    this.hydrateFromNativeSupervisor();
+  }
+
+  private async hydrateFromNativeSupervisor() {
+    try {
+      const pending = await getPendingUpdate();
+      if (pending && pending.version && compareSemver(cleanVersion(pending.version), this.currentVersion) > 0) {
+        this.notify({
+          state: 'available',
+          targetVersion: cleanVersion(pending.version),
+          manifest: pending,
+        });
+      }
+
+      onUpdateDetected((manifest) => {
+        if (manifest && manifest.version && compareSemver(cleanVersion(manifest.version), this.currentVersion) > 0) {
+          this.notify({
+            state: 'available',
+            targetVersion: cleanVersion(manifest.version),
+            manifest,
+          });
+        }
+      });
+    } catch (e) {
+      console.warn('[Downex OTA] Native supervisor hydration notice:', e);
+    }
+  }
 
   private getOrCreateMachineId(): string {
     try {
