@@ -5,12 +5,10 @@ import {
   Clock, 
   Play, 
   Zap, 
-  Download, 
-  Sparkles
+  Download
 } from 'lucide-react';
 import { Button } from '../ui/Button';
 import { useDownloadStore } from '../../stores/downloadStore';
-import { DownloadItem } from '../../types/download';
 
 export const QueueGuideModal: React.FC = () => {
   const isQueueGuideOpen = useDownloadStore((state) => state.isQueueGuideOpen);
@@ -36,50 +34,6 @@ export const QueueGuideModal: React.FC = () => {
     setQueueGuideOpen(false);
     setSelectedView('queues');
     setNewModalOpen(true);
-  };
-
-  const handleLoadDemoQueue = () => {
-    const demoItems: DownloadItem[] = [
-      {
-        id: `queue-demo-1-${Date.now()}`,
-        url: 'https://releases.ubuntu.com/24.04/ubuntu-24.04-desktop-amd64.iso',
-        filename: 'ubuntu-24.04-desktop-amd64.iso',
-        destination_path: 'C:\\Downloads\\Downex\\ubuntu-24.04-desktop-amd64.iso',
-        total_bytes: 6144000000,
-        downloaded_bytes: 0,
-        status: 'queued',
-        queue_id: 'default',
-        speed_bytes_sec: 0,
-        eta_seconds: 0,
-        supports_ranges: true,
-        created_at: Date.now(),
-        updated_at: Date.now(),
-        segments: [],
-      },
-      {
-        id: `queue-demo-2-${Date.now()}`,
-        url: 'https://code.visualstudio.com/sha/download?build=stable&os=win32-x64-user',
-        filename: 'VSCodeUserSetup-x64-1.95.1.exe',
-        destination_path: 'C:\\Downloads\\Downex\\VSCodeUserSetup-x64-1.95.1.exe',
-        total_bytes: 98779136,
-        downloaded_bytes: 0,
-        status: 'queued',
-        queue_id: 'default',
-        speed_bytes_sec: 0,
-        eta_seconds: 0,
-        supports_ranges: true,
-        created_at: Date.now() + 1000,
-        updated_at: Date.now() + 1000,
-        segments: [],
-      },
-    ];
-
-    useDownloadStore.setState((state) => ({
-      items: [...demoItems, ...state.items],
-      selectedView: 'queues',
-    }));
-
-    setQueueGuideOpen(false);
   };
 
   return (
@@ -202,38 +156,25 @@ export const QueueGuideModal: React.FC = () => {
         </div>
 
         {/* Footer Actions */}
-        <div className="p-4 px-6 border-t border-zinc-200/80 dark:border-zinc-800 bg-zinc-50/50 dark:bg-zinc-950/40 flex items-center justify-between gap-3 shrink-0">
+        <div className="p-4 px-6 border-t border-zinc-200/80 dark:border-zinc-800 bg-zinc-50/50 dark:bg-zinc-950/40 flex items-center justify-end gap-3 shrink-0">
           <Button
             type="button"
             variant="outline"
             size="md"
-            icon={<Sparkles className="w-3.5 h-3.5 text-amber-500" />}
-            onClick={handleLoadDemoQueue}
-            title="Load 2 sample queued files to test Start Queue immediately"
+            onClick={() => setQueueGuideOpen(false)}
           >
-            Load Sample Queue
+            Got it
           </Button>
 
-          <div className="flex items-center gap-2">
-            <Button
-              type="button"
-              variant="outline"
-              size="md"
-              onClick={() => setQueueGuideOpen(false)}
-            >
-              Got it
-            </Button>
-
-            <Button
-              type="button"
-              variant="primary-emerald"
-              size="md"
-              icon={<Download className="w-3.5 h-3.5 stroke-[2.5]" />}
-              onClick={handleOpenAddModal}
-            >
-              + Add to Queue Now
-            </Button>
-          </div>
+          <Button
+            type="button"
+            variant="primary-emerald"
+            size="md"
+            icon={<Download className="w-3.5 h-3.5 stroke-[2.5]" />}
+            onClick={handleOpenAddModal}
+          >
+            + Add to Queue Now
+          </Button>
         </div>
       </div>
     </div>

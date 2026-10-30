@@ -15,7 +15,6 @@ import {
   ExternalLink, 
   HelpCircle, 
   Plus, 
-  Sparkles,
   Search,
   SearchX,
   RotateCcw,
@@ -361,62 +360,15 @@ export const DownloadTable: React.FC = () => {
                 icon={<Plus className="w-3.5 h-3.5 stroke-[2.5]" />}
                 onClick={() => setNewModalOpen(true)}
               >
-                + Add Download to Queue
-              </Button>
-
-              <Button
-                variant="outline"
-                size="md"
-                icon={<Sparkles className="w-3.5 h-3.5 text-amber-500" />}
-                onClick={() => {
-                  const demoItems: DownloadItem[] = [
-                    {
-                      id: `queue-demo-1-${Date.now()}`,
-                      url: 'https://releases.ubuntu.com/24.04/ubuntu-24.04-desktop-amd64.iso',
-                      filename: 'ubuntu-24.04-desktop-amd64.iso',
-                      destination_path: 'C:\\Downloads\\Downex\\ubuntu-24.04-desktop-amd64.iso',
-                      total_bytes: 6144000000,
-                      downloaded_bytes: 0,
-                      status: 'queued',
-                      queue_id: 'default',
-                      speed_bytes_sec: 0,
-                      eta_seconds: 0,
-                      supports_ranges: true,
-                      created_at: Date.now(),
-                      updated_at: Date.now(),
-                      segments: [],
-                    },
-                    {
-                      id: `queue-demo-2-${Date.now()}`,
-                      url: 'https://code.visualstudio.com/sha/download?build=stable&os=win32-x64-user',
-                      filename: 'VSCodeUserSetup-x64-1.95.1.exe',
-                      destination_path: 'C:\\Downloads\\Downex\\VSCodeUserSetup-x64-1.95.1.exe',
-                      total_bytes: 98779136,
-                      downloaded_bytes: 0,
-                      status: 'queued',
-                      queue_id: 'default',
-                      speed_bytes_sec: 0,
-                      eta_seconds: 0,
-                      supports_ranges: true,
-                      created_at: Date.now() + 1000,
-                      updated_at: Date.now() + 1000,
-                      segments: [],
-                    },
-                  ];
-                  useDownloadStore.setState((state) => ({
-                    items: [...demoItems, ...state.items],
-                  }));
-                }}
-              >
-                Load Sample Queue
+                Add Download to Queue
               </Button>
 
               <button
                 type="button"
                 onClick={() => setQueueGuideOpen(true)}
-                className="text-xs font-semibold text-emerald-600 dark:text-emerald-400 hover:underline px-2 py-1 cursor-pointer"
+                className="text-xs font-semibold text-emerald-600 dark:text-emerald-400 hover:underline px-2.5 py-1.5 cursor-pointer"
               >
-                Learn More →
+                How Queues Work →
               </button>
             </div>
           </div>
