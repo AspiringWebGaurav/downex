@@ -44,15 +44,15 @@ export const DownexWindowHeader: React.FC = () => {
 
   return (
     <div
-      className="relative h-9 w-full flex items-center justify-between px-3 select-none bg-white dark:bg-zinc-950 z-40 shrink-0 border-b border-zinc-200/80 dark:border-zinc-800/60"
+      className="relative h-[48px] w-full flex items-center justify-between px-3 select-none bg-white dark:bg-zinc-950 z-40 shrink-0 border-b border-zinc-200/80 dark:border-zinc-800/60"
     >
       {/* Draggable Titlebar Area: Underlying region handles native window movement */}
       <div data-tauri-drag-region className="absolute inset-0 z-0 pointer-events-auto" />
 
       {/* Left Branding: Clean Pure Logo & Wordmark */}
-      <div className="relative z-10 flex items-center gap-2 select-none">
+      <div className="relative z-10 flex items-center gap-2 select-none mb-1.5">
         <img src="/icon-arrow.png" alt="Downex" className="w-5 h-5 object-contain shrink-0" />
-        <span className="font-brand text-[21px] text-zinc-900 dark:text-zinc-100 tracking-wide leading-none pt-0.5">
+        <span className="font-brand text-[21px] text-zinc-900 dark:text-zinc-100 tracking-wide leading-none">
           downex
         </span>
         {hasUpdate && (
