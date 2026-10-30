@@ -553,10 +553,10 @@ export const DownloadTable: React.FC = () => {
                     <button
                       onClick={() => openFileFolder(item.destination_path)}
                       className="px-2 py-0.5 rounded hover:bg-zinc-100 dark:hover:bg-zinc-800 text-zinc-600 dark:text-zinc-300 transition-colors cursor-pointer flex items-center gap-1 text-[11px] font-sans font-medium"
-                      title="Show in folder"
+                      title="Open destination folder"
                     >
                       <FolderOpen className="w-3 h-3" />
-                      <span>Folder</span>
+                      <span>Destination folder</span>
                     </button>
                     <button
                       onClick={() => showDownloadCompleteDialog({
