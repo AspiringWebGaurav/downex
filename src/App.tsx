@@ -1,9 +1,10 @@
 import React, { useEffect, useState } from 'react';
 import { Button } from './components/ui/Button';
-import { Search, Plus, ShieldAlert, X } from 'lucide-react';
+import { Plus, ShieldAlert, X } from 'lucide-react';
 import { DownexWindowHeader } from './components/DownexWindowHeader';
 import { DownexSidebar } from './components/DownexSidebar';
 import { DownloadTable } from './components/DownloadTable';
+import { InAppSearchBar } from './components/InAppSearchBar';
 import { TelemetryWidget } from './components/TelemetryWidget';
 import { NewDownloadModal } from './components/NewDownloadModal';
 import { useDownloadStore } from './stores/downloadStore';
@@ -26,8 +27,8 @@ export const App: React.FC = () => {
   const loadItems = useDownloadStore((state) => state.loadItems);
   const initListener = useDownloadStore((state) => state.initListener);
   const initVersion = useAppVersionStore((state) => state.initVersion);
-  const searchQuery = useDownloadStore((state) => state.searchQuery);
-  const setSearchQuery = useDownloadStore((state) => state.setSearchQuery);
+
+
   const setNewModalOpen = useDownloadStore((state) => state.setNewModalOpen);
   const openNewModalWithData = useDownloadStore((state) => state.openNewModalWithData);
   const selectedView = useDownloadStore((state) => state.selectedView);
@@ -90,10 +91,21 @@ export const App: React.FC = () => {
   // Global Ctrl+K / Ctrl+N shortcuts & Tray events
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+      const isSearchTrigger = ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') ||
+        (e.key === '/' && document.activeElement?.tagName !== 'INPUT' && document.activeElement?.tagName !== 'TEXTAREA');
+      if (isSearchTrigger) {
         e.preventDefault();
         const searchInput = document.getElementById('search-input');
-        if (searchInput) searchInput.focus();
+        const currentView = useDownloadStore.getState().selectedView;
+        if (currentView === 'settings' || currentView === 'telemetry') {
+          useDownloadStore.getState().setSelectedView('all');
+          setTimeout(() => {
+            const input = document.getElementById('search-input');
+            if (input) input.focus();
+          }, 120);
+        } else if (searchInput) {
+          searchInput.focus();
+        }
       }
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'n') {
         e.preventDefault();
@@ -177,18 +189,19 @@ export const App: React.FC = () => {
             <>
               {/* Top Control Bar */}
               <div className="h-14 px-4 flex items-center justify-between border-b border-zinc-100 dark:border-zinc-800/60 shrink-0 gap-3">
-                {/* Search Input */}
-                <div className="relative flex-1 max-w-md">
-                  <input
-                    id="search-input"
-                    type="text"
-                    placeholder="Search downloads... (Ctrl+K)"
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                    className="w-full px-3 py-1.5 pl-8 text-xs font-mono rounded-lg bg-zinc-100 dark:bg-zinc-900 border border-transparent focus:border-zinc-300 dark:focus:border-zinc-700 focus:outline-none transition-all placeholder:text-zinc-400"
-                  />
-                  <Search className="w-3.5 h-3.5 text-zinc-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
-                </div>
+                {/* In-App Search Bar */}
+                <InAppSearchBar darkMode={darkMode} setDarkMode={setDarkMode} />
+
+
+
+
+
+
+
+
+
+
+
 
                 {/* New Download Action Button */}
                 <Button
