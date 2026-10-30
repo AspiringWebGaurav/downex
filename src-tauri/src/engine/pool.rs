@@ -249,14 +249,19 @@ impl DownloadEnginePool {
                             0.0
                         };
 
-                        // Exponential Moving Average filter for speed (damped for 150ms loop)
+                        // Heavy low-pass EMA dampener for speed: 95% previous, 5% instant estimate
+                        // Ensures slow, realistic speedometer progression without wild packet burst fluctuation
                         smoothed_speed = if smoothed_speed <= 0.0 {
                             instant_speed
                         } else if instant_speed > 0.0 {
-                            (smoothed_speed * 0.88) + (instant_speed * 0.12)
+                            (smoothed_speed * 0.95) + (instant_speed * 0.05)
                         } else {
-                            smoothed_speed * 0.96
+                            smoothed_speed * 0.92
                         };
+
+                        if smoothed_speed < 100.0 {
+                            smoothed_speed = 0.0;
+                        }
 
                         let speed = smoothed_speed.round() as u64;
                         last_bytes = current_total;

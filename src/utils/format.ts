@@ -14,7 +14,7 @@ export function formatBytes(bytes?: number | null): string {
 }
 
 export function formatSpeed(bytesPerSec?: number | null): string {
-  if (!bytesPerSec || bytesPerSec <= 0 || !isFinite(bytesPerSec)) return '0.0 MB/s';
+  if (!bytesPerSec || bytesPerSec <= 0 || !isFinite(bytesPerSec)) return '0 MB/s';
   const mb = bytesPerSec / (1024 * 1024);
   if (mb < 0.1) {
     const kb = bytesPerSec / 1024;

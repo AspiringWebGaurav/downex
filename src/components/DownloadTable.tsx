@@ -50,6 +50,7 @@ export const DownloadTable: React.FC = () => {
   const [copiedId, setCopiedId] = useState<string | null>(null);
 
   const persistentSpeedRef = useRef<Record<string, number>>({});
+  const smoothedSpeedRef = useRef<Record<string, number>>({});
   const persistentEtaRef = useRef<Record<string, number>>({});
   const smoothedEtaRef = useRef<Record<string, { eta: number; lastUpdated: number }>>({});
 
@@ -127,8 +128,8 @@ export const DownloadTable: React.FC = () => {
   };
 
   const formatSpeed = (bytesPerSec: number) => {
-    if (!bytesPerSec || bytesPerSec === 0) return '0 B/s (0.0 Mbps)';
-    const mbps = ((bytesPerSec * 8) / 1_000_000).toFixed(1);
+    if (!bytesPerSec || bytesPerSec <= 0) return '0 B/s (0 Mbps)';
+    const mbps = Math.round((bytesPerSec * 8) / 1_000_000);
     return `${formatBytes(bytesPerSec)}/s (${mbps} Mbps)`;
   };
 
@@ -480,15 +481,24 @@ export const DownloadTable: React.FC = () => {
         const isQueued = item.status === 'queued';
         const isExpanded = !!expandedItemIds[item.id];
 
-        // Track persistent speed across brief packet pauses
-        if (isDownloading && item.speed_bytes_sec > 0) {
-          persistentSpeedRef.current[item.id] = item.speed_bytes_sec;
-        } else if (!isDownloading) {
+        // Track persistent speed across brief packet pauses and smoothly damp fluctuations
+        let effectiveSpeed = 0;
+        if (isDownloading) {
+          const rawSpeed = item.speed_bytes_sec > 0 ? item.speed_bytes_sec : (persistentSpeedRef.current[item.id] || 0);
+          if (rawSpeed > 0) {
+            persistentSpeedRef.current[item.id] = rawSpeed;
+            const prev = smoothedSpeedRef.current[item.id] || rawSpeed;
+            // Smoothly glide rate changes (80% previous, 20% target) to eliminate frantic jitter
+            const smoothed = Math.round((prev * 0.80) + (rawSpeed * 0.20));
+            smoothedSpeedRef.current[item.id] = smoothed;
+            effectiveSpeed = smoothed;
+          } else {
+            delete smoothedSpeedRef.current[item.id];
+          }
+        } else {
           delete persistentSpeedRef.current[item.id];
+          delete smoothedSpeedRef.current[item.id];
         }
-        const effectiveSpeed = isDownloading
-          ? (item.speed_bytes_sec > 0 ? item.speed_bytes_sec : (persistentSpeedRef.current[item.id] || 0))
-          : 0;
 
         // IDM-style smoothed persistent ETA filter
         const remainingBytes = item.total_bytes && item.total_bytes > item.downloaded_bytes
@@ -678,34 +688,34 @@ export const DownloadTable: React.FC = () => {
             )}
 
             {/* Minimal Structured Metrics Grid */}
-            <div className="rounded-lg bg-zinc-50/90 dark:bg-zinc-950/80 border border-zinc-200/90 dark:border-zinc-800/90 px-3.5 py-2.5 text-xs font-mono grid grid-cols-2 lg:grid-cols-4 gap-x-5 gap-y-2 select-text shadow-2xs">
+            <div className="rounded-lg bg-zinc-50/90 dark:bg-zinc-950/80 border border-zinc-200/90 dark:border-zinc-800/90 px-3.5 py-2.5 text-xs font-mono grid grid-cols-2 lg:grid-cols-[1fr_1.1fr_1.4fr_1fr] gap-x-4 gap-y-2 select-text shadow-2xs">
               {/* 1. File size */}
-              <div className="flex items-center gap-2 overflow-hidden">
-                <span className="text-zinc-400 dark:text-zinc-500 w-[84px] shrink-0 font-medium text-[11px] whitespace-nowrap">File size</span>
+              <div className="flex items-center gap-1.5 overflow-hidden">
+                <span className="text-zinc-400 dark:text-zinc-500 shrink-0 font-medium text-[11px] whitespace-nowrap">File size</span>
                 <span className="font-semibold text-[13px] text-zinc-900 dark:text-zinc-100 truncate tracking-tight">
                   {formatBytes(item.total_bytes)}
                 </span>
               </div>
 
               {/* 2. Downloaded */}
-              <div className="flex items-center gap-2 overflow-hidden">
-                <span className="text-zinc-400 dark:text-zinc-500 w-[84px] shrink-0 font-medium text-[11px] whitespace-nowrap">Downloaded</span>
+              <div className="flex items-center gap-1.5 overflow-hidden">
+                <span className="text-zinc-400 dark:text-zinc-500 shrink-0 font-medium text-[11px] whitespace-nowrap">Downloaded</span>
                 <span className="font-semibold text-[13px] text-zinc-900 dark:text-zinc-100 truncate tracking-tight">
                   {formatBytes(item.downloaded_bytes)} <span className="text-[11px] font-normal opacity-70">({percent}%)</span>
                 </span>
               </div>
 
               {/* 3. Transfer rate (single line) */}
-              <div className="flex items-center gap-2 overflow-hidden">
-                <span className="text-zinc-400 dark:text-zinc-500 w-[84px] shrink-0 font-medium text-[11px] whitespace-nowrap">Transfer rate</span>
+              <div className="flex items-center gap-1.5 overflow-hidden">
+                <span className="text-zinc-400 dark:text-zinc-500 shrink-0 font-medium text-[11px] whitespace-nowrap">Transfer rate</span>
                 <span className={`font-semibold text-[13px] truncate whitespace-nowrap tracking-tight ${isDownloading && effectiveSpeed > 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-zinc-500'}`}>
-                  {isDownloading && effectiveSpeed > 0 ? formatSpeed(effectiveSpeed) : '0 B/s (0.0 Mbps)'}
+                  {isDownloading && effectiveSpeed > 0 ? formatSpeed(effectiveSpeed) : '0 B/s (0 Mbps)'}
                 </span>
               </div>
 
               {/* 4. Time left */}
-              <div className="flex items-center gap-2 overflow-hidden">
-                <span className="text-zinc-400 dark:text-zinc-500 w-[84px] shrink-0 font-medium text-[11px] whitespace-nowrap">Time left</span>
+              <div className="flex items-center gap-1.5 overflow-hidden">
+                <span className="text-zinc-400 dark:text-zinc-500 shrink-0 font-medium text-[11px] whitespace-nowrap">Time left</span>
                 <span className="text-zinc-900 dark:text-zinc-100 text-[13px] truncate font-semibold tracking-tight">
                   {isDownloading
                     ? (formattedEta || 'Calculating...')
