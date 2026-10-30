@@ -529,6 +529,14 @@ export async function applyInProcessUpdate(options: {
   });
 }
 
+export async function refreshShellIcons(): Promise<void> {
+  if (isTauri) {
+    try {
+      await invoke('cmd_refresh_shell_icons');
+    } catch {}
+  }
+}
+
 export async function notifyDomReady(): Promise<void> {
   if (isTauri) {
     try {

@@ -184,10 +184,145 @@ function setProjectVersion(ver) {
   fs.writeFileSync(cargoTomlPath, cargoToml, 'utf8');
 }
 
+function syncPatchNotesForRelease(ver, notesStr) {
+  const patchNotesPath = path.join(rootDir, 'src', 'data', 'patchNotes.ts');
+  if (!fs.existsSync(patchNotesPath)) return;
+
+  let content = fs.readFileSync(patchNotesPath, 'utf8');
+  const versionKeyRegex = new RegExp(`['"]${ver}['"]\\s*:`);
+  if (versionKeyRegex.test(content)) {
+    console.log(`  ✓ Baseline patch notes for v${ver} already recorded.`);
+    return;
+  }
+
+  console.log(`  Recording release changelog for v${ver} in src/data/patchNotes.ts...`);
+  const dateStr = new Date().toLocaleDateString('en-US', {
+    month: 'long',
+    day: 'numeric',
+    year: 'numeric',
+  });
+
+  let cleanTitle = notesStr.replace(/^v?\d+\.\d+\.\d+[:\s-]+/i, '').trim();
+  if (!cleanTitle) cleanTitle = `Performance and stability release`;
+
+  const parts = cleanTitle
+    .split(/,\s*(?:and\s+|&\s+)?|\s+(?:and|&)\s+|•|\*|;/)
+    .map((s) => s.trim().replace(/^[-*•\d.)\s]+/, ''))
+    .filter((s) => s.length > 0)
+    .map((s) => s.charAt(0).toUpperCase() + s.slice(1));
+
+  const highlights = parts.length > 0 ? parts : [cleanTitle];
+
+  const noteEntry = `  '${ver}': {
+    version: '${ver}',
+    releaseDate: '${dateStr}',
+    title: '${cleanTitle.replace(/'/g, "\\'")}',
+    highlights: ${JSON.stringify(highlights, null, 6).replace(/\n/g, '\n    ')},
+    rawNotes: '${notesStr.replace(/'/g, "\\'")}',
+  },`;
+
+  const marker = 'export const BASELINE_PATCH_NOTES: Record<string, DynamicPatchNotes> = {';
+  if (content.includes(marker)) {
+    content = content.replace(marker, `${marker}\n${noteEntry}`);
+    fs.writeFileSync(patchNotesPath, content, 'utf8');
+    console.log(`  ✓ Successfully recorded v${ver} patch notes.`);
+  }
+}
+
+async function publishPatchNotesCatalog() {
+  const patchNotesPath = path.join(rootDir, 'src', 'data', 'patchNotes.ts');
+  if (!fs.existsSync(patchNotesPath)) return;
+
+  const content = fs.readFileSync(patchNotesPath, 'utf8');
+  const notes = [];
+  const regex = /'(\d+\.\d+\.\d+)':\s*\{\s*version:\s*'([^']+)',\s*releaseDate:\s*'([^']+)',\s*title:\s*'([^']+)',\s*highlights:\s*\[([\s\S]*?)\],\s*rawNotes:\s*'([^']*)'/g;
+
+  let match;
+  while ((match = regex.exec(content)) !== null) {
+    const [_, vKey, version, releaseDate, title, highlightsRaw, rawNotes] = match;
+    const highlights = highlightsRaw
+      .split('\n')
+      .map((l) => l.trim().replace(/^['"]|['"],?$/g, '').trim())
+      .filter((l) => l.length > 0);
+
+    notes.push({
+      version,
+      releaseDate,
+      title,
+      highlights,
+      rawNotes,
+    });
+  }
+
+  if (notes.length === 0) return;
+
+  console.log(`\n  Uploading unified patch notes catalog (${notes.length} releases) to GPHost Cloudflare R2...`);
+  const payload = {
+    updatedAt: Date.now(),
+    totalReleases: notes.length,
+    latestVersion: notes[0]?.version,
+    notes,
+  };
+  const jsonBuf = Buffer.from(JSON.stringify(payload, null, 2), 'utf8');
+
+  try {
+    const initRes = await fetchWithRetry('https://gphost.eu.cc/api/v1/upload', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${GPHOST_API_KEY}`,
+        'User-Agent': 'Downex-ReleasePipeline/1.0 (Windows NT 10.0; Win64; x64)',
+      },
+      body: JSON.stringify({
+        filename: 'downex-patch-notes.json',
+        byteSize: jsonBuf.length,
+        mimeType: 'application/json',
+        folder: GPHOST_FOLDER,
+        slug: 'downex-patch-notes',
+        noShareLink: false,
+        isPermanent: true,
+        overwrite: true,
+      }),
+    });
+
+    if (!initRes.ok) throw new Error(`Upload initiation failed: HTTP ${initRes.status}`);
+    const { uploadUrl, fileId, completeUrl } = await initRes.json();
+
+    const r2Res = await fetch(uploadUrl, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: jsonBuf,
+    });
+    if (!r2Res.ok) throw new Error(`Direct R2 PUT failed: HTTP ${r2Res.status}`);
+
+    const compRes = await fetchWithRetry(completeUrl || 'https://gphost.eu.cc/api/v1/complete-upload', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${GPHOST_API_KEY}`,
+        'User-Agent': 'Downex-ReleasePipeline/1.0 (Windows NT 10.0; Win64; x64)',
+      },
+      body: JSON.stringify({
+        fileId,
+        slug: 'downex-patch-notes',
+        noShareLink: false,
+        isPermanent: true,
+        expiry_preset: 'never',
+      }),
+    });
+    if (!compRes.ok) throw new Error(`Upload completion failed: HTTP ${compRes.status}`);
+
+    console.log(`  ✓ Patch notes catalog pushed to GPHost! (Slug: downex-patch-notes, ${notes.length} releases)`);
+  } catch (err) {
+    console.warn('  Notice on patch notes push:', err.message);
+  }
+}
+
 try {
   // 3. Temporarily Synchronize Version for Target Build
   console.log('\n[1/8] Synchronizing build definitions to target v' + targetVersion + '...');
   setProjectVersion(targetVersion);
+  syncPatchNotesForRelease(targetVersion, releaseNotes);
   console.log(`  ✓ Version configured to ${targetVersion} for compilation.`);
 
   // 4. Compile Application
@@ -499,6 +634,9 @@ try {
 
   console.log(`  ✓ Manifest published! Downex v${targetVersion} is now LIVE on GPHost!`);
 
+  // Publish updated unified patch notes catalog to GPHost Cloudflare R2
+  await publishPatchNotesCatalog();
+
   // Pre-flight Smoke Test: Probe live manifest & Cloudflare R2 binary availability
   console.log('  Verifying live release manifest and Cloudflare R2 binary availability...');
   try {
@@ -548,5 +686,6 @@ console.log(` [SUCCESS] OTA Release v${targetVersion} is LIVE on GPHost!`);
 console.log(`   - Storage: Cloudflare R2 (${GPHOST_FOLDER}/releases/v${targetVersion}/)`);
 console.log(`   - Base Foundation: ${GPHOST_BASE_FOLDER}/ (Slug: downex-desktop)`);
 console.log('   - Manifest: https://gphost.eu.cc/api/v1/releases/downex/latest');
+console.log('   - Patch Notes: https://gphost.eu.cc/raw/downex-patch-notes');
 console.log('   - Installed Downex applications will now detect this update!');
 console.log('===============================================================\n');

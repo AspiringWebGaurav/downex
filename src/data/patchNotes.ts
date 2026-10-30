@@ -22,11 +22,32 @@ export function parseNotesToHighlights(rawText?: string): string[] {
     return ['Performance optimizations and security improvements'];
   }
 
-  return rawText
+  // Strip leading version prefix if present (e.g. "v0.0.21: ")
+  let cleaned = rawText.replace(/^v?\d+\.\d+\.\d+[:\s-]+/i, '').trim();
+  if (!cleaned) cleaned = rawText.trim();
+
+  const lines = cleaned
     .split(/\r?\n|•|\*|;/)
     .map((line) => line.trim())
     .map((line) => line.replace(/^[-*•\d.)\s]+/, '').trim())
-    .filter((line) => line.length > 0 && !line.toLowerCase().startsWith('v0.') && !line.toLowerCase().startsWith('version '));
+    .filter((line) => line.length > 0 && !line.toLowerCase().startsWith('version '));
+
+  // If list is a single comma- or '&'-separated sentence, split into distinct highlight items
+  if (lines.length === 1 && (lines[0].includes(',') || lines[0].includes(' & '))) {
+    const parts = lines[0]
+      .split(/,\s*(?:and\s+|&\s+)?|\s+(?:and|&)\s+/)
+      .map((p) => p.trim())
+      .filter((p) => p.length > 0);
+    if (parts.length > 1) {
+      return parts.map((p) => p.charAt(0).toUpperCase() + p.slice(1));
+    }
+  }
+
+  if (lines.length === 0) {
+    return ['Performance optimizations and security improvements'];
+  }
+
+  return lines;
 }
 
 export function getLatestCodebaseVersion(): string {
@@ -44,6 +65,43 @@ export function getLatestCodebaseVersion(): string {
 }
 
 export const BASELINE_PATCH_NOTES: Record<string, DynamicPatchNotes> = {
+  '0.0.22': {
+    version: '0.0.22',
+    releaseDate: 'October 30, 2026',
+    title: 'Deep Windows Taskbar Icon Invalidation, Multi-Window Consistency & Antivirus-Safe Clean Supervisor',
+    highlights: [
+      'Deep Windows Taskbar Icon Invalidation: Native Win32 Shell invalidation forces Windows Explorer to immediately flush in-memory IconCache for running windows, taskbar buttons, and pinned shortcuts',
+      'Multi-Window Icon Consistency: Explicitly bound Option 1 purple arrow icon across all main, download dialog, and completion modal windows',
+      'Antivirus-Safe Clean Restart Supervisor: Cryptographically signed remote task safely closing lingering background services and clearing locks with zero Defender false positives',
+      'Seamless In-Place OTA Pipeline: Fully compatible with immutable Base 0.0.0 installer with zero manual re-installation needed',
+    ],
+    rawNotes: 'v0.0.22: Deep taskbar icon invalidation, multi-window icon consistency, and antivirus-safe clean restart supervisor',
+  },
+  '0.0.21': {
+    version: '0.0.21',
+    releaseDate: 'October 30, 2026',
+    title: 'Option 1 Modern Brand Lockup, Dynamic Update Indicator, Fluid Progress Bar & Clean Restart Supervisor',
+    highlights: [
+      'Option 1 Modern Brand Lockup: Official cursive Downex logotype with vibrant purple downward arrow across all app windows, titlebars, and system tray states',
+      'Dynamic Update Indicator: Discrete green dot in sidebar header appears only dynamically when an update is available or in progress, remaining completely hidden in normal operation',
+      'Fluid Shimmer Progress Bar: Modernized update and transfer progress bars with heightened layout and continuous fluid shimmer pulse, eliminating raw percent and byte clutter',
+      'Antivirus-Safe Clean Restart Supervisor: Cryptographically signed native process supervisor (repair_locks) terminating background listeners and clearing stale locks with zero AMSI or Windows Defender false positives',
+      'Simplified Navigation: Streamlined sidebar navigation to unified "All Downloads" with clean access to download queues, settings, and hardware telemetry',
+    ],
+    rawNotes: 'v0.0.21: Option 1 brand lockup, dynamic update indicator, fluid progress bar, in-app patch notes & clean restart supervisor',
+  },
+  '0.0.20': {
+    version: '0.0.20',
+    releaseDate: 'October 30, 2026',
+    title: 'Automated Background Update Discovery, System Tray Indicators & Instant State Hydration',
+    highlights: [
+      'Automated Background Update Discovery: Real-time update checks upon app launch and interval checks without disrupting active downloads',
+      'Dynamic System Tray Notification Indicators: Real-time visual badge states (pulsing update indicator, update ready badge) in the Windows notification area',
+      'Instant UI State Hydration: Immediate zero-latency startup synchronization from local SQLite database with zero modal flickering or blank windows',
+      'Resilient Supervisor Handshake: Monitored binary transitions with automated checksum verification and graceful process restart handoff',
+    ],
+    rawNotes: 'v0.0.20: Automated background update discovery, system tray indicators and instant hydration',
+  },
   '0.0.19': {
     version: '0.0.19',
     releaseDate: 'October 29, 2026',

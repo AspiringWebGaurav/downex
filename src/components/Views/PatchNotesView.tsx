@@ -50,6 +50,8 @@ export const PatchNotesView: React.FC<PatchNotesViewProps> = ({ onBack }) => {
   useEffect(() => {
     patchNotesService.initializeFromDb().then((loaded) => {
       setNotes(loaded);
+      // Auto-sync latest cloud patch notes in background
+      patchNotesService.fetchCloudPatchNotes().catch(() => {});
     });
   }, []);
 

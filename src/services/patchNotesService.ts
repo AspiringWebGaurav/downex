@@ -161,6 +161,49 @@ class PatchNotesService {
     }
 
     try {
+      // 1. First fetch full cloud catalog from permanent GPHost Cloudflare R2 endpoint
+      const catalogUrl = `https://gphost.eu.cc/raw/downex-patch-notes?_t=${Date.now()}`;
+      const catalogController = new AbortController();
+      const catalogTimeout = setTimeout(() => catalogController.abort(), 6000);
+
+      try {
+        const catRes = await fetch(catalogUrl, {
+          signal: catalogController.signal,
+          headers: { Accept: 'application/json' },
+        });
+        clearTimeout(catalogTimeout);
+
+        if (catRes.ok) {
+          const catData = await catRes.json();
+          const items: any[] = Array.isArray(catData) ? catData : (catData.notes || []);
+          for (const item of items) {
+            if (!item || !item.version) continue;
+            const v = cleanVersion(item.version);
+            const rawNotes = item.rawNotes || item.notes || '';
+            const highlights = Array.isArray(item.highlights) && item.highlights.length > 0
+              ? item.highlights
+              : parseNotesToHighlights(rawNotes || item.title);
+
+            const noteItem: DynamicPatchNotes = {
+              version: v,
+              title: item.title || `Release ${formatVersion(v)}`,
+              releaseDate: item.releaseDate || 'Recent',
+              highlights,
+              rawNotes,
+              isCustom: Boolean(item.isCustom),
+              updatedAt: item.updatedAt || Date.now(),
+            };
+
+            map.set(v, noteItem);
+            fetchedFromCloud = true;
+            await this.persistNoteToDb(noteItem).catch(() => {});
+          }
+        }
+      } catch (catErr) {
+        // Fallback to latest manifest if catalog endpoint is temporarily unreachable
+      }
+
+      // 2. Also check latest active release manifest
       const manifestUrl = `https://gphost.eu.cc/api/v1/releases/downex/latest?target=windows-x86_64&arch=x86_64&_t=${Date.now()}`;
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 6000);

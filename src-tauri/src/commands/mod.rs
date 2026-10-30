@@ -986,6 +986,63 @@ pub fn trim_process_working_set() {
 #[cfg(not(target_os = "windows"))]
 pub fn trim_process_working_set() {}
 
+#[cfg(target_os = "windows")]
+pub fn refresh_windows_shell_icon_cache() {
+    unsafe {
+        windows_sys::Win32::UI::Shell::SHChangeNotify(
+            windows_sys::Win32::UI::Shell::SHCNE_ASSOCCHANGED as i32,
+            windows_sys::Win32::UI::Shell::SHCNF_IDLIST,
+            std::ptr::null(),
+            std::ptr::null(),
+        );
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn refresh_windows_shell_icon_cache() {}
+
+#[cfg(target_os = "windows")]
+pub fn touch_user_shortcuts() {
+    if let Ok(app_data) = std::env::var("APPDATA") {
+        let start_menu_sc = std::path::PathBuf::from(&app_data)
+            .join("Microsoft\\Windows\\Start Menu\\Programs\\Downex.lnk");
+        if start_menu_sc.exists() {
+            let _ = std::fs::OpenOptions::new()
+                .write(true)
+                .open(&start_menu_sc)
+                .and_then(|f| f.set_modified(std::time::SystemTime::now()));
+        }
+        let pinned_sc = std::path::PathBuf::from(&app_data)
+            .join("Microsoft\\Internet Explorer\\Quick Launch\\User Pinned\\TaskBar\\Downex.lnk");
+        if pinned_sc.exists() {
+            let _ = std::fs::OpenOptions::new()
+                .write(true)
+                .open(&pinned_sc)
+                .and_then(|f| f.set_modified(std::time::SystemTime::now()));
+        }
+    }
+    if let Ok(user_profile) = std::env::var("USERPROFILE") {
+        let desktop_sc = std::path::PathBuf::from(&user_profile)
+            .join("Desktop\\Downex.lnk");
+        if desktop_sc.exists() {
+            let _ = std::fs::OpenOptions::new()
+                .write(true)
+                .open(&desktop_sc)
+                .and_then(|f| f.set_modified(std::time::SystemTime::now()));
+        }
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn touch_user_shortcuts() {}
+
+#[tauri::command]
+pub fn cmd_refresh_shell_icons() -> Result<(), String> {
+    touch_user_shortcuts();
+    refresh_windows_shell_icon_cache();
+    Ok(())
+}
+
 #[tauri::command]
 pub fn cmd_notify_dom_ready(app: AppHandle) {
     let is_background_boot = std::env::args().any(|arg| {
@@ -1001,7 +1058,11 @@ pub fn cmd_notify_dom_ready(app: AppHandle) {
             let _ = w.set_focus();
         }
         #[cfg(target_os = "windows")]
-        set_process_priority_background(false);
+        {
+            set_process_priority_background(false);
+            touch_user_shortcuts();
+            refresh_windows_shell_icon_cache();
+        }
     } else {
         #[cfg(target_os = "windows")]
         {
@@ -1064,7 +1125,11 @@ pub fn show_download_dialog<R: tauri::Runtime>(app: &tauri::AppHandle<R>, payloa
         .always_on_top(true)
         .visible(true);
 
-        let _ = builder.build();
+        if let Ok(window) = builder.build() {
+            if let Ok(icon) = tauri::image::Image::from_bytes(include_bytes!("../../icons/128x128.png")) {
+                let _ = window.set_icon(icon);
+            }
+        }
     }
     if let Some(p) = payload {
         let _ = app.emit("open-download-info-modal", p);
@@ -1235,7 +1300,11 @@ pub fn show_download_complete<R: tauri::Runtime>(app: &tauri::AppHandle<R>, payl
         .always_on_top(true)
         .visible(true);
 
-        let _ = builder.build();
+        if let Ok(window) = builder.build() {
+            if let Ok(icon) = tauri::image::Image::from_bytes(include_bytes!("../../icons/128x128.png")) {
+                let _ = window.set_icon(icon);
+            }
+        }
     }
     let _ = app.emit("open-download-complete-modal", &valid_payload);
 }
@@ -1355,6 +1424,18 @@ $old = "$exe.old"
 $tmp = "$exe.tmp"
 if (Test-Path $old) {{ Remove-Item -Path $old -Force -ErrorAction SilentlyContinue }}
 if (Test-Path $tmp) {{ Remove-Item -Path $tmp -Force -ErrorAction SilentlyContinue }}
+
+# 3b. Touch shortcuts to trigger Windows Explorer icon refresh
+$scPaths = @(
+    "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Downex.lnk",
+    "$env:USERPROFILE\Desktop\Downex.lnk",
+    "$env:APPDATA\Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar\Downex.lnk"
+)
+foreach ($sc in $scPaths) {{
+    if (Test-Path $sc) {{
+        try {{ (Get-Item $sc).LastWriteTime = (Get-Date) }} catch {{}}
+    }}
+}}
 
 # 4. Launch clean application
 Start-Process -FilePath $exe -WorkingDirectory $dir -ArgumentList "--restarted-after-repair"

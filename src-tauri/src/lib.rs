@@ -159,6 +159,12 @@ pub fn run() {
                     let _ = crate::tray::refresh_tray_menu(app.handle());
                 }
             }
+
+            #[cfg(target_os = "windows")]
+            {
+                crate::commands::touch_user_shortcuts();
+                crate::commands::refresh_windows_shell_icon_cache();
+            }
             if !is_background_boot {
                 #[cfg(target_os = "windows")]
                 crate::commands::set_process_priority_background(false);
@@ -319,6 +325,7 @@ pub fn run() {
             cmd_get_pending_update,
             cmd_get_tray_update_status,
             cmd_trigger_background_update_check,
+            cmd_refresh_shell_icons,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Downex application");
