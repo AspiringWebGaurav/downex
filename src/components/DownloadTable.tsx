@@ -2,7 +2,7 @@ import React, { useState, useRef } from 'react';
 import { Button } from './ui/Button';
 import { Play, Pause, Trash2, File, AlertCircle, FolderEdit, ListOrdered, ChevronDown, ChevronUp, ShieldCheck, FolderOpen, ExternalLink } from 'lucide-react';
 import { useDownloadStore } from '../stores/downloadStore';
-import { openFolderPicker, openFile, openFileFolder, showDownloadCompleteDialog } from '../services/tauriService';
+import { openFolderPicker, openFile, openFileFolder, showDownloadCompleteDialog, isTauri, injectMockDownloadItem } from '../services/tauriService';
 import { DeleteConfirmModal } from './DeleteConfirmModal';
 import { DownloadItem } from '../types/download';
 
@@ -200,6 +200,44 @@ export const DownloadTable: React.FC = () => {
               ? 'Finished downloads will appear here.'
               : 'Click "+ New Download" or copy any download link to start.'}
           </p>
+
+          {!isTauri && (
+            <button
+              onClick={() => {
+                const sample: DownloadItem = {
+                  id: 'mock-completed-setup',
+                  url: 'https://gphost.eu.cc/raw/downex-desktop',
+                  filename: 'Downex-0.0.0-Setup.exe',
+                  destination_path: 'C:\\Users\\namit\\Downloads\\Downex\\Downex-0.0.0-Setup.exe',
+                  total_bytes: 3562767,
+                  downloaded_bytes: 3562767,
+                  status: 'completed',
+                  queue_id: 'default',
+                  speed_bytes_sec: 0,
+                  eta_seconds: 0,
+                  supports_ranges: true,
+                  created_at: Date.now() - 3600000,
+                  updated_at: Date.now(),
+                  segments: [
+                    { index: 0, start: 0, end: 445345, downloaded: 445345, speed_bytes_sec: 0, is_active: false },
+                    { index: 1, start: 445346, end: 890691, downloaded: 445345, speed_bytes_sec: 0, is_active: false },
+                    { index: 2, start: 890692, end: 1336037, downloaded: 445345, speed_bytes_sec: 0, is_active: false },
+                    { index: 3, start: 1336038, end: 1781383, downloaded: 445345, speed_bytes_sec: 0, is_active: false },
+                    { index: 4, start: 1781384, end: 2226729, downloaded: 445345, speed_bytes_sec: 0, is_active: false },
+                    { index: 5, start: 2226730, end: 2672075, downloaded: 445345, speed_bytes_sec: 0, is_active: false },
+                    { index: 6, start: 2672076, end: 3117421, downloaded: 445345, speed_bytes_sec: 0, is_active: false },
+                    { index: 7, start: 3117422, end: 3562767, downloaded: 445345, speed_bytes_sec: 0, is_active: false },
+                  ],
+                };
+                injectMockDownloadItem(sample);
+                useDownloadStore.setState((prev) => ({ items: [sample, ...prev.items], selectedView: 'all' }));
+              }}
+              className="mt-3.5 inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-emerald-50 hover:bg-emerald-100 dark:bg-emerald-950/60 dark:hover:bg-emerald-900/60 text-emerald-700 dark:text-emerald-300 border border-emerald-300/80 dark:border-emerald-800/80 text-xs font-semibold shadow-xs transition-all cursor-pointer hover:scale-[1.02] active:scale-[0.98]"
+            >
+              <ShieldCheck className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+              <span>Load Sample Completed Download (Downex-0.0.0-Setup.exe)</span>
+            </button>
+          )}
         </div>
       </div>
     );

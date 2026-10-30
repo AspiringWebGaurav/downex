@@ -67,6 +67,15 @@ function saveMockDownloads(items: DownloadItem[]) {
   }
 }
 
+export function injectMockDownloadItem(item: DownloadItem): void {
+  const current = loadMockDownloads().filter((i) => i.id !== item.id && i.filename !== item.filename);
+  saveMockDownloads([item, ...current]);
+}
+
+export function clearMockDownloads(): void {
+  saveMockDownloads([]);
+}
+
 export async function addDownload(
   url: string,
   destinationFolder?: string,
