@@ -438,35 +438,35 @@ export const DownloadTable: React.FC = () => {
             )}
 
             {/* Minimal Structured Metrics Grid */}
-            <div className="rounded-lg bg-zinc-50/90 dark:bg-zinc-950/80 border border-zinc-200/90 dark:border-zinc-800/90 p-3 text-[11px] font-mono grid grid-cols-2 lg:grid-cols-4 gap-x-5 gap-y-2 select-text shadow-2xs">
+            <div className="rounded-lg bg-zinc-50/90 dark:bg-zinc-950/80 border border-zinc-200/90 dark:border-zinc-800/90 px-3.5 py-2.5 text-xs font-mono grid grid-cols-2 lg:grid-cols-4 gap-x-5 gap-y-2 select-text shadow-2xs">
               {/* 1. File size */}
-              <div className="flex items-center gap-1.5 overflow-hidden">
-                <span className="text-zinc-400 dark:text-zinc-500 w-[92px] shrink-0 font-medium whitespace-nowrap">File size</span>
-                <span className="font-semibold text-zinc-800 dark:text-zinc-200 truncate">
+              <div className="flex items-center gap-2 overflow-hidden">
+                <span className="text-zinc-400 dark:text-zinc-500 w-[84px] shrink-0 font-medium text-[11px] whitespace-nowrap">File size</span>
+                <span className="font-semibold text-[13px] text-zinc-900 dark:text-zinc-100 truncate tracking-tight">
                   {formatBytes(item.total_bytes)}
                 </span>
               </div>
 
               {/* 2. Downloaded */}
-              <div className="flex items-center gap-1.5 overflow-hidden">
-                <span className="text-zinc-400 dark:text-zinc-500 w-[92px] shrink-0 font-medium whitespace-nowrap">Downloaded</span>
-                <span className="font-semibold text-zinc-800 dark:text-zinc-200 truncate">
-                  {formatBytes(item.downloaded_bytes)} ({percent}%)
+              <div className="flex items-center gap-2 overflow-hidden">
+                <span className="text-zinc-400 dark:text-zinc-500 w-[84px] shrink-0 font-medium text-[11px] whitespace-nowrap">Downloaded</span>
+                <span className="font-semibold text-[13px] text-zinc-900 dark:text-zinc-100 truncate tracking-tight">
+                  {formatBytes(item.downloaded_bytes)} <span className="text-[11px] font-normal opacity-70">({percent}%)</span>
                 </span>
               </div>
 
               {/* 3. Transfer rate (single line) */}
-              <div className="flex items-center gap-1.5 overflow-hidden">
-                <span className="text-zinc-400 dark:text-zinc-500 w-[92px] shrink-0 font-medium whitespace-nowrap">Transfer rate</span>
-                <span className={`font-semibold truncate whitespace-nowrap ${isDownloading && effectiveSpeed > 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-zinc-500'}`}>
+              <div className="flex items-center gap-2 overflow-hidden">
+                <span className="text-zinc-400 dark:text-zinc-500 w-[84px] shrink-0 font-medium text-[11px] whitespace-nowrap">Transfer rate</span>
+                <span className={`font-semibold text-[13px] truncate whitespace-nowrap tracking-tight ${isDownloading && effectiveSpeed > 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-zinc-500'}`}>
                   {isDownloading && effectiveSpeed > 0 ? formatSpeed(effectiveSpeed) : '0 B/s (0.0 Mbps)'}
                 </span>
               </div>
 
               {/* 4. Time left */}
-              <div className="flex items-center gap-1.5 overflow-hidden">
-                <span className="text-zinc-400 dark:text-zinc-500 w-[92px] shrink-0 font-medium whitespace-nowrap">Time left</span>
-                <span className="text-zinc-700 dark:text-zinc-300 truncate font-semibold">
+              <div className="flex items-center gap-2 overflow-hidden">
+                <span className="text-zinc-400 dark:text-zinc-500 w-[84px] shrink-0 font-medium text-[11px] whitespace-nowrap">Time left</span>
+                <span className="text-zinc-900 dark:text-zinc-100 text-[13px] truncate font-semibold tracking-tight">
                   {isDownloading
                     ? (formattedEta || 'Calculating...')
                     : isPaused
