@@ -249,11 +249,11 @@ impl DownloadEnginePool {
                             0.0
                         };
 
-                        // Exponential Moving Average filter
+                        // Exponential Moving Average filter for speed (damped for 150ms loop)
                         smoothed_speed = if smoothed_speed <= 0.0 {
                             instant_speed
                         } else if instant_speed > 0.0 {
-                            (smoothed_speed * 0.70) + (instant_speed * 0.30)
+                            (smoothed_speed * 0.88) + (instant_speed * 0.12)
                         } else {
                             smoothed_speed * 0.96
                         };
@@ -262,12 +262,19 @@ impl DownloadEnginePool {
                         last_bytes = current_total;
                         last_time = now;
 
-                        // Calculate ETA
+                        // Calculate ETA with IDM-style damped low-pass filter
                         if speed > 100 {
                             if let Some(total) = p_total_bytes {
                                 if total > current_total {
-                                    let calc = (total - current_total) / speed;
-                                    persistent_eta = Some(calc.max(1));
+                                    let instant_eta = ((total - current_total) as f64 / speed as f64).max(1.0);
+                                    persistent_eta = match persistent_eta {
+                                        Some(prev_eta) => {
+                                            // Heavy dampening: 90% previous, 10% instant new estimate
+                                            let smoothed = (prev_eta as f64 * 0.90) + (instant_eta * 0.10);
+                                            Some(smoothed.round().max(1.0) as u64)
+                                        }
+                                        None => Some(instant_eta.round().max(1.0) as u64),
+                                    };
                                 } else {
                                     persistent_eta = Some(0);
                                 }

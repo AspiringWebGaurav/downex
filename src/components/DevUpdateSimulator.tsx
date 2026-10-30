@@ -59,18 +59,19 @@ export const DevUpdateSimulator: React.FC = () => {
     }));
   };
 
-  const addActiveMock = () => {
+  const addActiveMock = (etaSeconds = 138) => {
+    const downloaded = etaSeconds <= 75 ? 4608000000 : 2764800000;
     const activeMock: DownloadItem = {
       id: 'mock-active-' + Date.now(),
       url: 'https://releases.ubuntu.com/24.04/ubuntu-24.04-desktop-amd64.iso',
       filename: 'ubuntu-24.04-desktop-amd64.iso',
       destination_path: 'C:\\Users\\namit\\Downloads\\Downex\\ubuntu-24.04-desktop-amd64.iso',
       total_bytes: 6144000000,
-      downloaded_bytes: 2764800000,
+      downloaded_bytes: downloaded,
       status: 'downloading',
       queue_id: 'default',
       speed_bytes_sec: 24500000,
-      eta_seconds: 138,
+      eta_seconds: etaSeconds,
       supports_ranges: true,
       created_at: Date.now() - 120000,
       updated_at: Date.now(),
@@ -151,23 +152,32 @@ export const DevUpdateSimulator: React.FC = () => {
               <span className="text-[10px] opacity-80">Test Modal</span>
             </button>
 
-            <div className="grid grid-cols-2 gap-1.5">
+            <div className="grid grid-cols-3 gap-1.5">
               <button
                 onClick={addCompletedMock}
-                className="flex items-center gap-1.5 px-2 py-1.5 rounded-lg bg-emerald-50 hover:bg-emerald-100 dark:bg-emerald-950/40 dark:hover:bg-emerald-900/50 text-emerald-700 dark:text-emerald-300 border border-emerald-200/80 dark:border-emerald-800/80 text-xs font-medium transition-colors cursor-pointer"
+                className="flex items-center justify-center gap-1 px-1.5 py-1.5 rounded-lg bg-emerald-50 hover:bg-emerald-100 dark:bg-emerald-950/40 dark:hover:bg-emerald-900/50 text-emerald-700 dark:text-emerald-300 border border-emerald-200/80 dark:border-emerald-800/80 text-[11px] font-medium transition-colors cursor-pointer"
                 title="Add Downex 0.0.0 Completed download card"
               >
-                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
-                <span className="truncate">+ Complete Mock</span>
+                <CheckCircle2 className="w-3 h-3 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                <span className="truncate">Complete</span>
               </button>
 
               <button
-                onClick={addActiveMock}
-                className="flex items-center gap-1.5 px-2 py-1.5 rounded-lg bg-sky-50 hover:bg-sky-100 dark:bg-sky-950/40 dark:hover:bg-sky-900/50 text-sky-700 dark:text-sky-300 border border-sky-200/80 dark:border-sky-800/80 text-xs font-medium transition-colors cursor-pointer"
-                title="Add active in-progress downloading card"
+                onClick={() => addActiveMock(138)}
+                className="flex items-center justify-center gap-1 px-1.5 py-1.5 rounded-lg bg-sky-50 hover:bg-sky-100 dark:bg-sky-950/40 dark:hover:bg-sky-900/50 text-sky-700 dark:text-sky-300 border border-sky-200/80 dark:border-sky-800/80 text-[11px] font-medium transition-colors cursor-pointer"
+                title="Add active download showing 2 min left"
               >
-                <ArrowDown className="w-3.5 h-3.5 text-sky-600 dark:text-sky-400 shrink-0" />
-                <span className="truncate">+ Active Mock</span>
+                <ArrowDown className="w-3 h-3 text-sky-600 dark:text-sky-400 shrink-0" />
+                <span className="truncate">2 min</span>
+              </button>
+
+              <button
+                onClick={() => addActiveMock(75)}
+                className="flex items-center justify-center gap-1 px-1.5 py-1.5 rounded-lg bg-sky-50 hover:bg-sky-100 dark:bg-sky-950/40 dark:hover:bg-sky-900/50 text-sky-700 dark:text-sky-300 border border-sky-200/80 dark:border-sky-800/80 text-[11px] font-medium transition-colors cursor-pointer"
+                title="Add active download showing 1 min left"
+              >
+                <ArrowDown className="w-3 h-3 text-sky-600 dark:text-sky-400 shrink-0" />
+                <span className="truncate">1 min</span>
               </button>
             </div>
 

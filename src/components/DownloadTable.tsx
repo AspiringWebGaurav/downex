@@ -24,6 +24,7 @@ export const DownloadTable: React.FC = () => {
 
   const persistentSpeedRef = useRef<Record<string, number>>({});
   const persistentEtaRef = useRef<Record<string, number>>({});
+  const smoothedEtaRef = useRef<Record<string, { eta: number; lastUpdated: number }>>({});
 
   const toggleDetails = (id: string) => {
     setExpandedItemIds((prev) => ({ ...prev, [id]: !prev[id] }));
@@ -86,13 +87,24 @@ export const DownloadTable: React.FC = () => {
 
   const formatEta = (seconds?: number | null) => {
     if (seconds === undefined || seconds === null || seconds <= 0 || !isFinite(seconds)) return null;
-    if (seconds < 60) return `${Math.round(seconds)} sec left`;
-    const mins = Math.floor(seconds / 60);
-    const secs = Math.round(seconds % 60);
-    if (mins < 60) return `${mins} min ${secs} sec left`;
-    const hours = Math.floor(mins / 60);
-    const remMins = mins % 60;
-    return `${hours} hr ${remMins} min left`;
+
+    // 1. Over 1 hour: "X hr Y min left"
+    if (seconds >= 3600) {
+      const hours = Math.floor(seconds / 3600);
+      const remMins = Math.round((seconds % 3600) / 60);
+      if (remMins === 0) return `${hours} hr left`;
+      return `${hours} hr ${remMins} min left`;
+    }
+
+    // 2. Over 1 minute (>= 60s): "1 min left", "2 min left", "3 min left" (clean IDM style, no fluctuating seconds)
+    if (seconds >= 60) {
+      const mins = Math.max(1, Math.round(seconds / 60));
+      return mins === 1 ? '1 min left' : `${mins} min left`;
+    }
+
+    // 3. Under 1 minute (< 60s): steady seconds
+    const roundedSecs = Math.max(1, Math.round(seconds));
+    return `${roundedSecs} sec left`;
   };
 
   const renderQueueBanner = () => (
@@ -267,7 +279,7 @@ export const DownloadTable: React.FC = () => {
           ? (item.speed_bytes_sec > 0 ? item.speed_bytes_sec : (persistentSpeedRef.current[item.id] || 0))
           : 0;
 
-        // Track persistent ETA (IDM-style smooth countdown)
+        // IDM-style smoothed persistent ETA filter
         const remainingBytes = item.total_bytes && item.total_bytes > item.downloaded_bytes
           ? item.total_bytes - item.downloaded_bytes
           : 0;
@@ -277,14 +289,34 @@ export const DownloadTable: React.FC = () => {
           computedEta = Math.max(1, Math.round(remainingBytes / effectiveSpeed));
         }
 
-        if (isDownloading && computedEta) {
-          persistentEtaRef.current[item.id] = computedEta;
-        } else if (!isDownloading) {
+        let effectiveEta: number | null = null;
+        if (isDownloading) {
+          const now = Date.now();
+          const prevEntry = smoothedEtaRef.current[item.id];
+          if (!prevEntry) {
+            const initial = computedEta || (effectiveSpeed > 0 ? Math.round(remainingBytes / effectiveSpeed) : 0);
+            if (initial > 0) {
+              smoothedEtaRef.current[item.id] = { eta: initial, lastUpdated: now };
+              effectiveEta = initial;
+            }
+          } else {
+            const elapsed = Math.max(0, (now - prevEntry.lastUpdated) / 1000);
+            // Steady natural countdown: subtract elapsed seconds without abrupt jumps
+            const naturalDecayed = Math.max(1, prevEntry.eta - elapsed);
+            if (computedEta && computedEta > 0) {
+              // Heavy dampening: 88% decayed previous, 12% new instant calculation
+              const smoothed = (naturalDecayed * 0.88) + (computedEta * 0.12);
+              smoothedEtaRef.current[item.id] = { eta: smoothed, lastUpdated: now };
+              effectiveEta = smoothed;
+            } else {
+              smoothedEtaRef.current[item.id] = { eta: naturalDecayed, lastUpdated: now };
+              effectiveEta = naturalDecayed;
+            }
+          }
+        } else {
+          delete smoothedEtaRef.current[item.id];
           delete persistentEtaRef.current[item.id];
         }
-        const effectiveEta = isDownloading
-          ? (computedEta || persistentEtaRef.current[item.id] || null)
-          : null;
 
         const formattedEta = effectiveEta ? formatEta(effectiveEta) : null;
 
