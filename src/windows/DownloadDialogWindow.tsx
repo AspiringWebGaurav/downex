@@ -1,6 +1,5 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { Button } from '../components/ui/Button';
-import { AutoScrollText } from '../components/ui/AutoScrollText';
 import { 
   X, 
   Download, 
@@ -17,7 +16,9 @@ import {
   Moon,
   RotateCcw,
   ArrowRight,
-  Monitor
+  Monitor,
+  Link2,
+  ClipboardPaste
 } from 'lucide-react';
 import { 
   addDownload, 
@@ -578,41 +579,56 @@ export const DownloadDialogWindow: React.FC = () => {
           </div>
         </div>
 
-        {/* Row 4: Source URL (Compact Single Line) */}
+        {/* Row 4: Source URL (Interactive input with Paste & Copy actions) */}
         <div>
           <div className="flex items-center justify-between mb-1.5">
             <label className="text-[11px] font-semibold text-zinc-700 dark:text-zinc-300">
               Source URL
             </label>
             <div className="flex items-center gap-2">
-              {!url && (
-                <button
-                  type="button"
-                  onClick={handlePasteClipboard}
-                  className="text-[11px] font-medium text-emerald-600 dark:text-emerald-400 hover:underline transition-colors flex items-center gap-1 cursor-pointer"
-                >
-                  <Copy className="w-3 h-3" />
-                  <span>Paste URL</span>
-                </button>
-              )}
+              <button
+                type="button"
+                onClick={handlePasteClipboard}
+                className="text-[11px] font-medium text-emerald-600 dark:text-emerald-400 hover:text-emerald-500 transition-colors flex items-center gap-1 cursor-pointer"
+                title="Paste URL from clipboard"
+              >
+                <ClipboardPaste className="w-3 h-3" />
+                <span>Paste</span>
+              </button>
               {url && (
                 <button
                   type="button"
                   onClick={handleCopyUrl}
                   className="text-[11px] font-medium text-zinc-400 hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors flex items-center gap-1 cursor-pointer"
+                  title="Copy URL"
                 >
                   {copiedUrl ? <Check className="w-3 h-3 text-emerald-500" /> : <Copy className="w-3 h-3" />}
-                  <span>{copiedUrl ? 'Copied' : 'Copy URL'}</span>
+                  <span>{copiedUrl ? 'Copied' : 'Copy'}</span>
                 </button>
               )}
             </div>
           </div>
-          <div className="px-3 py-1.5 min-h-[30px] rounded-lg bg-zinc-50/70 dark:bg-zinc-950/50 border border-zinc-200/80 dark:border-zinc-800/80 flex items-center overflow-hidden">
-            <AutoScrollText
-              text={url}
-              className="text-[11px] font-mono text-zinc-700 dark:text-zinc-300"
-              placeholder="No URL provided"
+          <div className="flex items-center rounded-lg bg-zinc-50/80 dark:bg-zinc-950/60 border border-zinc-200 dark:border-zinc-800 focus-within:border-emerald-500 focus-within:ring-2 focus-within:ring-emerald-500/15 focus-within:bg-white dark:focus-within:bg-zinc-950 transition-all overflow-hidden px-3 py-1.5">
+            <Link2 className="w-3.5 h-3.5 text-zinc-400 dark:text-zinc-500 mr-2 shrink-0" />
+            <input
+              type="text"
+              required
+              autoFocus={!url}
+              placeholder="Paste or enter download link (e.g. https://...)"
+              value={url}
+              onChange={(e) => setUrl(e.target.value)}
+              className="flex-1 text-[11px] font-mono text-zinc-900 dark:text-zinc-100 bg-transparent focus:outline-none placeholder:text-zinc-400 dark:placeholder:text-zinc-500"
             />
+            {url && (
+              <button
+                type="button"
+                onClick={() => setUrl('')}
+                className="p-1 text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200 rounded transition-colors ml-1 cursor-pointer"
+                title="Clear URL"
+              >
+                <X className="w-3 h-3" />
+              </button>
+            )}
           </div>
         </div>
       </div>

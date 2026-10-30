@@ -4,7 +4,8 @@ import { injectMockDownloadItem, clearMockDownloads } from '../services/tauriSer
 import { useDownloadStore } from '../stores/downloadStore';
 import { DownloadItem } from '../types/download';
 import { 
-  FlaskConical, 
+  FlaskConical,
+  Download, 
   Play, 
   CheckCircle, 
   CheckCircle2,
@@ -141,16 +142,25 @@ export const DevUpdateSimulator: React.FC = () => {
               Download Mocks & Modal:
             </div>
 
-            <button
-              onClick={triggerDownloadModal}
-              className="w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-medium shadow-xs transition-colors cursor-pointer"
-            >
-              <div className="flex items-center gap-1.5">
+            <div className="grid grid-cols-2 gap-1.5">
+              <button
+                onClick={() => useDownloadStore.getState().setNewModalOpen(true)}
+                className="flex items-center justify-center gap-1.5 px-2 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-[11px] font-medium shadow-xs transition-colors cursor-pointer"
+                title="Open empty New Download modal to test typing or pasting a URL"
+              >
                 <Plus className="w-3.5 h-3.5 stroke-[2.5]" />
-                <span>Trigger Download Modal</span>
-              </div>
-              <span className="text-[10px] opacity-80">Test Modal</span>
-            </button>
+                <span>+ Add URL Modal</span>
+              </button>
+
+              <button
+                onClick={triggerDownloadModal}
+                className="flex items-center justify-center gap-1.5 px-2 py-1.5 rounded-lg bg-emerald-700 hover:bg-emerald-600 text-white text-[11px] font-medium shadow-xs transition-colors cursor-pointer"
+                title="Open modal prefilled with Ubuntu ISO test data"
+              >
+                <Download className="w-3.5 h-3.5" />
+                <span>Prefilled Modal</span>
+              </button>
+            </div>
 
             <div className="grid grid-cols-3 gap-1.5">
               <button
