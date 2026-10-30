@@ -72,7 +72,7 @@ assert(compareSemver('0.0.19', '0.0.19') === 0, 'Downex 0.0.19 matches 0.0.19 (U
 assert(compareSemver('0.0.18', '0.0.19') < 0, 'Downex 0.0.18 is older than 0.0.19 (No update)');
 assert(compareSemver('0.0.27', '0.0.26') > 0, 'GPN PC 0.0.27 is detected as newer than 0.0.26');
 assert(compareSemver('0.0.26', '0.0.26') === 0, 'GPN PC 0.0.26 matches 0.0.26 (Up to date)');
-assert(compareSemver('0.0.4', '0.0.3') > 0, 'GPN Mobile 0.0.4 is detected as newer than 0.0.3');
+assert(compareSemver('0.0.8', '0.0.7') > 0, 'GPN Mobile 0.0.8 is detected as newer than 0.0.7');
 assert(compareSemver('v1.0.0', '0.9.9') > 0, 'Prefix v1.0.0 correctly compares with 0.9.9');
 
 // -----------------------------------------------------------------------------
@@ -206,6 +206,18 @@ async function testLiveEndpoints() {
     assert(!!gpnData.platforms?.['windows-x86_64']?.url, 'GPN windows-x86_64 download URL present');
   } catch (err) {
     assert(false, 'GPN live release endpoint probe failed', err.message);
+  }
+
+  // GPN Mobile
+  try {
+    const mobileRes = await fetch('https://gphost.eu.cc/api/v1/releases/gpn-mobile/latest', {
+      headers: { 'User-Agent': userAgent },
+    });
+    assert(mobileRes.ok, 'GPN Mobile release endpoint reachable at https://gphost.eu.cc/api/v1/releases/gpn-mobile/latest');
+    const mobileData = await mobileRes.json();
+    assert(mobileData.version === 'v0.0.8', `GPN Mobile live version resolved: ${mobileData.version}`);
+  } catch (err) {
+    assert(false, 'GPN Mobile live release endpoint probe failed', err.message);
   }
 
   // Base 0.0.0 installer immutability probe
