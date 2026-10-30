@@ -10,6 +10,7 @@ export const DownexWindowHeader: React.FC = () => {
   const status = useAppVersionStore((state) => state.status);
   const openModal = useAppVersionStore((state) => state.openModal);
   const [isCloseHovered, setIsCloseHovered] = useState(false);
+  const hasUpdate = Boolean(status.manifest?.version) && (status.state === 'available' || status.state === 'ready') && compareSemver(status.manifest!.version, currentVersion) > 0;
 
   // Cleanly reset hover state on window blur, focus, or visibility changes
   // to prevent stuck hover/highlight states when the UI or modal appears
@@ -48,18 +49,24 @@ export const DownexWindowHeader: React.FC = () => {
       {/* Draggable Titlebar Area: Underlying region handles native window movement */}
       <div data-tauri-drag-region className="absolute inset-0 z-0 pointer-events-auto" />
 
-      {/* Left Branding with Dynamic Version Resolution */}
-      <div className="relative z-10 flex items-center gap-2 pointer-events-none select-none">
-        <img src="/icon-arrow.png" alt="Downex" className="w-4 h-4 object-contain shrink-0" />
-        <span className="font-brand text-[18px] text-zinc-900 dark:text-zinc-100 tracking-wide leading-none pt-0.5">
+      {/* Left Branding with Dynamic Version Resolution (Single Unified Robust Branding) */}
+      <div className="relative z-10 flex items-center gap-2 select-none">
+        <img src="/icon-arrow.png" alt="Downex" className="w-4.5 h-4.5 object-contain shrink-0" />
+        <span className="font-brand text-[20px] text-zinc-900 dark:text-zinc-100 tracking-wide leading-none pt-0.5">
           downex
         </span>
         <span
           title="Dynamic runtime version (persisted & synced with Windows Registry)"
-          className="px-1.5 py-0.5 rounded text-[10px] font-mono bg-zinc-100 dark:bg-zinc-800 text-zinc-500 dark:text-zinc-400 font-semibold pointer-events-auto"
+          className="px-2 py-0.5 rounded-md text-[10px] font-mono bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 font-semibold border border-zinc-200/80 dark:border-zinc-700/80 pointer-events-auto shadow-2xs"
         >
           {formattedVersion}
         </span>
+        {hasUpdate && (
+          <span className="relative flex h-2 w-2 shrink-0 ml-0.5" title={`Update v${status.manifest?.version || ''} Available`}>
+            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
+            <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" />
+          </span>
+        )}
       </div>
 
       {/* Center Dynamic Status / Update Pill (GPN Pattern) */}

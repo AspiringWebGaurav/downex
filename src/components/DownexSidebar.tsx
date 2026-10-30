@@ -61,13 +61,7 @@ export const DownexSidebar: React.FC<DownexSidebarProps> = ({ darkMode, setDarkM
   const trashCount = items.filter((i) => i.status === 'failed' || i.status === 'cancelled' || i.status === 'error').length;
   const isQueueRunning = useDownloadStore((state) => state.isQueueRunning);
 
-  const hasUpdate =
-    Boolean(status.targetVersion) &&
-    (status.state === 'available' ||
-      status.state === 'downloading' ||
-      status.state === 'verifying' ||
-      status.state === 'ready') &&
-    compareSemver(status.targetVersion!, currentVersion) > 0;
+
 
   const navItems = [
     { id: 'all', label: 'All Downloads', icon: Download, count: items.length },
@@ -98,39 +92,8 @@ export const DownexSidebar: React.FC<DownexSidebarProps> = ({ darkMode, setDarkM
         />
       </button>
 
-      {/* Top Header & Navigation Items */}
-      <div className="flex flex-col gap-1 overflow-x-hidden">
-        {/* Header */}
-        {isCollapsed ? (
-          <div className="py-1 mb-2 flex flex-col items-center gap-1">
-            <button
-              type="button"
-              onClick={toggleCollapse}
-              title="Expand Sidebar (Ctrl+B)"
-              className="p-1 rounded-lg hover:bg-zinc-200/60 dark:hover:bg-zinc-800 transition-colors cursor-pointer"
-            >
-              <img src="/icon-arrow.png" alt="Downex" className="w-5 h-5 object-contain" />
-            </button>
-            {hasUpdate && (
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" title={`Update v${status.targetVersion} Available`} />
-            )}
-          </div>
-        ) : (
-          <div className="px-2.5 py-1.5 mb-2 flex items-center gap-2">
-            <img src="/icon-arrow.png" alt="Downex" className="w-5 h-5 object-contain shrink-0" />
-            <span className="font-brand text-[22px] tracking-wide text-zinc-900 dark:text-zinc-100 leading-none pt-0.5">
-              downex
-            </span>
-            {hasUpdate && (
-              <span className="relative flex h-2 w-2 shrink-0 ml-0.5" title={`Update v${status.targetVersion} Available`}>
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
-                <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" />
-              </span>
-            )}
-          </div>
-        )}
-
-        {/* Navigation Items */}
+      {/* Navigation Items */}
+      <div className="flex flex-col gap-1 overflow-x-hidden pt-1.5">
         {navItems.map((item) => {
           const Icon = item.icon;
           const isSelected = selectedView === item.id;
