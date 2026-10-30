@@ -18,7 +18,10 @@ import {
   Search,
   SearchX,
   RotateCcw,
-  X
+  X,
+  Menu,
+  Copy,
+  Check
 } from 'lucide-react';
 import { useDownloadStore } from '../stores/downloadStore';
 import { openFolderPicker, openFile, openFileFolder, showDownloadCompleteDialog, isTauri, injectMockDownloadItem } from '../services/tauriService';
@@ -44,6 +47,7 @@ export const DownloadTable: React.FC = () => {
   const [expandedItemIds, setExpandedItemIds] = useState<Record<string, boolean>>({});
   const [showAllSegmentsMap, setShowAllSegmentsMap] = useState<Record<string, boolean>>({});
   const [deletingItem, setDeletingItem] = useState<DownloadItem | null>(null);
+  const [copiedId, setCopiedId] = useState<string | null>(null);
 
   const persistentSpeedRef = useRef<Record<string, number>>({});
   const persistentEtaRef = useRef<Record<string, number>>({});
@@ -561,9 +565,38 @@ export const DownloadTable: React.FC = () => {
                       </span>
                     )}
                   </div>
-                  <p className="text-[11px] text-zinc-400 dark:text-zinc-500 truncate font-mono mt-0.5">
-                    {item.destination_path}
-                  </p>
+                  {/* Highlighted Destination Path with Hamburger Icon & Explorer Action */}
+                  <div className="flex items-center gap-1.5 mt-1 max-w-full">
+                    <button
+                      type="button"
+                      onClick={() => openFileFolder(item.destination_path)}
+                      className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-zinc-100/90 dark:bg-zinc-800/90 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 border border-zinc-200/90 dark:border-zinc-700/80 hover:border-emerald-300 dark:hover:border-emerald-800 text-zinc-700 hover:text-emerald-700 dark:text-zinc-200 dark:hover:text-emerald-300 text-[11px] font-mono font-medium transition-all cursor-pointer group shadow-2xs min-w-0 max-w-fit"
+                      title="Click to open destination folder in Windows Explorer"
+                    >
+                      <Menu className="w-3 h-3 text-zinc-500 dark:text-zinc-400 group-hover:text-emerald-600 dark:group-hover:text-emerald-400 shrink-0 stroke-[2.2]" />
+                      <span className="truncate group-hover:underline">
+                        {item.destination_path}
+                      </span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        navigator.clipboard.writeText(item.destination_path);
+                        setCopiedId(item.id);
+                        setTimeout(() => setCopiedId(null), 2000);
+                      }}
+                      className="p-1 rounded-md hover:bg-zinc-100 dark:hover:bg-zinc-800 text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200 transition-colors cursor-pointer shrink-0"
+                      title="Copy destination path"
+                    >
+                      {copiedId === item.id ? (
+                        <Check className="w-3 h-3 text-emerald-600 dark:text-emerald-400 stroke-[2.5]" />
+                      ) : (
+                        <Copy className="w-3 h-3 stroke-[2]" />
+                      )}
+                    </button>
+                  </div>
                 </div>
               </div>
 

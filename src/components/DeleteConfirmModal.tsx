@@ -111,7 +111,7 @@ export const DeleteConfirmModal: React.FC<DeleteConfirmModalProps> = ({
               <h4 className="text-xs font-semibold text-zinc-900 dark:text-zinc-100 truncate" title={item.filename}>
                 {item.filename}
               </h4>
-              <p className="text-[10px] text-zinc-400 dark:text-zinc-500 truncate font-mono mt-0.5" title={item.destination_path}>
+              <p className="text-[10.5px] text-zinc-600 dark:text-zinc-300 font-medium truncate font-mono mt-0.5" title={item.destination_path}>
                 {item.destination_path}
               </p>
               <div className="flex items-center gap-2 text-[10px] font-mono text-zinc-500 dark:text-zinc-400 mt-1.5">
