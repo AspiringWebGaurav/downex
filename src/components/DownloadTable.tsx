@@ -321,7 +321,7 @@ export const DownloadTable: React.FC = () => {
                   </button>
                 )}
 
-                {item.status !== 'completed' ? (
+                {item.status !== 'completed' && (
                   <button
                     onClick={() => togglePause(item.id)}
                     className="p-1.5 rounded-md hover:bg-zinc-100 dark:hover:bg-zinc-800 text-zinc-600 dark:text-zinc-300 transition-colors cursor-pointer"
@@ -333,37 +333,6 @@ export const DownloadTable: React.FC = () => {
                       <Play className="w-3.5 h-3.5 fill-current" />
                     )}
                   </button>
-                ) : (
-                  <div className="flex items-center gap-1">
-                    <button
-                      onClick={() => openFile(item.destination_path)}
-                      className="p-1.5 rounded-md hover:bg-emerald-50 dark:hover:bg-emerald-950/40 text-emerald-600 dark:text-emerald-400 transition-colors cursor-pointer"
-                      title="Open file"
-                    >
-                      <ExternalLink className="w-3.5 h-3.5" />
-                    </button>
-                    <button
-                      onClick={() => openFileFolder(item.destination_path)}
-                      className="p-1.5 rounded-md hover:bg-zinc-100 dark:hover:bg-zinc-800 text-zinc-600 dark:text-zinc-300 transition-colors cursor-pointer"
-                      title="Show in folder"
-                    >
-                      <FolderOpen className="w-3.5 h-3.5" />
-                    </button>
-                    <button
-                      onClick={() => showDownloadCompleteDialog({
-                        id: item.id,
-                        url: item.url,
-                        filename: item.filename,
-                        destination_path: item.destination_path,
-                        total_bytes: item.total_bytes ?? undefined,
-                        downloaded_bytes: item.downloaded_bytes ?? undefined,
-                      })}
-                      className="px-2 py-0.5 rounded text-[10px] font-medium bg-emerald-100 hover:bg-emerald-200 dark:bg-emerald-950/60 dark:hover:bg-emerald-900/60 text-emerald-800 dark:text-emerald-300 transition-colors cursor-pointer"
-                      title="Show complete details dialog"
-                    >
-                      Details
-                    </button>
-                  </div>
                 )}
 
                 <button
@@ -501,6 +470,42 @@ export const DownloadTable: React.FC = () => {
               </button>
 
               <div className="flex items-center gap-2 text-[10px] text-zinc-400 dark:text-zinc-500 font-mono">
+                {item.status === 'completed' && (
+                  <div className="flex items-center gap-1 mr-1 text-zinc-600 dark:text-zinc-300">
+                    <button
+                      onClick={() => openFile(item.destination_path)}
+                      className="px-2 py-0.5 rounded hover:bg-emerald-50 dark:hover:bg-emerald-950/40 text-emerald-600 dark:text-emerald-400 transition-colors cursor-pointer flex items-center gap-1 text-[11px] font-sans font-medium"
+                      title="Open file"
+                    >
+                      <ExternalLink className="w-3 h-3" />
+                      <span>Open</span>
+                    </button>
+                    <button
+                      onClick={() => openFileFolder(item.destination_path)}
+                      className="px-2 py-0.5 rounded hover:bg-zinc-100 dark:hover:bg-zinc-800 text-zinc-600 dark:text-zinc-300 transition-colors cursor-pointer flex items-center gap-1 text-[11px] font-sans font-medium"
+                      title="Show in folder"
+                    >
+                      <FolderOpen className="w-3 h-3" />
+                      <span>Folder</span>
+                    </button>
+                    <button
+                      onClick={() => showDownloadCompleteDialog({
+                        id: item.id,
+                        url: item.url,
+                        filename: item.filename,
+                        destination_path: item.destination_path,
+                        total_bytes: item.total_bytes ?? undefined,
+                        downloaded_bytes: item.downloaded_bytes ?? undefined,
+                      })}
+                      className="px-1.5 py-0.5 rounded text-[10px] font-sans font-medium bg-emerald-50 hover:bg-emerald-100 dark:bg-emerald-950/40 dark:hover:bg-emerald-900/50 text-emerald-700 dark:text-emerald-300 transition-colors cursor-pointer"
+                      title="Show complete details dialog"
+                    >
+                      Details
+                    </button>
+                    <span className="text-zinc-300 dark:text-zinc-700 mx-0.5">•</span>
+                  </div>
+                )}
+
                 <span className="flex items-center gap-1">
                   <ShieldCheck className="w-3 h-3 text-emerald-500" />
                   Resume: {item.total_bytes ? 'Yes' : 'Unknown'}
