@@ -574,7 +574,7 @@ export const DownloadTable: React.FC = () => {
                       title="Click to open destination folder in Windows Explorer"
                     >
                       <Menu className="w-3 h-3 text-zinc-500 dark:text-zinc-400 group-hover:text-emerald-600 dark:group-hover:text-emerald-400 shrink-0 stroke-[2.2]" />
-                      <span className="truncate group-hover:underline">
+                      <span className="truncate">
                         {item.destination_path}
                       </span>
                     </button>
