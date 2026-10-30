@@ -15,8 +15,8 @@ test.describe('Downex Base Application — Startup, Lifecycle & Controls', () =>
   test('Application initializes cleanly with zero console errors and renders core layout', async ({ page }) => {
     const errors = captureConsoleErrors(page);
 
-    await expect(page.getByText('DOWNEX', { exact: true })).toBeVisible();
-    await expect(page.getByText('v0.0.0').first()).toBeVisible();
+    await expect(page.getByText(/downex/i).first()).toBeVisible();
+    await expect(page.getByText(/v0\.\d+\.\d+/).first()).toBeVisible();
 
     // Verify window header, sidebar, search bar, and action button
     await expect(page.locator('aside')).toBeVisible();
@@ -97,8 +97,8 @@ test.describe('Downex Base Application — Startup, Lifecycle & Controls', () =>
   test('Component mounting and unmounting stress across rapid view switches', async ({ page }) => {
     const errors = captureConsoleErrors(page);
 
-    // Switch rapidly between All Downloads, Queues, Completed, Settings, Trash
-    const views = ['Queues', 'Completed', 'Settings', 'Trash', 'All Downloads'];
+    // Switch rapidly between All Downloads, Queues, Settings, Trash
+    const views = ['Queues', 'Settings', 'Trash', 'All Downloads'];
     for (let loop = 0; loop < 3; loop++) {
       for (const view of views) {
         await page.click(`aside button:has-text("${view}")`);

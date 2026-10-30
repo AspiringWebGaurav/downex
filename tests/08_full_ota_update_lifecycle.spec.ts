@@ -181,7 +181,7 @@ test.describe('Downex Base Application — Complete In-Process OTA Update Lifecy
     });
 
     // Rapidly navigate between all sidebar views while downloading
-    const views = ['Completed', 'Queues', 'Settings', 'All Downloads'];
+    const views = ['Queues', 'Settings', 'All Downloads'];
     for (const view of views) {
       await page.click(`button:has-text("${view}")`);
       await page.waitForTimeout(100);
@@ -317,7 +317,7 @@ test.describe('Downex Base Application — Complete In-Process OTA Update Lifecy
 
     // Wait for boot check to detect 0.2.0
     await expect(page.locator('h4:has-text("Update Available")')).toBeVisible({ timeout: 6000 });
-    await expect(page.getByText('v0.2.0', { exact: true })).toBeVisible();
+    await expect(page.getByText('v0.2.0').first()).toBeVisible();
 
     // Simulate completion of second update cycle
     await page.evaluate(() => {

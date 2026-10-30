@@ -47,6 +47,8 @@ interface DownloadStore {
   togglePause: (id: string) => Promise<void>;
   removeDownload: (id: string, deleteFile?: boolean) => Promise<void>;
   setSelectedView: (view: string) => void;
+  settingsSubView: 'settings' | 'patch-notes';
+  openSettingsSubView: (subView: 'settings' | 'patch-notes') => void;
   setSearchQuery: (query: string) => void;
   setNewModalOpen: (open: boolean) => void;
   initListener: () => () => void;
@@ -211,6 +213,9 @@ export const useDownloadStore = create<DownloadStore>((set, get) => ({
   },
 
   setSelectedView: (view: string) => set({ selectedView: view }),
+  settingsSubView: 'settings',
+  openSettingsSubView: (subView: 'settings' | 'patch-notes') =>
+    set({ selectedView: 'settings', settingsSubView: subView }),
   setSearchQuery: (query: string) => set({ searchQuery: query }),
   setNewModalOpen: (open: boolean) =>
     set({

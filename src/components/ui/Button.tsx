@@ -29,6 +29,7 @@ export interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElemen
   icon?: React.ReactNode;
   iconRight?: React.ReactNode;
   fullWidth?: boolean;
+  shimmer?: boolean;
 }
 
 export function getButtonClassName({
@@ -119,6 +120,7 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
       icon,
       iconRight,
       fullWidth = false,
+      shimmer = false,
       disabled = false,
       className = '',
       children,
@@ -127,7 +129,7 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
     ref
   ) => {
     const isActuallyDisabled = disabled || loading;
-    const computedClass = getButtonClassName({ variant, size, fullWidth, className });
+    const computedClass = `${getButtonClassName({ variant, size, fullWidth, className })} ${shimmer ? 'relative overflow-hidden' : ''}`.trim();
 
     return (
       <button
@@ -136,16 +138,21 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
         className={computedClass}
         {...props}
       >
+        {shimmer && !isActuallyDisabled && (
+          <span className="absolute inset-0 overflow-hidden rounded-[inherit] pointer-events-none z-0">
+            <span className="animate-btn-shimmer" />
+          </span>
+        )}
         {loading ? (
           <>
-            <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0" />
-            <span className="whitespace-nowrap">{loadingText || children}</span>
+            <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0 relative z-10" />
+            <span className="whitespace-nowrap relative z-10">{loadingText || children}</span>
           </>
         ) : (
           <>
-            {icon && <span className="shrink-0 flex items-center justify-center">{icon}</span>}
-            {children && <span className="whitespace-nowrap">{children}</span>}
-            {iconRight && <span className="shrink-0 flex items-center justify-center">{iconRight}</span>}
+            {icon && <span className="shrink-0 flex items-center justify-center relative z-10">{icon}</span>}
+            {children && <span className="whitespace-nowrap relative z-10">{children}</span>}
+            {iconRight && <span className="shrink-0 flex items-center justify-center relative z-10">{iconRight}</span>}
           </>
         )}
       </button>

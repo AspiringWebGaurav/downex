@@ -72,6 +72,8 @@ class UpdateService {
   private isBusy = false;
   private pacingInterval: any = null;
   private resetTimer: any = null;
+  private isSimulating = false;
+  private simulationTimer: any = null;
 
   constructor() {
     this.hydrateFromNativeSupervisor();
@@ -135,6 +137,11 @@ class UpdateService {
     // Synchronize system tray icon with current update status
     if (this.status.state === 'available') {
       setTrayIcon('update_available');
+      if (this.status.manifest) {
+        import('./patchNotesService').then(({ patchNotesService }) => {
+          patchNotesService.ingestCloudManifest(this.status.manifest);
+        }).catch(() => {});
+      }
     } else if (this.status.state === 'downloading') {
       setTrayIcon('downloading');
     } else if (this.status.state === 'ready') {
@@ -342,6 +349,12 @@ class UpdateService {
   public async downloadUpdate(): Promise<boolean> {
     const { manifest, targetVersion } = this.status;
     const rawDownloadUrl = manifest?.url || manifest?.platforms?.['windows-x86_64']?.url;
+
+    // Simulation intercept
+    if (this.isSimulating || manifest?.signature === 'SIMULATED_SIGNATURE') {
+      return await this.runSimulatedDownload(targetVersion || '0.0.21', manifest || undefined);
+    }
+
     if (!manifest || !rawDownloadUrl || !targetVersion) {
       this.notify({ state: 'error', errorMessage: 'No update manifest available to download' });
       return false;
@@ -640,6 +653,16 @@ class UpdateService {
     }
 
     const { targetVersion } = this.status;
+
+    // Simulation intercept
+    if (this.isSimulating || this.stagedBinaryPath?.startsWith('mock/')) {
+      this.notify({ state: 'restarting', errorMessage: undefined });
+      await new Promise((r) => setTimeout(r, 1200));
+      this.isSimulating = false;
+      this.notify({ state: 'idle', manifest: null, targetVersion: undefined, errorMessage: undefined });
+      return;
+    }
+
     if (!this.stagedBinaryPath || !targetVersion) {
       this.notify({ state: 'error', errorMessage: 'No verified staged update available' });
       return;
@@ -717,6 +740,249 @@ class UpdateService {
     await this.installAndRestart();
     return true;
   }
+
+  /**
+   * Interactive UI Test Helper:
+   * Smoothly animates simulated download progression from 1% to 100%,
+   * verifies for calibrated hold duration, and transitions to ready.
+   */
+  public async runSimulatedDownload(
+    targetVersion = '0.0.21',
+    manifest?: ReleaseManifest,
+    downloadDurationMs = 3500,
+    verifyDurationMs = 1800
+  ): Promise<boolean> {
+    if (this.simulationTimer) {
+      clearInterval(this.simulationTimer);
+      this.simulationTimer = null;
+    }
+
+    this.isSimulating = true;
+    this.isBusy = true;
+    const totalBytes = manifest?.size || 15414272; // ~14.7 MB
+    const mockManifest: ReleaseManifest = manifest || {
+      version: targetVersion,
+      notes: 'New productivity features, performance improvements, and security enhancements.',
+      pub_date: new Date().toISOString(),
+      url: `https://gphost.eu.cc/releases/downex/v${targetVersion}/Downex-Update.tar.gz`,
+      signature: 'SIMULATED_SIGNATURE',
+      size: totalBytes,
+    };
+
+    let currentPct = 1;
+
+    this.notify({
+      state: 'downloading',
+      targetVersion,
+      manifest: mockManifest,
+      progress: {
+        percentage: 1,
+        downloadedBytes: Math.floor((1 / 100) * totalBytes),
+        totalBytes,
+      },
+      errorMessage: undefined,
+    });
+
+    const stepInterval = 40;
+    const totalSteps = Math.max(10, Math.floor(downloadDurationMs / stepInterval));
+    const stepIncrement = 100 / totalSteps;
+
+    await new Promise<void>((resolve) => {
+      this.simulationTimer = setInterval(() => {
+        currentPct += stepIncrement;
+        if (currentPct >= 100) {
+          currentPct = 100;
+          clearInterval(this.simulationTimer);
+          this.simulationTimer = null;
+          resolve();
+        }
+
+        const pctInt = Math.min(100, Math.floor(currentPct));
+        const downBytes = Math.min(totalBytes, Math.floor((pctInt / 100) * totalBytes));
+
+        this.notify({
+          state: 'downloading',
+          targetVersion,
+          manifest: mockManifest,
+          progress: {
+            percentage: pctInt,
+            downloadedBytes: downBytes,
+            totalBytes,
+          },
+        });
+      }, stepInterval);
+    });
+
+    // Verification stage
+    this.notify({
+      state: 'verifying',
+      targetVersion,
+      manifest: mockManifest,
+      progress: {
+        percentage: 100,
+        downloadedBytes: totalBytes,
+        totalBytes,
+      },
+      errorMessage: undefined,
+    });
+
+    await new Promise<void>((r) => setTimeout(r, verifyDurationMs));
+
+    // Ready stage
+    this.isBusy = false;
+    const stagedPath = `mock/staged/downex-v${targetVersion}.staged.exe`;
+    this.stagedBinaryPath = stagedPath;
+    this.notify({
+      state: 'ready',
+      targetVersion,
+      manifest: mockManifest,
+      stagedPath,
+      progress: undefined,
+      errorMessage: undefined,
+    });
+
+    return true;
+  }
+
+  /**
+   * Developer / QA Simulation Controller:
+   * Test any state or the full animated flow on demand.
+   */
+  public simulateUpdate(mode: 'available' | 'downloading' | 'verifying' | 'ready' | 'auto' | 'idle' | 'error' = 'auto') {
+    if (this.simulationTimer) {
+      clearInterval(this.simulationTimer);
+      this.simulationTimer = null;
+    }
+    if (this.pacingInterval) {
+      clearInterval(this.pacingInterval);
+      this.pacingInterval = null;
+    }
+
+    // Ensure toast is displayed
+    if (typeof window !== 'undefined') {
+      try {
+        sessionStorage.removeItem('downex_toast_dismissed');
+        (window as any).__DOWNEX_VERSION_STORE__?.setState({ isToastDismissed: false });
+      } catch {}
+    }
+
+    // Determine target version higher than current
+    const currentParts = (this.currentVersion || '0.0.20').replace(/^v/, '').split('.').map((p) => parseInt(p, 10) || 0);
+    while (currentParts.length < 3) currentParts.push(0);
+    currentParts[2] += 1;
+    const targetVersion = currentParts.join('.');
+
+    const totalBytes = 15414272; // ~14.7 MB
+    const manifest: ReleaseManifest = {
+      version: targetVersion,
+      notes: 'New productivity features, performance improvements, and security enhancements.',
+      pub_date: new Date().toISOString(),
+      url: `https://gphost.eu.cc/releases/downex/v${targetVersion}/Downex-Update.tar.gz`,
+      signature: 'SIMULATED_SIGNATURE',
+      size: totalBytes,
+    };
+
+    this.isSimulating = true;
+    this.isBusy = false;
+
+    switch (mode) {
+      case 'available':
+        this.notify({
+          state: 'available',
+          targetVersion,
+          manifest,
+          progress: undefined,
+          errorMessage: undefined,
+        });
+        break;
+
+      case 'downloading':
+        this.notify({
+          state: 'downloading',
+          targetVersion,
+          manifest,
+          progress: {
+            percentage: 45,
+            downloadedBytes: Math.floor(0.45 * totalBytes),
+            totalBytes,
+          },
+          errorMessage: undefined,
+        });
+        break;
+
+      case 'verifying':
+        this.notify({
+          state: 'verifying',
+          targetVersion,
+          manifest,
+          progress: {
+            percentage: 100,
+            downloadedBytes: totalBytes,
+            totalBytes,
+          },
+          errorMessage: undefined,
+        });
+        break;
+
+      case 'ready':
+        this.stagedBinaryPath = `mock/staged/downex-v${targetVersion}.staged.exe`;
+        this.notify({
+          state: 'ready',
+          targetVersion,
+          manifest,
+          stagedPath: this.stagedBinaryPath,
+          progress: undefined,
+          errorMessage: undefined,
+        });
+        break;
+
+      case 'error':
+        this.notify({
+          state: 'error',
+          targetVersion,
+          manifest,
+          errorMessage: 'Server connection timed out while fetching update package.',
+        });
+        break;
+
+      case 'idle':
+        this.isSimulating = false;
+        this.notify({
+          state: 'idle',
+          targetVersion: undefined,
+          manifest: null,
+          progress: undefined,
+          errorMessage: undefined,
+        });
+        break;
+
+      case 'auto':
+      default:
+        this.notify({
+          state: 'available',
+          targetVersion,
+          manifest,
+          progress: undefined,
+          errorMessage: undefined,
+        });
+        setTimeout(() => {
+          if (this.isSimulating && this.status.state === 'available') {
+            this.runSimulatedDownload(targetVersion, manifest, 3500, 1800);
+          }
+        }, 1200);
+        break;
+    }
+  }
+
+  public cancelSimulation() {
+    this.simulateUpdate('idle');
+  }
 }
 
 export const updateService = new UpdateService();
+
+if (typeof window !== 'undefined') {
+  (window as any).updateService = updateService;
+  (window as any).simulateUpdate = (mode?: any) => updateService.simulateUpdate(mode);
+  (window as any).downexSimulate = (mode?: any) => updateService.simulateUpdate(mode);
+}

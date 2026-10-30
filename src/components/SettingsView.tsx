@@ -17,6 +17,8 @@ export const SettingsView: React.FC<SettingsViewProps> = () => {
   const showTelemetryOnHome = useDownloadStore((state) => state.showTelemetryOnHome);
   const setShowTelemetryOnHome = useDownloadStore((state) => state.setShowTelemetryOnHome);
   const setSelectedView = useDownloadStore((state) => state.setSelectedView);
+  const settingsSubView = useDownloadStore((state) => state.settingsSubView);
+  const openSettingsSubView = useDownloadStore((state) => state.openSettingsSubView);
   const formattedVersion = useAppVersionStore((state) => state.formattedVersion);
 
   const [defaultDir, setDefaultDir] = useState<string>('Downloads\\Downex');
@@ -47,7 +49,7 @@ export const SettingsView: React.FC<SettingsViewProps> = () => {
   });
   const [autostart, setAutostart] = useState<boolean>(true);
   const [savedFeedback, setSavedFeedback] = useState(false);
-  const [activeSubView, setActiveSubView] = useState<'settings' | 'patch-notes'>('settings');
+
 
   // Maintenance & Lifecycle states
   const [isRepairing, setIsRepairing] = useState(false);
@@ -168,8 +170,8 @@ export const SettingsView: React.FC<SettingsViewProps> = () => {
     setTimeout(() => setSavedFeedback(false), 2000);
   };
 
-  if (activeSubView === 'patch-notes') {
-    return <PatchNotesView onBack={() => setActiveSubView('settings')} />;
+  if (settingsSubView === 'patch-notes') {
+    return <PatchNotesView onBack={() => openSettingsSubView('settings')} />;
   }
 
   return (
@@ -403,7 +405,7 @@ export const SettingsView: React.FC<SettingsViewProps> = () => {
               variant="outline"
               size="md"
               iconRight={<ChevronRight className="w-3.5 h-3.5" />}
-              onClick={() => setActiveSubView('patch-notes')}
+              onClick={() => openSettingsSubView('patch-notes')}
             >
               View Patch Notes
             </Button>

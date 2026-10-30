@@ -222,7 +222,9 @@ updateService.subscribe((status) => {
   useAppVersionStore.setState((state) => {
     const isNewAvailable = status.state === 'available' && state?.status?.state !== 'available';
     const isNewReady = status.state === 'ready' && state?.status?.state !== 'ready';
-    if (isNewAvailable || isNewReady) {
+    const isDownloadingOrVerifying = status.state === 'downloading' || status.state === 'verifying';
+    const shouldShowToast = isNewAvailable || isNewReady || isDownloadingOrVerifying;
+    if (shouldShowToast) {
       try {
         sessionStorage.removeItem('downex_toast_dismissed');
       } catch {}
@@ -230,7 +232,7 @@ updateService.subscribe((status) => {
 
     return {
       status: { ...status },
-      isToastDismissed: isNewAvailable || isNewReady ? false : (state?.isToastDismissed ?? false),
+      isToastDismissed: shouldShowToast ? false : (state?.isToastDismissed ?? false),
     };
   });
 

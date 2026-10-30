@@ -10,6 +10,7 @@ import { useDownloadStore } from './stores/downloadStore';
 import { useAppVersionStore } from './stores/appVersionStore';
 import { UpdateModal } from './components/UpdateModal';
 import { UpdateNotification } from './components/UpdateNotification';
+import { DevUpdateSimulator } from './components/DevUpdateSimulator';
 import { PatchNotesModal } from './components/PatchNotesModal';
 import { SettingsView } from './components/SettingsView';
 import { TelemetryView } from './components/TelemetryView';
@@ -215,6 +216,7 @@ export const App: React.FC = () => {
       <UpdateModal />
       <UpdateNotification />
       <PatchNotesModal />
+      <DevUpdateSimulator />
     </div>
   );
 };

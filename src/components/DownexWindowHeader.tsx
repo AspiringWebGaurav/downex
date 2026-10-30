@@ -50,9 +50,9 @@ export const DownexWindowHeader: React.FC = () => {
 
       {/* Left Branding with Dynamic Version Resolution */}
       <div className="relative z-10 flex items-center gap-2 pointer-events-none select-none">
-        <img src="/icon.png" alt="Downex" className="w-4 h-4 rounded-xs shadow-xs" />
-        <span className="text-[12px] font-semibold tracking-wide text-zinc-900 dark:text-zinc-100 font-mono">
-          DOWNEX
+        <img src="/icon-arrow.png" alt="Downex" className="w-4 h-4 object-contain shrink-0" />
+        <span className="font-brand text-[18px] text-zinc-900 dark:text-zinc-100 tracking-wide leading-none pt-0.5">
+          downex
         </span>
         <span
           title="Dynamic runtime version (persisted & synced with Windows Registry)"
@@ -77,26 +77,88 @@ export const DownexWindowHeader: React.FC = () => {
             <span>Up to date • {formattedVersion}</span>
           </div>
         ) : status.state === 'available' && status.manifest && status.targetVersion && compareSemver(status.targetVersion, currentVersion) > 0 ? (
-          <div className="flex items-center gap-2 px-2.5 h-6 rounded bg-violet-50 dark:bg-violet-950/40 border border-violet-300 dark:border-violet-800 text-[11px] font-mono text-violet-800 dark:text-violet-300 shadow-xs">
-            <span className="font-semibold">{status.manifest.version} Available</span>
+          <div
+            onClick={openModal}
+            className="group relative flex items-center gap-2 pl-2.5 pr-1.5 h-7 rounded-full bg-gradient-to-r from-violet-50 via-purple-50/70 to-indigo-50 dark:from-violet-950/50 dark:via-zinc-900 dark:to-indigo-950/40 border border-violet-200/90 dark:border-violet-800/60 shadow-xs hover:border-violet-300 dark:hover:border-violet-700 transition-all cursor-pointer overflow-hidden select-none"
+            title={`Downex ${status.manifest.version} Available - Click to Review & Install`}
+          >
+            {/* Ambient Dynamic Shimmer Sweep */}
+            <div className="animate-badge-shimmer" />
+
+            {/* Glowing Pulse Dot */}
+            <span className="relative flex h-2 w-2 shrink-0">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-violet-400 opacity-75" />
+              <span className="relative inline-flex rounded-full h-2 w-2 bg-violet-600 dark:bg-violet-400" />
+            </span>
+
+            {/* Text & Version */}
+            <div className="relative z-10 flex items-center gap-1.5 text-[11px] font-medium text-violet-900 dark:text-violet-200 tracking-tight">
+              <span>Update Available</span>
+              <span className="px-1.5 py-0.5 rounded-md font-mono text-[10px] font-bold bg-violet-200/70 dark:bg-violet-900/60 text-violet-800 dark:text-violet-200 border border-violet-300/60 dark:border-violet-700/60">
+                v{status.manifest.version}
+              </span>
+            </div>
+
+            {/* Micro Action Button */}
             <button
               type="button"
-              onClick={openModal}
-              className="px-2 h-4 rounded bg-violet-600 hover:bg-violet-700 text-white text-[10px] font-semibold uppercase flex items-center gap-1 cursor-pointer transition-all"
+              onClick={(e) => {
+                e.stopPropagation();
+                openModal();
+              }}
+              className="relative z-10 flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-violet-600 hover:bg-violet-700 active:scale-95 text-white text-[10px] font-semibold shadow-2xs group-hover:shadow-xs transition-all cursor-pointer overflow-hidden shrink-0"
             >
-              <Download className="w-2.5 h-2.5" />
+              <div className="animate-btn-shimmer" />
+              <Download className="w-2.5 h-2.5 stroke-[2.5]" />
               <span>Update</span>
             </button>
           </div>
+        ) : status.state === 'downloading' || status.state === 'verifying' ? (
+          <div
+            onClick={openModal}
+            className="group relative flex items-center gap-2 px-3 h-7 rounded-full bg-zinc-100/90 dark:bg-zinc-900 border border-zinc-200/80 dark:border-zinc-800 text-[11px] font-mono text-zinc-700 dark:text-zinc-300 shadow-xs cursor-pointer select-none overflow-hidden"
+            title="Click to view update progress"
+          >
+            <div className="animate-badge-shimmer" />
+            <RefreshCw className="w-3 h-3 animate-spin text-emerald-500 shrink-0" />
+            <span className="relative z-10 font-sans font-medium text-xs">
+              {status.state === 'verifying' ? 'Verifying...' : `Downloading ${status.progress?.percentage || 0}%`}
+            </span>
+          </div>
         ) : status.state === 'ready' && status.targetVersion && compareSemver(status.targetVersion, currentVersion) > 0 ? (
-          <div className="flex items-center gap-2 px-2.5 h-6 rounded bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-300 dark:border-emerald-800 text-[11px] font-mono text-emerald-800 dark:text-emerald-300 shadow-xs">
-            <span className="font-semibold">{status.targetVersion} Ready</span>
+          <div
+            onClick={openModal}
+            className="group relative flex items-center gap-2 pl-2.5 pr-1.5 h-7 rounded-full bg-gradient-to-r from-emerald-50 via-teal-50/70 to-emerald-50 dark:from-emerald-950/50 dark:via-zinc-900 dark:to-teal-950/40 border border-emerald-200/90 dark:border-emerald-800/60 shadow-xs hover:border-emerald-300 dark:hover:border-emerald-700 transition-all cursor-pointer overflow-hidden select-none"
+            title={`Downex v${status.targetVersion} Ready - Click to Restart & Apply`}
+          >
+            {/* Ambient Dynamic Shimmer Sweep */}
+            <div className="animate-badge-shimmer" />
+
+            {/* Glowing Pulse Dot */}
+            <span className="relative flex h-2 w-2 shrink-0">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
+              <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-600 dark:bg-emerald-400" />
+            </span>
+
+            {/* Text & Version */}
+            <div className="relative z-10 flex items-center gap-1.5 text-[11px] font-medium text-emerald-900 dark:text-emerald-200 tracking-tight">
+              <span>Update Ready</span>
+              <span className="px-1.5 py-0.5 rounded-md font-mono text-[10px] font-bold bg-emerald-200/70 dark:bg-emerald-900/60 text-emerald-800 dark:text-emerald-200 border border-emerald-300/60 dark:border-emerald-700/60">
+                v{status.targetVersion}
+              </span>
+            </div>
+
+            {/* Micro Action Button */}
             <button
               type="button"
-              onClick={openModal}
-              className="px-2 h-4 rounded bg-emerald-600 hover:bg-emerald-700 text-white text-[10px] font-semibold uppercase flex items-center gap-1 cursor-pointer transition-all"
+              onClick={(e) => {
+                e.stopPropagation();
+                openModal();
+              }}
+              className="relative z-10 flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white text-[10px] font-semibold shadow-2xs group-hover:shadow-xs transition-all cursor-pointer overflow-hidden shrink-0"
             >
-              <RefreshCw className="w-2.5 h-2.5" />
+              <div className="animate-btn-shimmer" />
+              <RefreshCw className="w-2.5 h-2.5 stroke-[2.5]" />
               <span>Restart</span>
             </button>
           </div>

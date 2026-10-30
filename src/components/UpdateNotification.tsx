@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
 import { useAppVersionStore } from '../stores/appVersionStore';
-import { Download, RefreshCw, X, AlertCircle, CheckCircle2 } from 'lucide-react';
+import { useDownloadStore } from '../stores/downloadStore';
+import { Button } from './ui/Button';
+import { Download, RefreshCw, X, AlertCircle, CheckCircle2, ArrowDown, FileText } from 'lucide-react';
 import { formatVersion, compareSemver } from '../utils/version';
 
 export const UpdateNotification: React.FC = () => {
@@ -11,6 +13,7 @@ export const UpdateNotification: React.FC = () => {
   const downloadUpdate = useAppVersionStore((state) => state.downloadUpdate);
   const installAndRestart = useAppVersionStore((state) => state.installAndRestart);
   const checkForUpdates = useAppVersionStore((state) => state.checkForUpdates);
+  const openSettingsSubView = useDownloadStore((state) => state.openSettingsSubView);
 
   const [isActionLoading, setIsActionLoading] = useState(false);
 
@@ -74,19 +77,32 @@ export const UpdateNotification: React.FC = () => {
 
   return (
     <div
+      id="update-notification-toast"
       className="fixed bottom-5 right-5 z-50 w-[350px] max-w-[calc(100vw-32px)] select-none animate-in fade-in slide-in-from-bottom-2 duration-150"
     >
-      <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl shadow-lg p-3.5 flex flex-col gap-2.5 text-zinc-900 dark:text-zinc-100">
+      <div className="bg-white/95 dark:bg-zinc-900/95 backdrop-blur-md border border-zinc-200/80 dark:border-zinc-800/80 rounded-2xl shadow-xl ring-1 ring-black/5 dark:ring-white/5 p-4 flex flex-col gap-3 text-zinc-900 dark:text-zinc-100">
         {/* Header Row */}
-        <div className="flex items-center justify-between gap-2">
-          <div className="flex items-center gap-2 min-w-0">
+        <div className="flex items-center justify-between gap-2.5">
+          <div className="flex items-center gap-2.5 min-w-0">
             {status.state === 'ready' ? (
-              <CheckCircle2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
+              <div className="w-7 h-7 rounded-lg bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-200/80 dark:border-emerald-800/80 flex items-center justify-center text-emerald-600 dark:text-emerald-400 shrink-0">
+                <CheckCircle2 className="w-4 h-4" />
+              </div>
             ) : status.state === 'error' ? (
-              <AlertCircle className="w-4 h-4 text-rose-500 dark:text-rose-400 shrink-0" />
+              <div className="w-7 h-7 rounded-lg bg-rose-50 dark:bg-rose-950/60 border border-rose-200/80 dark:border-rose-800/80 flex items-center justify-center text-rose-600 dark:text-rose-400 shrink-0">
+                <AlertCircle className="w-4 h-4" />
+              </div>
+            ) : status.state === 'verifying' ? (
+              <div className="w-7 h-7 rounded-lg bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-200/80 dark:border-emerald-800/80 flex items-center justify-center text-emerald-600 dark:text-emerald-400 shrink-0">
+                <CheckCircle2 className="w-4 h-4" />
+              </div>
+            ) : status.state === 'downloading' ? (
+              <div className="w-7 h-7 rounded-lg bg-zinc-100 dark:bg-zinc-800 border border-zinc-200/80 dark:border-zinc-700/80 flex items-center justify-center text-zinc-900 dark:text-zinc-100 shrink-0">
+                <ArrowDown className="w-3.5 h-3.5 stroke-[2.5] animate-bounce" />
+              </div>
             ) : (
-              <div className="w-4.5 h-4.5 rounded bg-[#00875a] flex items-center justify-center text-white font-bold text-[10px] shrink-0 leading-none shadow-2xs">
-                ↓
+              <div className="w-7 h-7 rounded-lg bg-zinc-100 dark:bg-zinc-800 border border-zinc-200/80 dark:border-zinc-700/80 flex items-center justify-center text-zinc-900 dark:text-zinc-100 shrink-0">
+                <Download className="w-3.5 h-3.5 stroke-[2.2]" />
               </div>
             )}
 
@@ -94,7 +110,7 @@ export const UpdateNotification: React.FC = () => {
               {status.state === 'available' && (
                 <>
                   <span>Update Available</span>
-                  <span className="px-1.5 py-0.5 rounded text-[10px] font-mono font-medium bg-emerald-50 dark:bg-emerald-950/80 text-emerald-700 dark:text-emerald-300 border border-emerald-200/60 dark:border-emerald-800/60">
+                  <span className="px-1.5 py-0.5 rounded text-[10px] font-mono font-semibold bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400 border border-zinc-200/80 dark:border-zinc-700/80">
                     {targetVer}
                   </span>
                 </>
@@ -108,97 +124,104 @@ export const UpdateNotification: React.FC = () => {
 
           <button
             onClick={dismissToast}
-            className="w-5 h-5 rounded flex items-center justify-center text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors cursor-pointer shrink-0"
+            className="w-6 h-6 rounded-md flex items-center justify-center text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors cursor-pointer shrink-0"
             title="Dismiss"
           >
             <X className="w-3.5 h-3.5" />
           </button>
         </div>
 
-        {/* Body Description */}
+        {/* Body Description - Clean, simple, no tech buzzwords */}
         <p className="text-xs text-zinc-500 dark:text-zinc-400 leading-relaxed font-normal line-clamp-2" title={status.errorMessage}>
-          {status.state === 'available' && `Downex ${targetVer} is available with fixes and performance improvements.`}
-          {status.state === 'downloading' && 'Streaming verified update payload from server...'}
-          {status.state === 'verifying' && 'Authenticating cryptographic Minisign signature...'}
-          {status.state === 'ready' && 'Ready to install. Restart Downex to apply now.'}
-          {status.state === 'error' && (status.errorMessage || 'Could not download update.')}
+          {status.state === 'available' && `Downex ${targetVer} is ready to download.`}
+          {status.state === 'downloading' && 'Downloading the latest update file...'}
+          {status.state === 'verifying' && 'Checking update integrity and security...'}
+          {status.state === 'ready' && 'Update is ready. Restart Downex to apply.'}
+          {status.state === 'error' && (status.errorMessage || 'Could not download update. Please try again.')}
         </p>
 
-        {/* Progress Bar (during downloading or verifying) */}
+        {/* Progress Bar (during downloading or verifying) - High-visibility animated bar, zero digits/sizes */}
         {(status.state === 'downloading' || status.state === 'verifying') && (
-          <div className="flex flex-col gap-1 pt-0.5">
-            <div className="flex items-center justify-between text-[10px] font-mono text-zinc-400 dark:text-zinc-500">
-              <span>{status.state === 'verifying' ? 'Verifying package...' : 'Downloading...'}</span>
-              <span>{status.state === 'verifying' ? '100%' : `${percent}%`}</span>
-            </div>
-            <div className="w-full h-1.5 rounded-full bg-zinc-100 dark:bg-zinc-800 overflow-hidden">
+          <div className="w-full pt-1.5 pb-1">
+            <div className="relative w-full h-3.5 rounded-full bg-zinc-100 dark:bg-zinc-800/90 overflow-hidden ring-1 ring-inset ring-black/5 dark:ring-white/10 p-0.5 shadow-inner">
               <div
-                className="h-full bg-[#00875a] transition-all duration-200 rounded-full"
-                style={{ width: `${status.state === 'verifying' ? 100 : percent}%` }}
-              />
+                className="h-full bg-gradient-to-r from-emerald-600 via-emerald-500 to-teal-400 dark:from-emerald-500 dark:via-emerald-400 dark:to-teal-300 transition-all duration-200 rounded-full relative overflow-hidden animate-progress-pulse min-w-[16px]"
+                style={{ width: `${status.state === 'verifying' ? 100 : Math.max(2, percent)}%` }}
+              >
+                <div className="animate-progress-glow" />
+              </div>
             </div>
           </div>
         )}
 
         {/* Actions Row */}
-        <div className={`flex items-center justify-end gap-2 ${status.state === 'error' ? 'border-t border-zinc-100 dark:border-zinc-800/80 pt-2 mt-0.5' : 'pt-0.5'}`}>
-          {status.state === 'available' && (
+        <div className={`flex items-center justify-between gap-2 ${status.state === 'error' ? 'border-t border-zinc-100 dark:border-zinc-800/80 pt-2.5 mt-0.5' : 'pt-0.5'}`}>
+          {status.state === 'available' ? (
             <>
               <button
-                onClick={dismissToast}
-                className="px-2.5 py-1 rounded-md text-xs font-medium text-zinc-500 dark:text-zinc-400 hover:text-zinc-800 dark:hover:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors cursor-pointer"
+                type="button"
+                onClick={() => openSettingsSubView('patch-notes')}
+                className="text-xs text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100 flex items-center gap-1.5 transition-colors cursor-pointer select-none group"
+                title="View Release Changelog & New Features"
               >
-                Later
+                <FileText className="w-3.5 h-3.5 text-zinc-400 group-hover:text-zinc-700 dark:group-hover:text-zinc-200 transition-colors" />
+                <span className="font-medium">View Patch Notes</span>
               </button>
-              <button
-                onClick={handleDownload}
-                disabled={isActionLoading}
-                className="px-3 py-1.5 rounded-md text-xs font-semibold bg-[#00875a] hover:bg-[#00744e] active:scale-[0.98] text-white flex items-center gap-1.5 shadow-2xs transition-all cursor-pointer disabled:opacity-50"
-              >
-                {isActionLoading ? (
-                  <>
-                    <RefreshCw className="w-3 h-3 animate-spin" />
-                    <span>Starting...</span>
-                  </>
-                ) : (
-                  <>
-                    <Download className="w-3.5 h-3.5 stroke-[2.5]" />
-                    <span>Download</span>
-                  </>
-                )}
-              </button>
+
+              <div className="flex items-center gap-2 shrink-0">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="md"
+                  onClick={dismissToast}
+                >
+                  Later
+                </Button>
+                <Button
+                  type="button"
+                  variant="primary"
+                  size="md"
+                  shimmer
+                  icon={<Download className="w-3.5 h-3.5 stroke-[2.2]" />}
+                  loading={isActionLoading}
+                  loadingText="Starting..."
+                  onClick={handleDownload}
+                >
+                  Download
+                </Button>
+              </div>
             </>
-          )}
-
-          {status.state === 'ready' && (
-            <button
-              onClick={handleRestart}
-              disabled={isActionLoading}
-              className="w-full py-1.5 px-3 rounded-md text-xs font-semibold bg-[#00875a] hover:bg-[#00744e] active:scale-[0.98] text-white flex items-center justify-center gap-1.5 shadow-2xs transition-all cursor-pointer disabled:opacity-50"
-            >
-              {isActionLoading ? (
-                <>
-                  <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                  <span>Restarting...</span>
-                </>
-              ) : (
-                <>
-                  <RefreshCw className="w-3.5 h-3.5" />
-                  <span>Restart & Apply</span>
-                </>
+          ) : (
+            <div className="flex items-center justify-end gap-2 w-full">
+              {status.state === 'ready' && (
+                <Button
+                  type="button"
+                  variant="primary"
+                  size="md"
+                  fullWidth
+                  shimmer
+                  icon={<RefreshCw className="w-3.5 h-3.5" />}
+                  loading={isActionLoading}
+                  loadingText="Restarting..."
+                  onClick={handleRestart}
+                >
+                  Restart & Apply
+                </Button>
               )}
-            </button>
-          )}
 
-          {status.state === 'error' && (
-            <button
-              onClick={handleRetry}
-              disabled={isActionLoading}
-              className="px-3 py-1.5 rounded-md text-xs font-medium bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-700 dark:text-zinc-200 border border-zinc-200 dark:border-zinc-700 transition-colors flex items-center gap-1.5 cursor-pointer shadow-2xs disabled:opacity-50"
-            >
-              <RefreshCw className={`w-3 h-3 ${isActionLoading ? 'animate-spin' : ''}`} />
-              <span>Retry</span>
-            </button>
+              {status.state === 'error' && (
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="md"
+                  icon={<RefreshCw className="w-3.5 h-3.5" />}
+                  loading={isActionLoading}
+                  onClick={handleRetry}
+                >
+                  Retry
+                </Button>
+              )}
+            </div>
           )}
         </div>
       </div>

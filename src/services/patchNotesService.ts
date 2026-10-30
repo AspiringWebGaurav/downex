@@ -226,6 +226,48 @@ class PatchNotesService {
   }
 
   /**
+   * Ingest newly discovered release notes from OTA manifest into memory and SQLite WAL.
+   * Completely event-driven: zero additional network overhead or polling.
+   */
+  public async ingestCloudManifest(manifest: any): Promise<void> {
+    if (!manifest || !manifest.version) return;
+    const v = cleanVersion(manifest.version);
+    const rawNotes = manifest.notes || (manifest as any).body || '';
+    if (!rawNotes.trim()) return;
+
+    const highlights = parseNotesToHighlights(rawNotes);
+    const dateStr = manifest.pub_date
+      ? new Date(manifest.pub_date).toLocaleDateString('en-US', {
+          month: 'short',
+          day: 'numeric',
+          year: 'numeric',
+        })
+      : 'Recent';
+
+    const noteItem: DynamicPatchNotes = {
+      version: v,
+      title: `Release ${formatVersion(v)}`,
+      releaseDate: dateStr,
+      highlights: highlights.length > 0 ? highlights : parseNotesToHighlights(rawNotes),
+      rawNotes,
+      isCustom: false,
+      updatedAt: Date.now(),
+    };
+
+    const map = new Map<string, DynamicPatchNotes>();
+    for (const item of this.inMemoryNotes) {
+      map.set(cleanVersion(item.version), item);
+    }
+    map.set(v, noteItem);
+
+    this.inMemoryNotes = this.sortNotes(Array.from(map.values()));
+    this.notify();
+
+    // Persist to SQLite in background
+    await this.persistNoteToDb(noteItem).catch(() => {});
+  }
+
+  /**
    * In-App authoring / editing: saves a patch note permanently to SQLite
    */
   public async savePatchNote(note: DynamicPatchNotes): Promise<void> {

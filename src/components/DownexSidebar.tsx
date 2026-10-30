@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Download, PlayCircle, ListOrdered, CheckCircle2, Trash2, Settings, Minimize2, Moon, Sun, Plus, ChevronLeft, RefreshCw, Check, Sparkles, Activity } from 'lucide-react';
+import { Download, ListOrdered, Trash2, Settings, Minimize2, Moon, Sun, Plus, ChevronLeft, RefreshCw, Check, Activity } from 'lucide-react';
 import { useDownloadStore } from '../stores/downloadStore';
 import { useAppVersionStore } from '../stores/appVersionStore';
 import { minimizeToBackground } from '../services/tauriService';
@@ -57,17 +57,21 @@ export const DownexSidebar: React.FC<DownexSidebarProps> = ({ darkMode, setDarkM
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
 
-  const activeCount = items.filter((i) => i.status === 'downloading' || i.status === 'probing').length;
-  const completedCount = items.filter((i) => i.status === 'completed').length;
   const queuedCount = items.filter((i) => i.status === 'queued').length;
   const trashCount = items.filter((i) => i.status === 'failed' || i.status === 'cancelled' || i.status === 'error').length;
   const isQueueRunning = useDownloadStore((state) => state.isQueueRunning);
 
+  const hasUpdate =
+    Boolean(status.targetVersion) &&
+    (status.state === 'available' ||
+      status.state === 'downloading' ||
+      status.state === 'verifying' ||
+      status.state === 'ready') &&
+    compareSemver(status.targetVersion!, currentVersion) > 0;
+
   const navItems = [
     { id: 'all', label: 'All Downloads', icon: Download, count: items.length },
-    { id: 'active', label: 'Active', icon: PlayCircle, count: activeCount, highlight: activeCount > 0 },
     { id: 'queues', label: 'Queues', icon: ListOrdered, count: queuedCount, highlight: isQueueRunning && queuedCount > 0 },
-    { id: 'completed', label: 'Completed', icon: CheckCircle2, count: completedCount },
     { id: 'telemetry', label: 'Telemetry', icon: Activity },
     { id: 'add_url', label: 'Add URL', icon: Plus, isAction: true },
     { id: 'settings', label: 'Settings', icon: Settings },
@@ -105,17 +109,24 @@ export const DownexSidebar: React.FC<DownexSidebarProps> = ({ darkMode, setDarkM
               title="Expand Sidebar (Ctrl+B)"
               className="p-1 rounded-lg hover:bg-zinc-200/60 dark:hover:bg-zinc-800 transition-colors cursor-pointer"
             >
-              <img src="/icon.png" alt="Downex" className="w-5 h-5 rounded-xs" />
+              <img src="/icon-arrow.png" alt="Downex" className="w-5 h-5 object-contain" />
             </button>
-            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" title="Ready" />
+            {hasUpdate && (
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" title={`Update v${status.targetVersion} Available`} />
+            )}
           </div>
         ) : (
           <div className="px-2.5 py-1.5 mb-2 flex items-center gap-2">
-            <img src="/icon.png" alt="Downex" className="w-5 h-5 rounded-xs shrink-0" />
-            <span className="font-bold text-xs tracking-tight text-zinc-900 dark:text-zinc-100">
-              Downex
+            <img src="/icon-arrow.png" alt="Downex" className="w-5 h-5 object-contain shrink-0" />
+            <span className="font-brand text-[22px] tracking-wide text-zinc-900 dark:text-zinc-100 leading-none pt-0.5">
+              downex
             </span>
-            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0" title="Core Ready" />
+            {hasUpdate && (
+              <span className="relative flex h-2 w-2 shrink-0 ml-0.5" title={`Update v${status.targetVersion} Available`}>
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
+                <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" />
+              </span>
+            )}
           </div>
         )}
 
@@ -207,20 +218,51 @@ export const DownexSidebar: React.FC<DownexSidebarProps> = ({ darkMode, setDarkM
             type="button"
             onClick={openModal}
             title={`Downex Update Available: ${status.manifest.version} (Click to Review & Install)`}
-            className={`relative flex items-center rounded-lg text-xs bg-violet-50 dark:bg-violet-950/60 border border-violet-300 dark:border-violet-800 text-violet-700 dark:text-violet-300 font-semibold cursor-pointer hover:bg-violet-100 dark:hover:bg-violet-900/50 transition-all shadow-xs animate-pulse ${
+            className={`group relative flex items-center rounded-xl text-xs bg-gradient-to-r from-violet-50 via-purple-50/70 to-indigo-50 dark:from-violet-950/40 dark:via-zinc-900 dark:to-indigo-950/40 border border-violet-200/90 dark:border-violet-800/60 text-violet-950 dark:text-violet-200 font-semibold cursor-pointer hover:border-violet-300 dark:hover:border-violet-700 transition-all shadow-xs overflow-hidden select-none ${
               isCollapsed ? 'w-10 h-10 justify-center' : 'justify-between px-3 py-2'
             }`}
           >
-            <div className={`flex items-center ${isCollapsed ? 'justify-center' : 'gap-2.5 overflow-hidden'}`}>
-              <Sparkles className="w-4 h-4 text-violet-600 dark:text-violet-400 shrink-0" />
-              {!isCollapsed && <span className="truncate">Update</span>}
+            {/* Ambient Dynamic Shimmer Sweep */}
+            <div className="animate-badge-shimmer" />
+
+            <div className={`relative z-10 flex items-center ${isCollapsed ? 'justify-center' : 'gap-2.5 overflow-hidden'}`}>
+              <Download className="w-4 h-4 text-violet-600 dark:text-violet-400 shrink-0 stroke-[2.2]" />
+              {!isCollapsed && <span className="truncate font-semibold tracking-tight">Update</span>}
             </div>
+
             {!isCollapsed ? (
-              <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-violet-600 text-white font-bold shrink-0">
+              <span className="relative z-10 text-[10px] font-mono px-2 py-0.5 rounded-full bg-violet-600 text-white font-bold shrink-0 shadow-2xs group-hover:scale-105 transition-transform">
                 {status.manifest.version}
               </span>
             ) : (
-              <span className="absolute top-1 right-1 w-2 h-2 rounded-full bg-violet-600 animate-ping" />
+              <span className="absolute top-1.5 right-1.5 flex h-2 w-2 z-20">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-violet-400 opacity-75" />
+                <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-violet-600" />
+              </span>
+            )}
+          </button>
+        ) : status.state === 'downloading' || status.state === 'verifying' ? (
+          <button
+            type="button"
+            onClick={openModal}
+            title={status.state === 'verifying' ? 'Verifying update package...' : `Downloading update: ${status.progress?.percentage || 0}%`}
+            className={`group relative flex items-center rounded-xl text-xs bg-zinc-100/90 dark:bg-zinc-800/70 border border-zinc-200/80 dark:border-zinc-700/60 text-zinc-800 dark:text-zinc-200 font-semibold cursor-pointer hover:border-zinc-300 dark:hover:border-zinc-600 transition-all shadow-xs overflow-hidden select-none ${
+              isCollapsed ? 'w-10 h-10 justify-center' : 'justify-between px-3 py-2.5'
+            }`}
+          >
+            <div className="animate-badge-shimmer" />
+            <div className={`relative z-10 flex items-center ${isCollapsed ? 'justify-center' : 'gap-2.5 overflow-hidden'}`}>
+              <RefreshCw className="w-4 h-4 animate-spin text-emerald-500 shrink-0" />
+              {!isCollapsed && (
+                <span className="truncate font-semibold tracking-tight">
+                  {status.state === 'verifying' ? 'Verifying...' : 'Downloading...'}
+                </span>
+              )}
+            </div>
+            {!isCollapsed && (
+              <span className="relative z-10 text-[10px] font-mono px-2 py-0.5 rounded-full bg-emerald-600 text-white font-bold shrink-0 shadow-2xs">
+                {status.state === 'verifying' ? '100%' : `${status.progress?.percentage || 0}%`}
+              </span>
             )}
           </button>
         ) : status.state === 'ready' && status.targetVersion && compareSemver(status.targetVersion, currentVersion) > 0 ? (
@@ -228,20 +270,27 @@ export const DownexSidebar: React.FC<DownexSidebarProps> = ({ darkMode, setDarkM
             type="button"
             onClick={openModal}
             title="Update Ready - Click to Restart & Apply"
-            className={`relative flex items-center rounded-lg text-xs bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-300 dark:border-emerald-800 text-emerald-800 dark:text-emerald-300 font-semibold cursor-pointer hover:bg-emerald-100 transition-all shadow-xs ${
-              isCollapsed ? 'w-10 h-10 justify-center' : 'justify-between px-3 py-2'
+            className={`group relative flex items-center rounded-xl text-xs bg-gradient-to-r from-emerald-50 via-teal-50/70 to-emerald-50 dark:from-emerald-950/40 dark:via-zinc-900 dark:to-teal-950/40 border border-emerald-200/90 dark:border-emerald-800/60 text-emerald-950 dark:text-emerald-200 font-semibold cursor-pointer hover:border-emerald-300 dark:hover:border-emerald-700 transition-all shadow-xs overflow-hidden select-none ${
+              isCollapsed ? 'w-10 h-10 justify-center' : 'justify-between px-3 py-2.5'
             }`}
           >
-            <div className={`flex items-center ${isCollapsed ? 'justify-center' : 'gap-2.5 overflow-hidden'}`}>
-              <RefreshCw className="w-4 h-4 text-emerald-600 shrink-0 animate-pulse" />
-              {!isCollapsed && <span className="truncate">Apply Update</span>}
+            {/* Ambient Dynamic Shimmer Sweep */}
+            <div className="animate-badge-shimmer" />
+
+            <div className={`relative z-10 flex items-center ${isCollapsed ? 'justify-center' : 'gap-2.5 overflow-hidden'}`}>
+              <RefreshCw className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0 animate-spin" style={{ animationDuration: '4s' }} />
+              {!isCollapsed && <span className="truncate font-semibold tracking-tight">Apply Update</span>}
             </div>
+
             {!isCollapsed ? (
-              <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-emerald-600 text-white font-bold shrink-0">
+              <span className="relative z-10 text-[10px] font-mono px-2 py-0.5 rounded-full bg-emerald-600 text-white font-bold shrink-0 shadow-2xs group-hover:scale-105 transition-transform">
                 READY
               </span>
             ) : (
-              <span className="absolute top-1 right-1 w-2 h-2 rounded-full bg-emerald-500" />
+              <span className="absolute top-1.5 right-1.5 flex h-2 w-2 z-20">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
+                <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-emerald-600" />
+              </span>
             )}
           </button>
         ) : status.state === 'up-to-date' ? (

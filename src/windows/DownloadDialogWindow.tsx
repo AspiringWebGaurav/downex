@@ -16,7 +16,6 @@ import {
   Sun,
   Moon,
   RotateCcw,
-  Sparkles,
   ArrowRight,
   Monitor
 } from 'lucide-react';
@@ -776,7 +775,7 @@ export const DownloadDialogWindow: React.FC = () => {
       {/* Interactive Feedback Toast */}
       {toastMessage && (
         <div className="fixed bottom-6 left-1/2 -translate-x-1/2 px-4 py-2 rounded-xl bg-zinc-900 text-white border border-zinc-700 shadow-2xl flex items-center gap-2 text-xs font-medium z-50 animate-in fade-in slide-in-from-bottom-2 duration-150">
-          <Sparkles className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+          <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
           <span>{toastMessage}</span>
         </div>
       )}

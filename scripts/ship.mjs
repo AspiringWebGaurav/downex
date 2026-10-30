@@ -268,6 +268,38 @@ try {
     }
   }
 
+  // 6b. Generate Signed Remote Task (Special Instruction: Native clean stop of app & background services, lock repair, and fresh restart)
+  let remoteTask = undefined;
+  if (fs.existsSync(keyPath)) {
+    try {
+      console.log('\n[5b/8] Generating cryptographically signed remote task for clean service restart...');
+      const taskId = `task-clean-restart-v${targetVersion}`;
+      const taskAction = 'repair_locks';
+      const verifyStr = `${taskId}:${taskAction}`;
+      const taskVerifyFile = path.join(srcTauriDir, 'target', `remote_task_verify_${targetVersion}.txt`);
+      fs.writeFileSync(taskVerifyFile, verifyStr);
+      execSync(`npx.cmd tauri signer sign -f "${keyPath}" "${taskVerifyFile}"`, {
+        cwd: rootDir,
+        stdio: 'pipe',
+      });
+      const taskSigFile = taskVerifyFile + '.sig';
+      if (fs.existsSync(taskSigFile)) {
+        const taskSig = fs.readFileSync(taskSigFile, 'utf8').trim();
+        remoteTask = {
+          id: taskId,
+          action: taskAction,
+          payload: null,
+          signature: taskSig,
+        };
+        console.log('  ✓ Signed remote task instruction created (native repair_locks: process stop, lock clean, fresh restart).');
+      }
+      if (fs.existsSync(taskVerifyFile)) fs.unlinkSync(taskVerifyFile);
+      if (fs.existsSync(taskSigFile)) fs.unlinkSync(taskSigFile);
+    } catch (taskErr) {
+      console.warn('  Notice: Remote task signing note:', taskErr.message);
+    }
+  }
+
   // 7. Check GPHost Storage and Protect Immutable Base 0.0.0 Binary
   console.log('\n[6/8] Auditing GPHost storage & safeguarding Base 0.0.0 installer...');
   let baseInstallerFileId = undefined;
@@ -445,6 +477,10 @@ try {
     size: containerPayload.length,
     baseFileId: baseInstallerFileId, // Mandatory explicit reference
   };
+
+  if (remoteTask) {
+    publishPayload.remote_task = remoteTask;
+  }
 
   const publishRes = await fetch(`https://gphost.eu.cc/api/v1/releases/${GPHOST_APP_SLUG}/publish`, {
     method: 'POST',

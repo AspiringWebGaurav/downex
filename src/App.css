@@ -69,10 +69,10 @@ html.dark #root {
 
 @keyframes progress-shimmer {
   0% {
-    left: -40%;
+    transform: translateX(-150%) skewX(-20deg);
   }
-  60%, 100% {
-    left: 125%;
+  50%, 100% {
+    transform: translateX(250%) skewX(-20deg);
   }
 }
 
@@ -110,17 +110,129 @@ html.dark #root {
   position: absolute;
   top: 0;
   bottom: 0;
-  width: 35%;
+  width: 50%;
+  left: 0;
+  will-change: transform;
+  pointer-events: none;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(255, 255, 255, 0.65) 50%,
+    transparent 100%
+  );
+
+  animation: progress-shimmer 1.8s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+
+.animate-radar {
+  animation: radar-pulse 1.8s cubic-bezier(0, 0, 0.2, 1) infinite;
+}
+
+/* Button Glossy Shimmer Animation */
+@keyframes btn-shimmer {
+  0% {
+    transform: translateX(-160%) skewX(-20deg);
+  }
+  35%, 100% {
+    transform: translateX(260%) skewX(-20deg);
+  }
+}
+
+.animate-btn-shimmer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 60%;
+  height: 100%;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(255, 255, 255, 0.32) 50%,
+    transparent 100%
+  );
+  animation: btn-shimmer 2.8s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+  pointer-events: none;
+}
+
+/* Badge & Pill Dynamic Shimmer Sheen */
+@keyframes badge-shimmer {
+  0% {
+    transform: translateX(-180%) skewX(-20deg);
+  }
+  35%, 100% {
+    transform: translateX(280%) skewX(-20deg);
+  }
+}
+
+.animate-badge-shimmer {
+  position: absolute;
+  inset: 0;
+  width: 80%;
+  height: 100%;
   background: linear-gradient(
     90deg,
     transparent 0%,
     rgba(255, 255, 255, 0.45) 50%,
     transparent 100%
   );
-  transform: skewX(-20deg);
-  animation: progress-shimmer 2.4s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+  animation: badge-shimmer 3s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+  pointer-events: none;
+  z-index: 1;
 }
 
-.animate-radar {
-  animation: radar-pulse 1.8s cubic-bezier(0, 0, 0.2, 1) infinite;
+.dark .animate-badge-shimmer {
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(255, 255, 255, 0.18) 50%,
+    transparent 100%
+  );
+}
+
+/* Enhanced Fluid Progress Bar Animations */
+@keyframes progress-fluid-glow {
+  0% {
+    transform: translateX(-150%) skewX(-20deg);
+  }
+  50% {
+    transform: translateX(120%) skewX(-20deg);
+  }
+  100% {
+    transform: translateX(320%) skewX(-20deg);
+  }
+}
+
+.animate-progress-glow {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(255, 255, 255, 0.3) 25%,
+    rgba(255, 255, 255, 0.85) 50%,
+    rgba(255, 255, 255, 0.3) 75%,
+    transparent 100%
+  );
+  animation: progress-fluid-glow 1.4s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+  pointer-events: none;
+}
+
+@keyframes progress-pulse-glow {
+  0%, 100% {
+    box-shadow: 0 0 10px rgba(16, 185, 129, 0.45), inset 0 1px 1px rgba(255, 255, 255, 0.3);
+  }
+  50% {
+    box-shadow: 0 0 20px rgba(16, 185, 129, 0.75), 0 0 10px rgba(52, 211, 153, 0.6), inset 0 1px 1px rgba(255, 255, 255, 0.5);
+  }
+}
+
+.animate-progress-pulse {
+  animation: progress-pulse-glow 1.8s ease-in-out infinite;
+}
+
+/* Custom Cursive Brand Typography (Option 1 Lockup) */
+.font-brand {
+  font-family: 'Damion', cursive;
 }

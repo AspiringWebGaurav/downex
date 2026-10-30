@@ -8,7 +8,6 @@ import {
   AlertTriangle,
   ArrowRight,
   Loader2,
-  Sparkles,
   Check,
   ShieldCheck,
   Zap,
@@ -100,8 +99,10 @@ export const UpdateModal: React.FC = () => {
                 <RefreshCw className="w-3.5 h-3.5 animate-spin" />
               ) : isUpToDate ? (
                 <Check className="w-3.5 h-3.5" />
-              ) : isAvailable || isReady ? (
-                <Sparkles className="w-3.5 h-3.5" />
+              ) : isAvailable ? (
+                <Download className="w-3.5 h-3.5" />
+              ) : isReady ? (
+                <CheckCircle2 className="w-3.5 h-3.5" />
               ) : isError ? (
                 <AlertTriangle className="w-3.5 h-3.5" />
               ) : (
@@ -169,15 +170,15 @@ export const UpdateModal: React.FC = () => {
               <div className="w-full mt-2 p-3 rounded-xl bg-zinc-50 dark:bg-zinc-950/60 border border-zinc-200/80 dark:border-zinc-800/80 flex flex-col gap-2 text-[11px] font-mono text-left">
                 <div className="flex items-center gap-2 text-emerald-600 dark:text-emerald-400">
                   <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
-                  <span>1. Package downloaded & unpacked (AES-256-GCM)</span>
+                  <span>1. Update file downloaded</span>
                 </div>
                 <div className="flex items-center gap-2 text-emerald-600 dark:text-emerald-400">
                   <ShieldCheck className="w-3.5 h-3.5 shrink-0" />
-                  <span>2. Minisign Ed25519 signature verified</span>
+                  <span>2. Update integrity verified</span>
                 </div>
                 <div className="flex items-center gap-2 text-amber-600 dark:text-amber-400 animate-pulse font-semibold">
                   <Zap className="w-3.5 h-3.5 shrink-0" />
-                  <span>3. Swapping binary & launching new process...</span>
+                  <span>3. Applying update & restarting...</span>
                 </div>
               </div>
             </div>
@@ -261,8 +262,8 @@ export const UpdateModal: React.FC = () => {
                     <span className="flex items-center gap-1.5 font-medium">
                       <Loader2 className="w-3.5 h-3.5 animate-spin text-emerald-600" />
                       {status.state === 'verifying'
-                        ? 'Verifying cryptographic signature...'
-                        : `Downloading container (${percent}%)...`}
+                        ? 'Verifying update...'
+                        : `Downloading update (${percent}%)...`}
                     </span>
                     <span className="font-bold text-emerald-600 dark:text-emerald-400">
                       {status.state === 'verifying' ? '100%' : `${percent}%`}
