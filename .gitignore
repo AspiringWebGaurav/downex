@@ -2,12 +2,94 @@
 # Downex Download Manager — Updated Production .gitignore
 # ==============================================================================
 
-# Node dependencies
+# ------------------------------------------------------------------------------
+# 1. AI Agent Instructions & Architectural Blueprint (STRICTLY PRIVATE / VAULT ONLY)
+# ------------------------------------------------------------------------------
+AGENTS.md
+/AGENTS.md
+GEMINI.md
+/GEMINI.md
+PROJECT_MAP.json
+/PROJECT_MAP.json
+project-map*.json
+.agents/
+/.agents/
+**/.agents/**
+*.agent
+*.agents
+
+# ------------------------------------------------------------------------------
+# 2. Local Utility & Repair Scripts (PRESERVED IN ENCRYPTED VAULT)
+# ------------------------------------------------------------------------------
+Downex-Repair.cmd
+/Downex-Repair.cmd
+
+# ------------------------------------------------------------------------------
+# 3. Automation Scripts (Only Vault Runner is Tracked on GitHub; All Else in Vault)
+# ------------------------------------------------------------------------------
+scripts/*
+!scripts/vault.mjs
+!scripts/test-vault-e2e.mjs
+
+# ------------------------------------------------------------------------------
+# 4. Environment Files & Secret Credentials (PRESERVED IN ENCRYPTED VAULT)
+# ------------------------------------------------------------------------------
+.env
+.env.*
+.env.local
+*.env
+*.env.*
+*.local
+!.env.example
+
+# ------------------------------------------------------------------------------
+# 5. Tauri Private Signing Keys & Secrets (PRESERVED IN ENCRYPTED VAULT)
+# ------------------------------------------------------------------------------
+.tauri/
+**/.tauri/**
+*.key
+*.pem
+*.crt
+*.cer
+*.der
+*.pfx
+*.p12
+*.keystore
+*.jks
+private.key
+signing.key
+minisign.key
+
+# ------------------------------------------------------------------------------
+# 6. Proprietary References, Research & Scratchpad (PRESERVED IN ENCRYPTED VAULT)
+# ------------------------------------------------------------------------------
+reference/
+/reference/
+refrence/
+/refrence/
+scratch/
+/scratch/
+
+# ------------------------------------------------------------------------------
+# 7. Release Packages & Compiled Installers (PRESERVED IN ENCRYPTED VAULT)
+# ------------------------------------------------------------------------------
+releases/
+/releases/
+*.downex.bin
+update*.downex.bin
+*.sig
+src-tauri/target/*.downex.bin
+src-tauri/target/*.sig
+
+# ------------------------------------------------------------------------------
+# 8. Node Dependencies & Package Managers
+# ------------------------------------------------------------------------------
 node_modules/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 lerna-debug.log*
+pnpm-debug.log*
 .pnpm-store/
 .yarn/*
 !.yarn/patches
@@ -16,10 +98,15 @@ lerna-debug.log*
 !.yarn/sdks
 !.yarn/versions
 
-# Frontend Build Outputs & Caches
+# ------------------------------------------------------------------------------
+# 9. Frontend Build Outputs & Caches
+# ------------------------------------------------------------------------------
 dist/
+/dist/
 dist-extension/
+/dist-extension/
 build/
+/build/
 .output/
 .cache/
 .vite/
@@ -27,24 +114,22 @@ vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 *.tsbuildinfo
 tsconfig.node.tsbuildinfo
+tsconfig.tsbuildinfo
 
-# Rust & Tauri Build Targets
+# ------------------------------------------------------------------------------
+# 10. Rust & Tauri Build Targets
+# ------------------------------------------------------------------------------
 target/
 src-tauri/target/
 src-tauri/gen/schemas/
 **/*.rs.bk
 Cargo.lock.orig
 
-# OTA & Ship Temporary Artifacts
-*.downex.bin
-update*.downex.bin
-*.sig
-src-tauri/target/*.downex.bin
-src-tauri/target/*.sig
-releases/
-
-# Local Databases & Runtime WAL
+# ------------------------------------------------------------------------------
+# 11. Local Databases & Runtime WAL
+# ------------------------------------------------------------------------------
 *.db
+*.db-*
 *.db-wal
 *.db-shm
 downex.db
@@ -54,35 +139,21 @@ pids
 *.seed
 *.pid.lock
 
-# Environment Files & Secret Credentials (PRESERVED IN ENCRYPTED VAULT)
-.env
-.env.*
-.env.local
-!.env.example
+# ------------------------------------------------------------------------------
+# 12. Testing, Coverage & Playwright Reports
+# ------------------------------------------------------------------------------
+coverage/
+*.lcov
+.nyc_output/
+test-results/
+playwright-report/
+blob-report/
+playwright/.cache/
+.last-run.json
 
-# Tauri Private Signing Keys & Signing Secrets (PRESERVED IN ENCRYPTED VAULT)
-.tauri/
-*.key
-*.pem
-*.pfx
-*.p12
-
-# Local Proprietary References & Research (PRESERVED IN ENCRYPTED VAULT)
-reference/
-refrence/
-scratch/
-
-# Operating System & File System Artifacts
-.DS_Store
-.DS_Store?
-._*
-.Spotlight-V100
-.Trashes
-ehthumbs.db
-Thumbs.db
-Desktop.ini
-
-# IDE & Editor Settings (Allow shared team configurations)
+# ------------------------------------------------------------------------------
+# 13. IDE & Editor Configurations
+# ------------------------------------------------------------------------------
 .idea/
 *.sublime-project
 *.sublime-workspace
@@ -91,21 +162,23 @@ Desktop.ini
 !.vscode/extensions.json
 !.vscode/launch.json
 
-# Test Coverage & Diagnostic Reports
-coverage/
-*.lcov
-.nyc_output/
-report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
-test-results/
-playwright-report/
+# ------------------------------------------------------------------------------
+# 14. Operating System & File System Artifacts
+# ------------------------------------------------------------------------------
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+Desktop.ini
+$RECYCLE.BIN/
 
 # ------------------------------------------------------------------------------
-# VAULT ASSETS & DEFENSE (EXPLICITLY INCLUDED & TRACKED IN GIT)
+# 15. Vault Container & Verification Sandbox (Container Tracked; Attempts Local)
 # ------------------------------------------------------------------------------
 !downex-vault.enc
 .vault_attempts
 test-vault-verification/
 vault/
-
-
-

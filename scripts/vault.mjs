@@ -6,15 +6,19 @@
  * Securely archives, compresses, and encrypts all private workspace assets:
  * - Environment Credentials: `.env.local`
  * - Release Signing Keys: `.tauri/downex.key`, `.tauri/downex.key.pub`
+ * - AI Agent Guidelines & Architecture: `AGENTS.md`, `GEMINI.md`, `PROJECT_MAP.json`, `.agents/`
+ * - Internal & Proprietary Automation Scripts: `scripts/build-base.mjs`, `scripts/ship.mjs`, etc.
+ * - Client Self-Healing Utilities: `Downex-Repair.cmd`
  * - Reverse Engineering Reference Library: `reference/` (all disassemblies, binaries, DLLs)
  * - Research & Diagnostic Utilities: `scratch/`
- * - Agent Behavioral & Architectural Maps: `PROJECT_MAP.json`, `AGENTS.md`
+ * - Immutable Base Release Packages: `releases/` (if present)
  * 
- * Excludes build caches and dependencies: `node_modules`, `target`, `src-tauri/target`, `dist`, `.vite`.
+ * Excludes build caches, dependencies, and temporary files:
+ * `node_modules`, `target`, `dist`, `dist-extension`, `.git`, `test-results`, `playwright-report`, `.cache`.
  * 
  * Encryption: AES-256-GCM + scrypt key derivation (memory-hard, GPU-resistant).
  * Container: 8-byte magic ('DWNXVALT') + version (1 byte) + attempts (1 byte) + salt (32 bytes) + IV (12 bytes) + tag (16 bytes) + ciphertext.
- * Hacker Defense Lifecycle: 2 failed attempts will intentionally poison and scramble the vault file on disk.
+ * Hacker Defense Lifecycle: 2 failed attempts intentionally poison and scramble the vault file on disk.
  * 
  * Usage:
  *   node scripts/vault.mjs pack [--pass <password>]
@@ -49,12 +53,16 @@ const EXCLUDE_DIR_NAMES = new Set([
   'node_modules',
   'target',
   'dist',
+  'dist-extension',
   '.next',
   '.turbo',
   '.cache',
   'test-results',
+  'playwright-report',
   'build',
   'gen',
+  '.git',
+  'test-vault-verification',
 ]);
 
 const EXCLUDE_FILE_EXTENSIONS = new Set([
@@ -182,36 +190,96 @@ async function packVault() {
 
   const password = await resolvePassword('PACK');
 
-  console.log('[1/4] Scanning private assets and configurations...');
-  const filesToPack = [];
+  console.log('[1/4] Dynamically scanning private assets, scripts, and configurations...');
+  const filesMap = new Map();
 
-  // Root Explicit Sensitive & Rule Files
-  const rootExplicitFiles = ['.env.local', 'PROJECT_MAP.json', 'AGENTS.md'];
-  for (const f of rootExplicitFiles) {
-    const full = path.join(rootDir, f);
-    if (fs.existsSync(full)) {
-      filesToPack.push({ fullPath: full, relPath: f });
+  function addFile(fullPath, relPath) {
+    const normalizedRel = relPath.replace(/\\/g, '/');
+    if (!filesMap.has(normalizedRel) && fs.existsSync(fullPath)) {
+      filesMap.set(normalizedRel, { fullPath, relPath: normalizedRel });
     }
   }
 
-  // Signing Keys in .tauri directory
+  // A. Root environment files (.env.local, .env.*, strictly excluding .env.example)
+  if (fs.existsSync(rootDir)) {
+    const rootEntries = fs.readdirSync(rootDir, { withFileTypes: true });
+    for (const entry of rootEntries) {
+      if (entry.isFile()) {
+        const name = entry.name.toLowerCase();
+        if (name.startsWith('.env') && !name.includes('.example') && !name.includes('.sample')) {
+          addFile(path.join(rootDir, entry.name), entry.name);
+        }
+      }
+    }
+  }
+
+  // B. Root Architecture Maps, Rules, and Local Utility Scripts
+  const rootExplicitFiles = [
+    'PROJECT_MAP.json',
+    'AGENTS.md',
+    'GEMINI.md',
+    'Downex-Repair.cmd',
+  ];
+  for (const f of rootExplicitFiles) {
+    const full = path.join(rootDir, f);
+    if (fs.existsSync(full)) {
+      addFile(full, f);
+    }
+  }
+
+  // C. Agent Intelligence & Rules (.agents/)
+  const agentsDir = path.join(rootDir, '.agents');
+  if (fs.existsSync(agentsDir)) {
+    for (const item of collectFiles(agentsDir, '.agents')) {
+      addFile(item.fullPath, item.relPath);
+    }
+  }
+
+  // D. Tauri Private Signing Keys (.tauri/)
   const tauriDir = path.join(rootDir, '.tauri');
   if (fs.existsSync(tauriDir)) {
-    filesToPack.push(...collectFiles(tauriDir, '.tauri'));
+    for (const item of collectFiles(tauriDir, '.tauri')) {
+      addFile(item.fullPath, item.relPath);
+    }
   }
 
-  // Entire reference directory
+  // E. Reverse Engineering Library (reference/)
   const referenceDir = path.join(rootDir, 'reference');
   if (fs.existsSync(referenceDir)) {
-    filesToPack.push(...collectFiles(referenceDir, 'reference'));
+    for (const item of collectFiles(referenceDir, 'reference')) {
+      addFile(item.fullPath, item.relPath);
+    }
   }
 
-  // Entire scratch directory
+  // F. Scratchpad & Diagnostic Utilities (scratch/)
   const scratchDir = path.join(rootDir, 'scratch');
   if (fs.existsSync(scratchDir)) {
-    filesToPack.push(...collectFiles(scratchDir, 'scratch'));
+    for (const item of collectFiles(scratchDir, 'scratch')) {
+      addFile(item.fullPath, item.relPath);
+    }
   }
 
+  // G. Local Automation & Shipping Scripts (scripts/)
+  // All private automation scripts are packed into the vault.
+  // We exclude vault.mjs itself from being extracted over itself at runtime.
+  const scriptsDir = path.join(rootDir, 'scripts');
+  if (fs.existsSync(scriptsDir)) {
+    for (const item of collectFiles(scriptsDir, 'scripts')) {
+      if (item.relPath.toLowerCase() !== 'scripts/vault.mjs') {
+        addFile(item.fullPath, item.relPath);
+      }
+    }
+  }
+
+  // H. Built Base Installers & Release Packages (releases/)
+  const releasesDir = path.join(rootDir, 'releases');
+  if (fs.existsSync(releasesDir)) {
+    for (const item of collectFiles(releasesDir, 'releases')) {
+      addFile(item.fullPath, item.relPath);
+    }
+  }
+
+  const filesToPack = Array.from(filesMap.values());
   console.log(`  ✓ Found ${filesToPack.length} files to archive.`);
 
   // Build Manifest Object
@@ -462,11 +530,14 @@ async function unpackVault() {
   console.log(`   - Restored Files : ${restoredCount}`);
   console.log('   - Secrets (.env) : .env.local');
   console.log('   - OTA Signing    : .tauri/downex.key, .tauri/downex.key.pub');
+  console.log('   - Agent Rules    : AGENTS.md, GEMINI.md, .agents/');
+  console.log('   - Architecture   : PROJECT_MAP.json');
+  console.log('   - Automation     : scripts/ (ship.mjs, build-base.mjs, etc.)');
+  console.log('   - Repair Tool    : Downex-Repair.cmd');
   console.log('   - Reverse Lib    : reference/idm/');
   console.log('   - Diagnostic     : scratch/');
-  console.log('   - Architecture   : PROJECT_MAP.json, AGENTS.md');
   console.log('===============================================================\n');
-  console.log('Next steps to resume development on your new PC:');
+  console.log('Next steps to resume development:');
   console.log('  1. npm install');
   console.log('  2. npm run dev\n');
 }
@@ -506,7 +577,7 @@ function statusVault() {
   console.log('\nVault is ready to be committed to GitHub or unpacked on another machine.\n');
 }
 
-// Main Command Router supporting both GPN names and existing aliases
+// Main Command Router
 const cmd = (process.argv[2] || '').toLowerCase().trim();
 switch (cmd) {
   case 'pack':

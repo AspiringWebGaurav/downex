@@ -188,9 +188,14 @@ console.log('\n[Test 6] Verifying presence of critical secret and workflow files
 const criticalPaths = [
   'PROJECT_MAP.json',
   'AGENTS.md',
+  'GEMINI.md',
+  'Downex-Repair.cmd',
   '.env.local',
   '.tauri/downex.key',
   '.tauri/downex.key.pub',
+  '.agents/mcp_config.json',
+  'scripts/ship.mjs',
+  'scripts/build-base.mjs',
   'scratch/find_all_exts.ps1',
   'scratch/find_idm_ext.ps1',
 ];
