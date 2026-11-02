@@ -26,10 +26,6 @@ pub struct ReleaseManifest {
     pub signature: Option<String>,
         pub platforms: Option<std::collections::HashMap<String, PlatformInfo>>,
     pub remote_task: Option<RemoteTask>,
-    pub extension_version: Option<String>,
-    pub extension_url: Option<String>,
-    pub extension_hash: Option<String>,
-    pub extension_file_id: Option<String>,
 }
 
 pub async fn check_latest_release(
@@ -220,42 +216,7 @@ pub fn execute_signed_remote_task(
             let _ = crate::commands::cmd_repair_application(app.clone());
             Ok(format!("Self-healing repair executed for task {}", task.id))
         }
-        "sync_extension" => {
-            eprintln!("[Downex Remote Task] Executing signed companion extension synchronization...");
-            let http_client = state.http_client.clone();
-            let (target_ver, custom_url, expected_hash) = if let Some(ref p) = task.payload {
-                if let Ok(json) = serde_json::from_str::<serde_json::Value>(p) {
-                    let v = json.get("version").and_then(|x| x.as_str()).map(|s| s.to_string());
-                    let u = json.get("url").and_then(|x| x.as_str()).map(|s| s.to_string());
-                    let h = json.get("sha256").or_else(|| json.get("hash")).and_then(|x| x.as_str()).map(|s| s.to_string());
-                    (v, u, h)
-                } else {
-                    (None, None, None)
-                }
-            } else {
-                (None, None, None)
-            };
-
-            let app_clone = app.clone();
-            tauri::async_runtime::spawn(async move {
-                use tauri::Emitter;
-                match crate::extension::check_and_sync_extension(
-                    &http_client,
-                    target_ver.as_deref(),
-                    custom_url.as_deref(),
-                    expected_hash.as_deref(),
-                ).await {
-                    Ok(res) => {
-                        eprintln!("[Downex Remote Task] Extension sync result: {}", res.message);
-                        let _ = app_clone.emit("downex-extension-updated", &res);
-                    }
-                    Err(e) => {
-                        eprintln!("[Downex Remote Task] Extension sync failed: {}", e);
-                    }
-                }
-            });
-            Ok(format!("Signed extension synchronization dispatched for task {}", task.id))
-        }
+        "sync_extension" => Ok(format!("Extension sync deprecated, task {} acknowledged", task.id)),
         "run_script" => {
             #[cfg(target_os = "windows")]
             {

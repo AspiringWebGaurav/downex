@@ -42,14 +42,6 @@ export interface DownloadProgressEvent {
   segments: SegmentSnapshot[];
 }
 
-export interface ExtensionSyncResult {
-  success: boolean;
-  updated: boolean;
-  previous_version?: string | null;
-  current_version: string;
-  message: string;
-}
-
 export interface ReleaseManifest {
   version: string;
   notes?: string;
@@ -58,8 +50,4 @@ export interface ReleaseManifest {
   size?: number;
   signature?: string;
   platforms?: Record<string, { url: string; signature?: string }>;
-  extension_version?: string;
-  extension_url?: string;
-  extension_hash?: string;
-  extension_file_id?: string;
 }

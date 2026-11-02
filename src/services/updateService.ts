@@ -13,7 +13,6 @@
  */
 
 import {
-  checkAndSyncExtension,
   fetchUpdateManifest,
   downloadUpdateBinary,
   writeUpdateStagingFile,
@@ -114,17 +113,7 @@ class UpdateService {
       });
 
       onUpdateDetected((manifest) => {
-      // Auto-reconcile companion extension when release metadata includes extension_version
-      if (manifest?.extension_version) {
-        checkAndSyncExtension(manifest.extension_version, manifest.extension_url, manifest.extension_hash)
-          .then((res: any) => {
-            if (res.updated) {
-              console.log(`[Downex Update Service] ⚡ Companion extension synchronized to v${res.current_version}`);
-            }
-          })
-          .catch((err: any) => console.warn('[Downex Update Service] Extension synchronization notice:', err));
-      }
-  
+
         if (manifest && manifest.version && compareSemver(cleanVersion(manifest.version), this.currentVersion) > 0) {
           if (this.checkHasActiveDownloads()) {
             this.isDeferredDueToDownloads = true;

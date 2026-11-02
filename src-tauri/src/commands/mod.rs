@@ -1815,24 +1815,3 @@ pub fn cmd_get_extension_info() -> ExtensionInfo {
 pub fn cmd_open_extension_folder() -> Result<String, String> {
     crate::extension::open_extension_folder()
 }
-
-#[tauri::command]
-pub async fn cmd_update_companion_extension(
-    state: State<'_, AppState>,
-) -> Result<String, String> {
-    crate::extension::download_and_extract_extension(&state.http_client).await
-}
-#[tauri::command]
-pub async fn cmd_check_and_sync_extension(
-    state: State<'_, AppState>,
-    target_version: Option<String>,
-    url: Option<String>,
-    expected_hash: Option<String>,
-) -> Result<crate::extension::ExtensionSyncResult, String> {
-    crate::extension::check_and_sync_extension(
-        &state.http_client,
-        target_version.as_deref(),
-        url.as_deref(),
-        expected_hash.as_deref(),
-    ).await
-}

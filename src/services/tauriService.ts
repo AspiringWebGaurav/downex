@@ -1264,38 +1264,3 @@ export async function openExtensionFolder(): Promise<string> {
   }
   return await invoke<string>('cmd_open_extension_folder');
 }
-
-export async function updateCompanionExtension(): Promise<string> {
-  if (!isTauri) {
-    return '0.0.3';
-  }
-  return await invoke<string>('cmd_update_companion_extension');
-}
-export interface ExtensionSyncResult {
-  success: boolean;
-  updated: boolean;
-  previous_version?: string | null;
-  current_version: string;
-  message: string;
-}
-
-export async function checkAndSyncExtension(
-  targetVersion?: string,
-  url?: string,
-  expectedHash?: string
-): Promise<ExtensionSyncResult> {
-  if (!isTauri) {
-    return {
-      success: true,
-      updated: false,
-      previous_version: '0.0.0',
-      current_version: targetVersion || '0.0.0',
-      message: 'Extension is already up to date (Mock)',
-    };
-  }
-  return await invoke<ExtensionSyncResult>('cmd_check_and_sync_extension', {
-    targetVersion: targetVersion || null,
-    url: url || null,
-    expectedHash: expectedHash || null,
-  });
-}
