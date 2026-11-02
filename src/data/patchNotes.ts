@@ -66,6 +66,16 @@ export function getLatestCodebaseVersion(): string {
 }
 
 export const BASELINE_PATCH_NOTES: Record<string, DynamicPatchNotes> = {
+  '0.0.30': {
+    version: '0.0.30',
+    releaseDate: 'November 2, 2026',
+    title: 'fix(ext): automated browser extension update delivery and active unpacked directory sync',
+    highlights: [
+          "Fix(ext): automated browser extension update delivery",
+          "Active unpacked directory sync"
+    ],
+    rawNotes: 'fix(ext): automated browser extension update delivery and active unpacked directory sync',
+  },
   '0.0.29': {
     version: '0.0.29',
     releaseDate: 'November 2, 2026',
@@ -76,16 +86,6 @@ export const BASELINE_PATCH_NOTES: Record<string, DynamicPatchNotes> = {
           "Debounced extension interception"
     ],
     rawNotes: 'fix: single dynamic modal 1-time trigger, suppress background downloader window, debounced extension interception',
-  },
-  '--help': {
-    version: '--help',
-    releaseDate: 'November 2, 2026',
-    title: 'v--help: Performance and stability release',
-    highlights: [
-          "V--help: Performance",
-          "Stability release"
-    ],
-    rawNotes: 'v--help: Performance and stability release',
   },
   '0.0.28': {
     version: '0.0.28',
