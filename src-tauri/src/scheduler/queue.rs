@@ -17,6 +17,7 @@ pub struct QueueManager {
     queue_semaphores: Arc<RwLock<HashMap<String, Arc<Semaphore>>>>,
     progress_tx: mpsc::Sender<DownloadProgressEvent>,
     queue_running: Arc<AtomicBool>,
+    app_handle: Arc<RwLock<Option<tauri::AppHandle>>>,
 }
 
 impl QueueManager {
@@ -37,7 +38,34 @@ impl QueueManager {
             queue_semaphores: Arc::new(RwLock::new(semaphores)),
             progress_tx,
             queue_running: Arc::new(AtomicBool::new(false)),
+            app_handle: Arc::new(RwLock::new(None)),
         }
+    }
+
+    pub fn set_app_handle(&self, app: tauri::AppHandle) {
+        *self.app_handle.write() = Some(app);
+    }
+
+    pub fn get_app_handle(&self) -> Option<tauri::AppHandle> {
+        self.app_handle.read().clone()
+    }
+
+    pub fn has_active_downloads(&self) -> bool {
+        if !self.active_tokens.read().is_empty() {
+            return true;
+        }
+        if self.is_queue_running() {
+            if let Ok(queued) = self.db.get_queued_downloads() {
+                if !queued.is_empty() {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    pub fn active_download_count(&self) -> usize {
+        self.active_tokens.read().len()
     }
 
     pub async fn probe_url_info(
@@ -221,6 +249,17 @@ impl QueueManager {
             tokens.insert(task_id.clone(), cancel_token.clone());
         }
 
+        // Dynamic Guard: Re-defer update while any download task is active
+        if let Some(app) = self.get_app_handle() {
+            if let Some(manifest) = crate::tray::get_pending_update_manifest() {
+                crate::tray::defer_update_due_to_downloads(
+                    &app,
+                    Some(manifest.version.clone()),
+                    Some(manifest),
+                );
+            }
+        }
+
         let pool = self.pool.clone();
         let db = self.db.clone();
         let progress_tx = self.progress_tx.clone();
@@ -241,6 +280,13 @@ impl QueueManager {
             if cancel_token.is_cancelled() {
                 let _ = db.update_download_status(&task_id, "paused", 0, None);
                 active_tokens.write().remove(&task_id);
+
+            // Dynamic OTA unblock: Check if all active downloads and queue items have completed
+            if !qm_clone.has_active_downloads() {
+                if let Some(app) = qm_clone.get_app_handle() {
+                    crate::tray::on_downloads_completed(&app);
+                }
+            }
                 return;
             }
 

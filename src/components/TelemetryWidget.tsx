@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Activity, HardDrive, Zap, FolderOpen, Database } from 'lucide-react';
 import { useDownloadStore } from '../stores/downloadStore';
 import { getDefaultDownloadDir, openFolderPicker, setDefaultDownloadDir } from '../services/tauriService';
-import { formatBytes, formatSpeed } from '../utils/format';
+import { AnimatedNumber, AnimatedBytes, AnimatedSpeed } from './AnimatedDigits';
 
 interface TelemetryWidgetProps {
   layout?: 'sidebar' | 'embedded';
@@ -60,7 +60,7 @@ export const TelemetryWidget: React.FC<TelemetryWidgetProps> = ({ layout = 'side
               <Activity className="w-4 h-4 text-emerald-500" />
             </div>
             <div className="text-xl font-bold font-mono text-zinc-900 dark:text-zinc-100">
-              {formatSpeed(totalSpeed)}
+              <AnimatedSpeed bytesPerSec={totalSpeed} />
             </div>
           </div>
 
@@ -86,7 +86,7 @@ export const TelemetryWidget: React.FC<TelemetryWidgetProps> = ({ layout = 'side
               <Zap className="w-4 h-4 text-blue-500" />
             </div>
             <div className="text-xl font-bold font-mono text-zinc-900 dark:text-zinc-100">
-              {activeSegmentsCount} Active Parts
+              <AnimatedNumber value={activeSegmentsCount} /> Active Parts
             </div>
           </div>
           <div className="text-xs font-mono text-zinc-500 dark:text-zinc-400 mt-2">
@@ -131,7 +131,7 @@ export const TelemetryWidget: React.FC<TelemetryWidgetProps> = ({ layout = 'side
               <Database className="w-4 h-4 text-violet-500" />
             </div>
             <div className="text-xl font-bold font-mono text-zinc-900 dark:text-zinc-100">
-              {formatBytes(lifetimeDownloadedBytes)}
+              <AnimatedBytes bytes={lifetimeDownloadedBytes} />
             </div>
           </div>
 
@@ -141,7 +141,7 @@ export const TelemetryWidget: React.FC<TelemetryWidgetProps> = ({ layout = 'side
               Saved Locally
             </span>
             <span title="Downloaded during this session">
-              +{formatBytes(sessionDownloadedBytes)} session
+              <AnimatedBytes bytes={sessionDownloadedBytes} prefix="+" suffix=" session" />
             </span>
           </div>
         </div>
@@ -158,7 +158,7 @@ export const TelemetryWidget: React.FC<TelemetryWidgetProps> = ({ layout = 'side
           <Activity className="w-3.5 h-3.5 text-emerald-500" />
         </div>
         <div className="text-lg font-bold font-mono text-zinc-900 dark:text-zinc-100">
-          {formatSpeed(totalSpeed)}
+          <AnimatedSpeed bytesPerSec={totalSpeed} />
         </div>
 
         {/* Sparkline */}
@@ -184,7 +184,7 @@ export const TelemetryWidget: React.FC<TelemetryWidgetProps> = ({ layout = 'side
             <Zap className="w-3.5 h-3.5 text-blue-500" />
           </div>
           <div className="text-sm font-semibold font-mono text-zinc-900 dark:text-zinc-100">
-            {activeSegmentsCount} Parallel Workers
+            <AnimatedNumber value={activeSegmentsCount} /> Parallel Workers
           </div>
         </div>
 
@@ -219,7 +219,7 @@ export const TelemetryWidget: React.FC<TelemetryWidgetProps> = ({ layout = 'side
           <Database className="w-3.5 h-3.5 text-violet-500" />
         </div>
         <div className="text-base font-bold font-mono text-zinc-900 dark:text-zinc-100">
-          {formatBytes(lifetimeDownloadedBytes)}
+          <AnimatedBytes bytes={lifetimeDownloadedBytes} />
         </div>
         <div className="text-[10px] font-mono text-zinc-400 mt-1 flex items-center justify-between">
           <span>Lifetime transfer</span>

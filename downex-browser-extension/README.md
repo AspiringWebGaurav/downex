@@ -9,7 +9,7 @@ High-performance browser companion for the **Downex** Windows Download Manager.
 | **Media Grabber** | Flickering Win32 layered overlay that drifts when scrolling | In-DOM Shadow-DOM floating pill smoothly anchored to HTML5 video/audio |
 | **YouTube 1080p/4K** | Frequently breaks when YouTube changes scripts; requires assembly | Automatic DASH/HLS adaptive stream sniffer (video + audio itags separation) |
 | **Browser Interception** | Hooks deep Windows network driver | Clean `chrome.downloads.onCreated` interceptor with full cookie preservation |
-| **Bridge Communication** | Fragile COM/Registry dependency | Dual Mode: Loopback HTTP (`127.0.0.1:18888`) + Native Messaging (`stdio`) |
+| **Bridge Communication** | Fragile COM/Registry dependency | Authenticated Local Loopback HTTP (`127.0.0.1:18888`) |
 | **UI Aesthetics** | Legacy 1990s Win32 dialogs | Sleek glassmorphism / GPN centered dark mode matching desktop shell |
 
 ---
@@ -22,9 +22,9 @@ High-performance browser companion for the **Downex** Windows Download Manager.
 3. Click **Load unpacked**.
 4. Select the `c:\GITHUB\downex\downex-browser-extension\` folder.
 
-### 2. Optional: Register Native Messaging Host
-- Double-click `install-host.bat` to register the host manifest in the Windows Registry for Chrome, Edge, and Brave.
-- Note: Downex also automatically serves the loopback bridge on `http://127.0.0.1:18888`, allowing immediate zero-configuration operation.
+### 2. Seamless Desktop Integration
+- Downex automatically runs an authenticated local loopback bridge on `http://127.0.0.1:18888`.
+- Once unpacked in your browser, the extension connects immediately with zero registry modifications or manual configuration required.
 
 ---
 
@@ -37,4 +37,3 @@ High-performance browser companion for the **Downex** Windows Download Manager.
   - **Zero Telemetry:** Downex does not transmit cookies, URLs, browsing history, or file data to any remote server or third party.
   - **Air-Gapped Communication:** All bridge calls run over strict local loopback on `http://127.0.0.1:18888`.
   - **Memory Safety:** Scoped Shadow-DOM sandbox prevents CSS pollution of web pages, and WeakMaps prevent DOM memory leaks.
-

@@ -25,7 +25,7 @@ export default defineConfig({
       use: {
         ...devices['Desktop Chrome'],
         viewport: { width: 1280, height: 800 },
-        ...(browserInfo?.viableExecutablePath ? { executablePath: browserInfo.viableExecutablePath } : {}),
+        channel: 'msedge',
       },
     },
   ],

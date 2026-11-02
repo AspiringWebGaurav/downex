@@ -4,7 +4,13 @@ import App from './App';
 import { DownloadDialogWindow } from './windows/DownloadDialogWindow';
 import { DownloadCompleteWindow } from './windows/DownloadCompleteWindow';
 import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
+import { setupReloadGuard } from './utils/reloadGuard';
+import { prewarmModalData } from './services/modalPreload';
 import './App.css';
+
+// Initialize early capture reload and refresh lockdown guard across all application windows
+setupReloadGuard();
+prewarmModalData().catch(() => {});
 
 function getInitialWindowLabel(): string {
   if (typeof window !== 'undefined' && (window as any).__DOWNEX_WINDOW_LABEL__) {

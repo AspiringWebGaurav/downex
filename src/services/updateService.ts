@@ -13,6 +13,7 @@
  */
 
 import {
+  checkAndSyncExtension,
   fetchUpdateManifest,
   downloadUpdateBinary,
   writeUpdateStagingFile,
@@ -21,7 +22,10 @@ import {
   applyInProcessUpdate,
   setTrayIcon,
   getPendingUpdate,
+  getInstallationId,
   onUpdateDetected,
+  onUpdateDeferred,
+  onUpdateUnblocked,
   verifyUpdateSignature,
   pauseDownload,
 } from './tauriService';
@@ -90,13 +94,49 @@ class UpdateService {
         });
       }
 
-      onUpdateDetected((manifest) => {
+      onUpdateDeferred((manifest) => {
+        this.isDeferredDueToDownloads = true;
+        this.pendingDeferredManifest = manifest;
+        setTrayIcon('idle');
+      });
+
+      onUpdateUnblocked((manifest) => {
+        this.isDeferredDueToDownloads = false;
+        this.pendingDeferredManifest = null;
         if (manifest && manifest.version && compareSemver(cleanVersion(manifest.version), this.currentVersion) > 0) {
           this.notify({
             state: 'available',
             targetVersion: cleanVersion(manifest.version),
             manifest,
           });
+          setTrayIcon('update_available');
+        }
+      });
+
+      onUpdateDetected((manifest) => {
+      // Auto-reconcile companion extension when release metadata includes extension_version
+      if (manifest?.extension_version) {
+        checkAndSyncExtension(manifest.extension_version, manifest.extension_url, manifest.extension_hash)
+          .then((res: any) => {
+            if (res.updated) {
+              console.log(`[Downex Update Service] ⚡ Companion extension synchronized to v${res.current_version}`);
+            }
+          })
+          .catch((err: any) => console.warn('[Downex Update Service] Extension synchronization notice:', err));
+      }
+  
+        if (manifest && manifest.version && compareSemver(cleanVersion(manifest.version), this.currentVersion) > 0) {
+          if (this.checkHasActiveDownloads()) {
+            this.isDeferredDueToDownloads = true;
+            this.pendingDeferredManifest = manifest;
+            setTrayIcon('idle');
+          } else {
+            this.notify({
+              state: 'available',
+              targetVersion: cleanVersion(manifest.version),
+              manifest,
+            });
+          }
         }
       });
     } catch (e) {
@@ -104,13 +144,34 @@ class UpdateService {
     }
   }
 
-  private getOrCreateMachineId(): string {
+  public isDeferredDueToDownloads = false;
+  public pendingDeferredManifest: ReleaseManifest | null = null;
+
+  public checkHasActiveDownloads(): boolean {
     try {
+      if (typeof window !== 'undefined' && (window as any).useDownloadStore) {
+        return (window as any).useDownloadStore.getState().items.some(
+          (i: any) => i.status === 'downloading' || i.status === 'probing'
+        );
+      }
+    } catch {}
+    return false;
+  }
+
+  private cachedInstallationId: string | null = null;
+
+  private getOrCreateMachineId(): string {
+    if (this.cachedInstallationId) return this.cachedInstallationId;
+    try {
+      getInstallationId().then((id) => {
+        if (id && id !== 'dwnx-client') this.cachedInstallationId = id;
+      }).catch(() => {});
       let id = localStorage.getItem('downex_machine_instance_id');
       if (!id) {
         id = 'dwnx-' + Math.random().toString(36).substring(2, 10) + '-' + Date.now().toString(36);
         localStorage.setItem('downex_machine_instance_id', id);
       }
+      this.cachedInstallationId = id;
       return id;
     } catch {
       return 'dwnx-client';

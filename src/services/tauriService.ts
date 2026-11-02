@@ -583,6 +583,15 @@ export async function getPendingUpdate(): Promise<ReleaseManifest | null> {
   return null;
 }
 
+export async function getInstallationId(): Promise<string> {
+  if (isTauri) {
+    try {
+      return await invoke<string>('cmd_get_installation_id');
+    } catch {}
+  }
+  return 'dwnx-client';
+}
+
 export async function getTrayUpdateStatus(): Promise<string> {
   if (isTauri) {
     try {
@@ -602,6 +611,89 @@ export async function triggerBackgroundUpdateCheck(): Promise<void> {
       console.warn('Failed to trigger background update check:', e);
     }
   }
+}
+
+export async function hasActiveDownloadsNative(): Promise<boolean> {
+  if (!isTauri) return false;
+  try {
+    return await invoke<boolean>('cmd_has_active_downloads');
+  } catch {
+    return false;
+  }
+}
+
+export async function isUpdateDeferredNative(): Promise<boolean> {
+  if (!isTauri) return false;
+  try {
+    return await invoke<boolean>('cmd_is_update_deferred');
+  } catch {
+    return false;
+  }
+}
+
+export async function notifyDownloadsCompletedNative(): Promise<void> {
+  if (!isTauri) return;
+  try {
+    await invoke('cmd_notify_downloads_completed');
+  } catch {}
+}
+
+export function onUpdateDeferred(callback: (manifest: ReleaseManifest) => void): () => void {
+  if (!isTauri) return () => {};
+  let isCancelled = false;
+  let unlistenFn: (() => void) | null = null;
+
+  listen<ReleaseManifest>('downex-update-deferred', (event) => {
+    if (!isCancelled && event.payload) {
+      callback(event.payload);
+    }
+  })
+    .then((unlisten) => {
+      if (isCancelled) {
+        unlisten();
+      } else {
+        unlistenFn = unlisten;
+      }
+    })
+    .catch((err) => {
+      console.warn('[Downex] Error listening to downex-update-deferred:', err);
+    });
+
+  return () => {
+    isCancelled = true;
+    if (unlistenFn) {
+      unlistenFn();
+    }
+  };
+}
+
+export function onUpdateUnblocked(callback: (manifest: ReleaseManifest) => void): () => void {
+  if (!isTauri) return () => {};
+  let isCancelled = false;
+  let unlistenFn: (() => void) | null = null;
+
+  listen<ReleaseManifest>('downex-update-unblocked', (event) => {
+    if (!isCancelled && event.payload) {
+      callback(event.payload);
+    }
+  })
+    .then((unlisten) => {
+      if (isCancelled) {
+        unlisten();
+      } else {
+        unlistenFn = unlisten;
+      }
+    })
+    .catch((err) => {
+      console.warn('[Downex] Error listening to downex-update-unblocked:', err);
+    });
+
+  return () => {
+    isCancelled = true;
+    if (unlistenFn) {
+      unlistenFn();
+    }
+  };
 }
 
 export function onUpdateDetected(callback: (manifest: ReleaseManifest) => void): () => void {
@@ -1147,4 +1239,63 @@ export function onOtaRollbackRecovered(callback: (payload: { version: string }) 
       unlistenFn = null;
     }
   };
+}
+
+export interface ExtensionInfo {
+  canonical_dir: string;
+  installed_version: string | null;
+  is_installed: boolean;
+}
+
+export async function getExtensionInfo(): Promise<ExtensionInfo> {
+  if (!isTauri) {
+    return {
+      canonical_dir: 'C:\\Users\\MockUser\\AppData\\Local\\Downex\\browser-extension',
+      installed_version: '0.0.3',
+      is_installed: true,
+    };
+  }
+  return await invoke<ExtensionInfo>('cmd_get_extension_info');
+}
+
+export async function openExtensionFolder(): Promise<string> {
+  if (!isTauri) {
+    return 'C:\\Users\\MockUser\\AppData\\Local\\Downex\\browser-extension';
+  }
+  return await invoke<string>('cmd_open_extension_folder');
+}
+
+export async function updateCompanionExtension(): Promise<string> {
+  if (!isTauri) {
+    return '0.0.3';
+  }
+  return await invoke<string>('cmd_update_companion_extension');
+}
+export interface ExtensionSyncResult {
+  success: boolean;
+  updated: boolean;
+  previous_version?: string | null;
+  current_version: string;
+  message: string;
+}
+
+export async function checkAndSyncExtension(
+  targetVersion?: string,
+  url?: string,
+  expectedHash?: string
+): Promise<ExtensionSyncResult> {
+  if (!isTauri) {
+    return {
+      success: true,
+      updated: false,
+      previous_version: '0.0.0',
+      current_version: targetVersion || '0.0.0',
+      message: 'Extension is already up to date (Mock)',
+    };
+  }
+  return await invoke<ExtensionSyncResult>('cmd_check_and_sync_extension', {
+    targetVersion: targetVersion || null,
+    url: url || null,
+    expectedHash: expectedHash || null,
+  });
 }

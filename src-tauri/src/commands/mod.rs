@@ -298,9 +298,15 @@ pub async fn cmd_download_update_container(app: AppHandle, url: String) -> Resul
 #[tauri::command]
 pub async fn cmd_check_updates(app: AppHandle, state: State<'_, AppState>) -> Result<Option<ReleaseManifest>, String> {
     let current_version = crate::version::resolve_installed_version(&app, Some(&state.db));
-    check_latest_release(&state.http_client, &current_version)
+    let inst_id = state.db.get_or_create_installation_id();
+    check_latest_release(&state.http_client, &current_version, Some(&inst_id))
         .await
         .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn cmd_get_installation_id(state: State<'_, AppState>) -> Result<String, String> {
+    Ok(state.db.get_or_create_installation_id())
 }
 
 #[tauri::command]
@@ -558,6 +564,13 @@ pub fn cmd_apply_in_process_update(
     {
         use std::io::Write;
         use std::os::windows::process::CommandExt;
+
+        // Fail-safe protection: Never apply update while downloads are in progress!
+        if let Some(state) = app.try_state::<crate::AppState>() {
+            if state.queue_manager.has_active_downloads() {
+                return Err("Cannot apply update and restart while downloads are in progress. Please wait for downloads to complete or pause them first.".to_string());
+            }
+        }
 
         // Atomic guard so we never attempt duplicate swap
         static UPDATE_APPLIED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -1096,20 +1109,11 @@ pub fn cmd_set_tray_icon(app: AppHandle, state: String) -> Result<(), String> {
     crate::tray::set_tray_icon_state(&app, &state).map_err(|e| e.to_string())
 }
 
-pub fn show_download_dialog<R: tauri::Runtime>(app: &tauri::AppHandle<R>, payload: Option<serde_json::Value>) {
-    if let Some(ref p) = payload {
-        if let Ok(mut lock) = LAST_DOWNLOAD_DIALOG_PAYLOAD.lock() {
-            *lock = Some(p.clone());
-        }
-    }
-
-    if let Some(window) = app.get_webview_window("download_dialog") {
-        let _ = window.show();
-        let _ = window.unminimize();
-        let _ = window.center();
-        let _ = window.set_always_on_top(true);
-        let _ = window.set_focus();
-    } else {
+/// Pre-warms secondary dialog windows (download_dialog, download_complete) in hidden state
+/// so they appear instantaneously (<10ms) without 2-3s delay or blank WebView2 initialization flashes.
+pub fn prewarm_secondary_dialogs<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
+    // 1. Pre-warm download_dialog window
+    if app.get_webview_window("download_dialog").is_none() {
         let builder = tauri::WebviewWindowBuilder::new(
             app,
             "download_dialog",
@@ -1124,7 +1128,7 @@ pub fn show_download_dialog<R: tauri::Runtime>(app: &tauri::AppHandle<R>, payloa
         .resizable(false)
         .always_on_top(true)
         .initialization_script("window.__DOWNEX_WINDOW_LABEL__ = 'download_dialog';")
-        .visible(true);
+        .visible(false);
 
         if let Ok(window) = builder.build() {
             if let Ok(icon) = tauri::image::Image::from_bytes(include_bytes!("../../icons/128x128.png")) {
@@ -1132,8 +1136,128 @@ pub fn show_download_dialog<R: tauri::Runtime>(app: &tauri::AppHandle<R>, payloa
             }
         }
     }
-    if let Some(p) = payload {
-        let _ = app.emit("open-download-info-modal", p);
+
+    // 2. Pre-warm download_complete window
+    if app.get_webview_window("download_complete").is_none() {
+        let builder = tauri::WebviewWindowBuilder::new(
+            app,
+            "download_complete",
+            tauri::WebviewUrl::default(),
+        )
+        .title("Download complete")
+        .inner_size(580.0, 380.0)
+        .decorations(false)
+        .transparent(false)
+        .shadow(true)
+        .center()
+        .resizable(false)
+        .always_on_top(true)
+        .initialization_script("window.__DOWNEX_WINDOW_LABEL__ = 'download_complete';")
+        .visible(false);
+
+        if let Ok(window) = builder.build() {
+            if let Ok(icon) = tauri::image::Image::from_bytes(include_bytes!("../../icons/128x128.png")) {
+                let _ = window.set_icon(icon);
+            }
+        }
+    }
+}
+
+pub fn show_download_dialog<R: tauri::Runtime>(app: &tauri::AppHandle<R>, payload: Option<serde_json::Value>) {
+    if let Some(ref p) = payload {
+        if let Ok(mut lock) = LAST_DOWNLOAD_DIALOG_PAYLOAD.lock() {
+            *lock = Some(p.clone());
+        }
+    }
+
+    if let Some(window) = app.get_webview_window("download_dialog") {
+        if let Some(ref p) = payload {
+            use tauri::Emitter;
+            let _ = window.emit("open-download-info-modal", p);
+            let _ = app.emit("open-download-info-modal", p);
+        }
+        let _ = window.unminimize();
+        let _ = window.center();
+        let _ = window.show();
+        let _ = window.set_always_on_top(true);
+        let _ = window.set_focus();
+
+        #[cfg(target_os = "windows")]
+        force_window_to_foreground(&window);
+    } else {
+        let app_handle = app.clone();
+        let payload_clone = payload.clone();
+        let _ = app.run_on_main_thread(move || {
+            let builder = tauri::WebviewWindowBuilder::new(
+                &app_handle,
+                "download_dialog",
+                tauri::WebviewUrl::default(),
+            )
+            .title("Downex - Download File Info")
+            .inner_size(580.0, 440.0)
+            .decorations(false)
+            .transparent(false)
+            .shadow(true)
+            .center()
+            .resizable(false)
+            .always_on_top(true)
+            .initialization_script("window.__DOWNEX_WINDOW_LABEL__ = 'download_dialog';")
+            .visible(false);
+
+            match builder.build() {
+                Ok(window) => {
+                    if let Ok(icon) = tauri::image::Image::from_bytes(include_bytes!("../../icons/128x128.png")) {
+                        let _ = window.set_icon(icon);
+                    }
+                    if let Some(ref p) = payload_clone {
+                        use tauri::Emitter;
+                        let _ = window.emit("open-download-info-modal", p);
+                        let _ = app_handle.emit("open-download-info-modal", p);
+                    }
+                    let _ = window.unminimize();
+                    let _ = window.center();
+                    let _ = window.show();
+                    let _ = window.set_always_on_top(true);
+                    let _ = window.set_focus();
+
+                    #[cfg(target_os = "windows")]
+                    force_window_to_foreground(&window);
+                }
+                Err(err) => {
+                    eprintln!("[Downex Dialog] Fallback: download_dialog failed to build ({}), emitting to main window...", err);
+                    if let Some(main_win) = app_handle.get_webview_window("main") {
+                        if let Some(ref p) = payload_clone {
+                            use tauri::Emitter;
+                            let _ = main_win.emit("open-download-info-modal", p);
+                            let _ = app_handle.emit("open-download-info-modal", p);
+                        }
+                        let _ = main_win.unminimize();
+                        let _ = main_win.show();
+                        let _ = main_win.set_focus();
+                        #[cfg(target_os = "windows")]
+                        force_window_to_foreground(&main_win);
+                    }
+                }
+            }
+        });
+    }
+}
+
+#[cfg(target_os = "windows")]
+pub fn force_window_to_foreground<R: tauri::Runtime>(window: &tauri::WebviewWindow<R>) {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        BringWindowToTop, SetForegroundWindow, SetWindowPos, ShowWindow,
+        HWND_TOPMOST, SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW, SW_RESTORE, SW_SHOW,
+    };
+    if let Ok(h) = window.hwnd() {
+        let hwnd_val = h.0 as _;
+        unsafe {
+            ShowWindow(hwnd_val, SW_RESTORE);
+            ShowWindow(hwnd_val, SW_SHOW);
+            SetWindowPos(hwnd_val, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
+            BringWindowToTop(hwnd_val);
+            SetForegroundWindow(hwnd_val);
+        }
     }
 }
 
@@ -1280,10 +1404,13 @@ pub fn show_download_complete<R: tauri::Runtime>(app: &tauri::AppHandle<R>, payl
     }
 
     if let Some(window) = app.get_webview_window("download_complete") {
-        let _ = window.show();
+        use tauri::Emitter;
+        let _ = window.emit("open-download-complete-modal", &valid_payload);
+        let _ = app.emit("open-download-complete-modal", &valid_payload);
+        let _ = window.set_always_on_top(true);
         let _ = window.unminimize();
         let _ = window.center();
-        let _ = window.set_always_on_top(true);
+        let _ = window.show();
         let _ = window.set_focus();
     } else {
         let builder = tauri::WebviewWindowBuilder::new(
@@ -1292,7 +1419,7 @@ pub fn show_download_complete<R: tauri::Runtime>(app: &tauri::AppHandle<R>, payl
             tauri::WebviewUrl::default(),
         )
         .title("Download complete")
-        .inner_size(580.0, 320.0)
+        .inner_size(580.0, 380.0)
         .decorations(false)
         .transparent(false)
         .shadow(true)
@@ -1300,15 +1427,22 @@ pub fn show_download_complete<R: tauri::Runtime>(app: &tauri::AppHandle<R>, payl
         .resizable(false)
         .always_on_top(true)
         .initialization_script("window.__DOWNEX_WINDOW_LABEL__ = 'download_complete';")
-        .visible(true);
+        .visible(false);
 
         if let Ok(window) = builder.build() {
             if let Ok(icon) = tauri::image::Image::from_bytes(include_bytes!("../../icons/128x128.png")) {
                 let _ = window.set_icon(icon);
             }
+            use tauri::Emitter;
+            let _ = window.emit("open-download-complete-modal", &valid_payload);
+            let _ = app.emit("open-download-complete-modal", &valid_payload);
+            let _ = window.set_always_on_top(true);
+            let _ = window.unminimize();
+            let _ = window.center();
+            let _ = window.show();
+            let _ = window.set_focus();
         }
     }
-    let _ = app.emit("open-download-complete-modal", &valid_payload);
 }
 
 #[tauri::command]
@@ -1623,4 +1757,65 @@ pub fn cmd_get_tray_update_status() -> String {
 #[tauri::command]
 pub fn cmd_trigger_background_update_check() {
     crate::ota::supervisor::trigger_background_update_check();
+}
+
+#[tauri::command]
+pub fn cmd_has_active_downloads(state: State<'_, AppState>) -> Result<bool, String> {
+    Ok(state.queue_manager.has_active_downloads())
+}
+
+#[tauri::command]
+pub fn cmd_is_update_deferred() -> Result<bool, String> {
+    Ok(crate::tray::is_update_deferred())
+}
+
+#[tauri::command]
+pub fn cmd_notify_downloads_completed(app: AppHandle) -> Result<(), String> {
+    crate::tray::on_downloads_completed(&app);
+    Ok(())
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+pub struct ExtensionInfo {
+    pub canonical_dir: String,
+    pub installed_version: Option<String>,
+    pub is_installed: bool,
+}
+
+#[tauri::command]
+pub fn cmd_get_extension_info() -> ExtensionInfo {
+    let dir = crate::extension::get_canonical_extension_dir();
+    let installed_version = crate::extension::get_installed_extension_version();
+    let is_installed = dir.join("manifest.json").exists();
+    ExtensionInfo {
+        canonical_dir: dir.to_string_lossy().to_string(),
+        installed_version,
+        is_installed,
+    }
+}
+
+#[tauri::command]
+pub fn cmd_open_extension_folder() -> Result<String, String> {
+    crate::extension::open_extension_folder()
+}
+
+#[tauri::command]
+pub async fn cmd_update_companion_extension(
+    state: State<'_, AppState>,
+) -> Result<String, String> {
+    crate::extension::download_and_extract_extension(&state.http_client).await
+}
+#[tauri::command]
+pub async fn cmd_check_and_sync_extension(
+    state: State<'_, AppState>,
+    target_version: Option<String>,
+    url: Option<String>,
+    expected_hash: Option<String>,
+) -> Result<crate::extension::ExtensionSyncResult, String> {
+    crate::extension::check_and_sync_extension(
+        &state.http_client,
+        target_version.as_deref(),
+        url.as_deref(),
+        expected_hash.as_deref(),
+    ).await
 }

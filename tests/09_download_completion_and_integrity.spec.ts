@@ -131,7 +131,7 @@ test.describe('Downex Download Completion & Integrity Verification (REA)', () =>
 
     // Verify Completion Window rendered with accurate data
     await expect(page.getByText('Download complete').first()).toBeVisible();
-    await expect(page.getByText('382MB-Verified-Asset.iso')).toBeVisible();
+    await expect(page.getByRole('heading', { name: '382MB-Verified-Asset.iso' })).toBeVisible();
     await expect(page.getByText('382 MB').first()).toBeVisible();
 
     // Verify Open File and Open Folder buttons

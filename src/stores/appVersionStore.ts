@@ -1,9 +1,11 @@
 import { create } from 'zustand';
 import {
+  isTauri,
   getResolvedVersion,
   syncWindowsInstalledVersion,
   cleanSupersededOldBinaries,
   getStagedUpdate,
+  getPendingUpdate,
 } from '../services/tauriService';
 import { updateService, UpdateStatus } from '../services/updateService';
 import { cleanVersion, formatVersion, compareSemver } from '../utils/version';
@@ -23,6 +25,8 @@ interface AppVersionStore {
   status: UpdateStatus;
   isModalOpen: boolean;
   isToastDismissed: boolean;
+  isDeferredDueToDownloads: boolean;
+  onDownloadsCompleted: () => void;
   patchNotes: PatchNotesInfo | null;
   isPatchNotesOpen: boolean;
   dismissToast: () => void;
@@ -58,6 +62,24 @@ export const useAppVersionStore = create<AppVersionStore>((set, get) => {
     patchNotes: null,
     isPatchNotesOpen: false,
 
+    isDeferredDueToDownloads: false,
+    onDownloadsCompleted: async () => {
+      set({ isDeferredDueToDownloads: false, isToastDismissed: false });
+      try {
+        const pending = await getPendingUpdate();
+        const currentVer = get().currentVersion;
+        if (pending && pending.version && compareSemver(cleanVersion(pending.version), currentVer) > 0) {
+          updateService.isDeferredDueToDownloads = false;
+          updateService.notify({
+            state: 'available',
+            targetVersion: cleanVersion(pending.version),
+            manifest: pending,
+          });
+          const { setTrayIcon } = await import('../services/tauriService');
+          setTrayIcon('update_available').catch(() => {});
+        }
+      } catch {}
+    },
     dismissToast: () => {
       try {
         sessionStorage.setItem('downex_toast_dismissed', 'true');
@@ -179,10 +201,41 @@ export const useAppVersionStore = create<AppVersionStore>((set, get) => {
           }
         } catch {}
 
-        // Silent background check 1.2s after boot (GPN pattern)
-        setTimeout(() => {
-          get().checkForUpdates(true).catch(() => {});
-        }, 1200);
+        // Instant event-driven hydration from native background supervisor (zero network requests)
+        // In browser dev preview / Playwright mock mode outside Tauri: schedule silent check to support route mocks
+        if (!isTauri) {
+          setTimeout(() => {
+            get().checkForUpdates(true).catch(() => {});
+          }, 1200);
+        } else {
+          try {
+            const pending = await getPendingUpdate();
+            if (pending && pending.version && compareSemver(cleanVersion(pending.version), cleaned) > 0) {
+              updateService.notify({
+                state: 'available',
+                targetVersion: cleanVersion(pending.version),
+                manifest: pending,
+              });
+            }
+          } catch {}
+        }
+
+        // Re-synchronize on window focus when unminimized from tray (zero network requests)
+        if (typeof window !== 'undefined' && !(window as any).__DOWNEX_FOCUS_SYNC_WIRED__) {
+          (window as any).__DOWNEX_FOCUS_SYNC_WIRED__ = true;
+          window.addEventListener('focus', async () => {
+            try {
+              const pending = await getPendingUpdate();
+              if (pending && pending.version && compareSemver(cleanVersion(pending.version), get().currentVersion) > 0) {
+                updateService.notify({
+                  state: 'available',
+                  targetVersion: cleanVersion(pending.version),
+                  manifest: pending,
+                });
+              }
+            } catch {}
+          });
+        }
       } catch (err) {
         console.warn('[Downex Version] Failed to initialize version:', err);
       }

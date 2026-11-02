@@ -1,0 +1,765 @@
+/* =========================================================================
+   DOWNEX DESIGN SYSTEM — COMPANION EXTENSION THEME TOKENS
+   Parity with Downex Desktop (Tailwind v4 Zinc + Emerald Design Language)
+   Air-gapped, zero external dependencies.
+   ========================================================================= */
+
+@import url('https://fonts.googleapis.com/css2?family=Damion&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
+
+:root {
+  color-scheme: light;
+  --dwnx-bg: #ffffff;
+  --dwnx-surface: #f4f4f5;               /* zinc-100 */
+  --dwnx-surface-hover: #e4e4e7;         /* zinc-200 */
+  --dwnx-card-bg: rgba(250, 250, 250, 0.85); /* zinc-50 */
+  --dwnx-card-border: rgba(228, 228, 231, 0.9); /* zinc-200 */
+  --dwnx-divider: rgba(228, 228, 231, 0.7);
+
+  --dwnx-text-main: #18181b;             /* zinc-900 */
+  --dwnx-text-muted: #71717a;            /* zinc-500 */
+  --dwnx-text-subtle: #a1a1aa;           /* zinc-400 */
+
+  --dwnx-emerald: #10b981;               /* emerald-500 */
+  --dwnx-emerald-dark: #059669;          /* emerald-600 */
+  --dwnx-emerald-hover: #047857;         /* emerald-700 */
+  --dwnx-emerald-bg: #ecfdf5;            /* emerald-50 */
+  --dwnx-emerald-border: #a7f3d0;        /* emerald-200 */
+  --dwnx-emerald-text: #047857;          /* emerald-700 */
+
+  --dwnx-blue-bg: #eff6ff;
+  --dwnx-blue-border: #bfdbfe;
+  --dwnx-blue-text: #1d4ed8;
+
+  --dwnx-danger: #ef4444;
+  --dwnx-danger-bg: #fef2f2;
+  --dwnx-danger-border: #fecaca;
+  --dwnx-danger-text: #b91c1c;
+
+  --dwnx-font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --dwnx-font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  --dwnx-font-brand: 'Damion', cursive, sans-serif;
+
+  --dwnx-shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.05);
+  --dwnx-shadow-md: 0 4px 12px -2px rgba(0, 0, 0, 0.08), 0 2px 6px -2px rgba(0, 0, 0, 0.04);
+}
+
+:root.dark,
+[data-theme="dark"] {
+  color-scheme: dark;
+  --dwnx-bg: #09090b;                    /* zinc-950 */
+  --dwnx-surface: #18181b;                /* zinc-900 */
+  --dwnx-surface-hover: #27272a;          /* zinc-800 */
+  --dwnx-card-bg: rgba(24, 24, 27, 0.55); /* zinc-900/55 */
+  --dwnx-card-border: rgba(39, 39, 42, 0.7); /* zinc-800/70 */
+  --dwnx-divider: rgba(39, 39, 42, 0.65);
+
+  --dwnx-text-main: #f4f4f5;             /* zinc-100 */
+  --dwnx-text-muted: #a1a1aa;            /* zinc-400 */
+  --dwnx-text-subtle: #71717a;           /* zinc-500 */
+
+  --dwnx-emerald-bg: rgba(6, 78, 59, 0.35); /* emerald-950/35 */
+  --dwnx-emerald-border: rgba(6, 95, 70, 0.6); /* emerald-800/60 */
+  --dwnx-emerald-text: #34d399;           /* emerald-400 */
+
+  --dwnx-blue-bg: rgba(30, 58, 138, 0.35);
+  --dwnx-blue-border: rgba(30, 64, 175, 0.6);
+  --dwnx-blue-text: #93c5fd;
+
+  --dwnx-danger-bg: rgba(127, 29, 29, 0.35);
+  --dwnx-danger-border: rgba(153, 27, 27, 0.6);
+  --dwnx-danger-text: #fca5a5;
+
+  --dwnx-shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --dwnx-shadow-md: 0 6px 16px -2px rgba(0, 0, 0, 0.45);
+}
+
+/* Base Reset & Typography */
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: var(--dwnx-font-sans);
+  background-color: var(--dwnx-bg);
+  color: var(--dwnx-text-main);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Custom Minimal Scrollbar (Parity with App.css) */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(161, 161, 170, 0.25);
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(161, 161, 170, 0.45);
+}
+
+/* Brand Wordmark */
+.font-brand {
+  font-family: var(--dwnx-font-brand);
+}
+
+/* Clubbed Card Pattern */
+.dwnx-card {
+  background: var(--dwnx-card-bg);
+  border: 1px solid var(--dwnx-card-border);
+  border-radius: 12px;
+  box-shadow: var(--dwnx-shadow-xs);
+  transition: border-color 0.15s ease;
+}
+
+.dwnx-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--dwnx-divider);
+}
+
+.dwnx-card-title {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--dwnx-text-muted);
+  font-family: var(--dwnx-font-mono);
+}
+
+/* Buttons (Parity with Button.tsx) */
+.dwnx-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  font-family: var(--dwnx-font-sans);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1;
+  padding: 7px 12px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+  transition: all 0.15s ease-out;
+  box-shadow: var(--dwnx-shadow-xs);
+}
+
+.dwnx-btn:active:not(:disabled) {
+  transform: scale(0.98);
+}
+
+.dwnx-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+.dwnx-btn-emerald {
+  background-color: var(--dwnx-emerald-dark);
+  color: #ffffff;
+  border-color: rgba(16, 185, 129, 0.3);
+}
+
+.dwnx-btn-emerald:hover:not(:disabled) {
+  background-color: var(--dwnx-emerald-hover);
+}
+
+.dwnx-btn-secondary {
+  background-color: var(--dwnx-surface);
+  color: var(--dwnx-text-main);
+  border-color: var(--dwnx-card-border);
+}
+
+.dwnx-btn-secondary:hover:not(:disabled) {
+  background-color: var(--dwnx-surface-hover);
+}
+
+.dwnx-btn-outline {
+  background-color: transparent;
+  color: var(--dwnx-text-main);
+  border-color: var(--dwnx-card-border);
+}
+
+.dwnx-btn-outline:hover:not(:disabled) {
+  background-color: var(--dwnx-surface);
+}
+
+.dwnx-btn-ghost {
+  background-color: transparent;
+  color: var(--dwnx-text-muted);
+  border-color: transparent;
+  box-shadow: none;
+}
+
+.dwnx-btn-ghost:hover:not(:disabled) {
+  background-color: var(--dwnx-surface);
+  color: var(--dwnx-text-main);
+}
+
+.dwnx-btn-sm {
+  font-size: 11px;
+  padding: 5px 9px;
+  border-radius: 6px;
+  gap: 4px;
+}
+
+.dwnx-btn-block {
+  width: 100%;
+}
+
+/* iOS-Style Switches */
+.dwnx-switch {
+  position: relative;
+  display: inline-block;
+  width: 38px;
+  height: 22px;
+  flex-shrink: 0;
+  cursor: pointer;
+}
+
+.dwnx-switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+  position: absolute;
+}
+
+.dwnx-switch .slider {
+  position: absolute;
+  inset: 0;
+  background-color: #cbd5e1;
+  border-radius: 9999px;
+  transition: background-color 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+:root.dark .dwnx-switch .slider,
+[data-theme="dark"] .dwnx-switch .slider {
+  background-color: #3f3f46;
+}
+
+.dwnx-switch .slider::before {
+  position: absolute;
+  content: "";
+  height: 16px;
+  width: 16px;
+  left: 3px;
+  bottom: 3px;
+  background-color: #ffffff;
+  border-radius: 50%;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
+  transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.dwnx-switch input:checked + .slider {
+  background-color: var(--dwnx-emerald-dark);
+}
+
+.dwnx-switch input:checked + .slider::before {
+  transform: translateX(16px);
+}
+
+/* Status Badges & Pills */
+.dwnx-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-family: var(--dwnx-font-mono);
+  font-size: 10.5px;
+  font-weight: 600;
+  padding: 2.5px 8px;
+  border-radius: 9999px;
+  border: 1px solid var(--dwnx-card-border);
+  background: var(--dwnx-surface);
+  color: var(--dwnx-text-muted);
+  line-height: 1.2;
+}
+
+.dwnx-pill-emerald {
+  background: var(--dwnx-emerald-bg);
+  border-color: var(--dwnx-emerald-border);
+  color: var(--dwnx-emerald-text);
+}
+
+.dwnx-pill-blue {
+  background: var(--dwnx-blue-bg);
+  border-color: var(--dwnx-blue-border);
+  color: var(--dwnx-blue-text);
+}
+
+.dwnx-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  flex-shrink: 0;
+}
+
+.dwnx-dot-pulse {
+  animation: dwnx-pulse 1.8s ease-in-out infinite;
+}
+
+@keyframes dwnx-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.35; transform: scale(0.7); }
+}
+
+/* Inputs */
+.dwnx-input {
+  width: 100%;
+  font-family: var(--dwnx-font-mono);
+  font-size: 11.5px;
+  color: var(--dwnx-text-main);
+  background: var(--dwnx-bg);
+  border: 1px solid var(--dwnx-card-border);
+  border-radius: 8px;
+  padding: 7px 10px;
+  outline: none;
+  transition: all 0.15s ease;
+}
+
+.dwnx-input:focus {
+  border-color: var(--dwnx-emerald);
+  box-shadow: 0 0 0 2px rgba(16, 185, 129, 0.18);
+}
+
+
+/* =========================================================================
+   LOCKED UI / OFFLINE ENGINE STATE
+   Parity with Downex Desktop Disconnected & Recovery States
+   ========================================================================= */
+
+.locked-screen {
+  padding: 12px 14px;
+  border: 1px solid rgba(239, 68, 68, 0.32);
+  background: var(--dwnx-danger-bg);
+  border-radius: 10px;
+  margin-bottom: 12px;
+}
+
+.locked-header {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--dwnx-danger-text);
+  margin-bottom: 4px;
+}
+
+.locked-desc {
+  font-size: 11px;
+  color: var(--dwnx-text-muted);
+  line-height: 1.45;
+  margin-bottom: 6px;
+}
+
+.locked-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.is-locked {
+  opacity: 0.45 !important;
+  pointer-events: none !important;
+  user-select: none !important;
+  filter: grayscale(0.5) !important;
+  cursor: not-allowed !important;
+  transition: opacity 0.2s ease, filter 0.2s ease;
+}
+
+.is-locked input,
+.is-locked button,
+.is-locked select,
+.is-locked textarea,
+.is-locked label {
+  pointer-events: none !important;
+  cursor: not-allowed !important;
+}
+
+/* =========================================================================
+   ENTERPRISE LOCKED SCREEN & LIFECYCLE BANNER STYLES
+   ========================================================================= */
+
+.enterprise-lock-card {
+  background: var(--dwnx-card-bg);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  border-radius: 12px;
+  padding: 12px 10px 10px 10px;
+  margin-bottom: 8px;
+  text-align: center;
+  box-shadow: 0 4px 14px -2px rgba(239, 68, 68, 0.08);
+  transition: all 0.2s ease;
+}
+
+.lock-shield-badge {
+  width: 36px;
+  height: 36px;
+  border-radius: 12px;
+  background: var(--dwnx-danger-bg);
+  border: 1px solid var(--dwnx-danger-border);
+  color: var(--dwnx-danger);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 10px;
+}
+
+.lock-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--dwnx-text-main);
+  margin-bottom: 4px;
+}
+
+.lock-subtitle {
+  font-size: 11px;
+  color: var(--dwnx-text-muted);
+  line-height: 1.45;
+  margin-bottom: 8px;
+  padding: 0 4px;
+}
+
+.lock-cta-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.lock-btn-main {
+  padding: 9px 12px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  text-decoration: none;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.lock-btn-sub {
+  font-size: 9.5px;
+  font-weight: 400;
+  opacity: 0.85;
+}
+
+.lock-secondary-row {
+  display: flex;
+  gap: 6px;
+}
+
+.lock-secondary-row > * {
+  flex: 1;
+}
+
+.lock-telemetry-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: var(--dwnx-surface);
+  border: 1px solid var(--dwnx-card-border);
+  border-radius: 8px;
+  padding: 6px 10px;
+  font-family: var(--dwnx-font-mono);
+  font-size: 10px;
+}
+
+.telemetry-item {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  text-align: left;
+}
+
+.telemetry-item:last-child {
+  text-align: right;
+}
+
+.telemetry-label {
+  font-size: 8.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--dwnx-text-subtle);
+}
+
+.telemetry-val {
+  font-weight: 600;
+  color: var(--dwnx-text-main);
+}
+
+.telemetry-val.error {
+  color: var(--dwnx-danger);
+}
+
+.telemetry-val.success {
+  color: var(--dwnx-emerald-dark);
+}
+
+/* Card Lock Notice (Displayed on each card when app disconnected) */
+.card-lock-notice {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10.5px;
+  color: var(--dwnx-danger-text);
+  background: var(--dwnx-danger-bg);
+  border: 1px solid var(--dwnx-danger-border);
+  padding: 5px 8px;
+  border-radius: 6px;
+  margin-bottom: 8px;
+}
+
+/* Lifecycle Toast / Status Banner */
+.lifecycle-banner {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  border-radius: 9px;
+  padding: 8px 10px;
+  margin-bottom: 8px;
+  font-size: 11px;
+  animation: dwnx-fade-in 0.2s ease;
+}
+
+@keyframes dwnx-fade-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.lifecycle-banner.phase-accepted {
+  background: var(--dwnx-emerald-bg);
+  border: 1px solid var(--dwnx-emerald-border);
+  color: var(--dwnx-emerald-text);
+}
+
+.lifecycle-banner.phase-probing {
+  background: var(--dwnx-blue-bg);
+  border: 1px solid var(--dwnx-blue-border);
+  color: var(--dwnx-blue-text);
+}
+
+.lifecycle-banner.phase-bypassed {
+  background: var(--dwnx-surface);
+  border: 1px solid var(--dwnx-card-border);
+  color: var(--dwnx-text-muted);
+}
+
+.lifecycle-banner.phase-disk-error {
+  background: var(--dwnx-danger-bg);
+  border: 1px solid var(--dwnx-danger-border);
+  color: var(--dwnx-danger-text);
+}
+
+.lifecycle-banner.phase-auth-error {
+  background: rgba(245, 158, 11, 0.12);
+  border: 1px solid rgba(245, 158, 11, 0.35);
+  color: #b45309;
+}
+
+.lifecycle-content {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  flex: 1;
+}
+
+.lifecycle-title {
+  font-weight: 700;
+  font-size: 11px;
+  line-height: 1.25;
+}
+
+.lifecycle-desc {
+  font-size: 10px;
+  opacity: 0.9;
+  line-height: 1.35;
+  margin-top: 1px;
+}
+
+.lifecycle-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 5px;
+}
+
+.lifecycle-close-btn {
+  background: transparent;
+  border: none;
+  color: currentColor;
+  opacity: 0.6;
+  cursor: pointer;
+  padding: 2px 4px;
+  font-size: 11px;
+  border-radius: 4px;
+}
+
+.lifecycle-close-btn:hover {
+  opacity: 1;
+}
+
+/* Modern Header Action Icon Buttons (Parity with Downex Desktop) */
+.header-icon-group {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.icon-btn {
+  width: 26px;
+  height: 26px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  background: var(--dwnx-surface);
+  border: 1px solid var(--dwnx-card-border);
+  color: var(--dwnx-text-muted);
+  cursor: pointer;
+  transition: all 0.15s cubic-bezier(0.4, 0, 0.2, 1);
+  padding: 0;
+  flex-shrink: 0;
+}
+
+.icon-btn:hover {
+  background: var(--dwnx-surface-hover);
+  border-color: var(--dwnx-divider);
+  color: var(--dwnx-text-main);
+  transform: translateY(-1px);
+}
+
+.icon-btn:active {
+  transform: scale(0.92);
+}
+
+.icon-btn.is-spinning svg {
+  animation: dwnx-icon-spin 0.6s linear infinite;
+}
+
+@keyframes dwnx-icon-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.lock-helper-text {
+  font-size: 10px;
+  color: var(--dwnx-text-muted);
+  text-align: center;
+  margin-top: 4px;
+}
+
+.lock-helper-text a {
+  color: var(--dwnx-emerald-text);
+  text-decoration: underline;
+  cursor: pointer;
+  font-weight: 500;
+}
+
+.lock-helper-text a:hover {
+  color: var(--dwnx-emerald);
+}
+
+/* Top Center Dynamic Lifecycle Badge */
+.top-center-badge {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 6px 14px;
+  border-radius: 8px;
+  margin-bottom: 10px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+  animation: dwnx-slide-down 0.2s ease;
+  transition: all 0.25s ease;
+}
+
+@keyframes dwnx-slide-down {
+  from { opacity: 0; transform: translateY(-6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.top-center-badge.state-checking {
+  background: var(--dwnx-blue-bg);
+  border: 1px solid var(--dwnx-blue-border);
+  color: var(--dwnx-blue-text);
+}
+
+.top-center-badge.state-failed {
+  background: var(--dwnx-danger-bg);
+  border: 1px solid var(--dwnx-danger-border);
+  color: var(--dwnx-danger-text);
+}
+
+.top-center-badge.state-success {
+  background: var(--dwnx-emerald-bg);
+  border: 1px solid var(--dwnx-emerald-border);
+  color: var(--dwnx-emerald-text);
+}
+
+/* Header Dashboard Button */
+.header-dashboard-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: var(--dwnx-surface);
+  border: 1px solid var(--dwnx-card-border);
+  color: var(--dwnx-text-main);
+  padding: 3px 8px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  height: 26px;
+  box-sizing: border-box;
+}
+
+.header-dashboard-btn:hover {
+  background: var(--dwnx-surface-hover);
+  border-color: var(--dwnx-divider);
+  color: var(--dwnx-emerald);
+}
+
+/* Footer Reload to Update Button */
+.footer-btn-reload {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--dwnx-emerald-text) !important;
+  background: var(--dwnx-emerald-bg);
+  border: 1px solid var(--dwnx-emerald-border);
+  font-family: var(--dwnx-font-sans);
+  font-weight: 600;
+  font-size: 10.5px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  padding: 2px 7px;
+  border-radius: 6px;
+}
+
+.footer-btn-reload:hover {
+  background: var(--dwnx-emerald);
+  color: #ffffff !important;
+  border-color: var(--dwnx-emerald);
+}
+
+.footer-btn-reload.is-spinning svg {
+  animation: dwnx-icon-spin 0.6s linear infinite;
+}

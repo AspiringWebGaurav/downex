@@ -186,7 +186,8 @@ impl ExtensionHttpBridge {
 
         let mut parts = request_line.split_whitespace();
         let method = parts.next().unwrap_or("GET");
-        let path = parts.next().unwrap_or("/");
+        let raw_path = parts.next().unwrap_or("/");
+        let path = raw_path.split('?').next().unwrap_or(raw_path);
 
         // Parse content-length, origin, and authorization headers
         let mut content_length = 0usize;
@@ -307,19 +308,30 @@ Content-Length: 0\r\n\r\n",
                     .map(|d| d.speed_bytes_sec as u64)
                     .sum();
 
+                let installed_ext_ver = crate::extension::get_installed_extension_version()
+                    .unwrap_or_else(|| "0.0.0".to_string());
+                let should_reload = crate::extension::EXTENSION_RELOAD_PENDING.swap(false, std::sync::atomic::Ordering::SeqCst);
+
                 (
                     200,
                     serde_json::json!({
                         "success": true,
                         "token": self.auth_token,
+                        "should_reload_extension": should_reload,
+                        "latest_extension_version": installed_ext_ver,
                         "data": {
                             "app": "Downex",
                             "version": current_ver,
                             "token": self.auth_token,
                             "status": "ready",
+                            "is_dev": cfg!(debug_assertions),
+                            "pid": std::process::id(),
+                            "exe_path": std::env::current_exe().unwrap_or_default().to_string_lossy(),
                             "active_count": active_count,
                             "total_count": total_count,
-                            "total_speed_bytes_sec": total_speed
+                            "total_speed_bytes_sec": total_speed,
+                            "extension_dir": crate::extension::get_canonical_extension_dir().to_string_lossy(),
+                            "extension_version": installed_ext_ver
                         }
                     }),
                 )
@@ -400,6 +412,36 @@ Content-Length: 0\r\n\r\n",
                         "data": "Showing main window"
                     }),
                 )
+            }
+            ("POST", "/api/extension/update") if !is_authorized => (
+                401,
+                serde_json::json!({
+                    "success": false,
+                    "error": "Unauthorized: valid Downex bridge authentication token required"
+                }),
+            ),
+            ("POST", "/api/extension/update") => {
+                let client = reqwest::Client::builder()
+                    .timeout(std::time::Duration::from_secs(30))
+                    .build()
+                    .unwrap_or_default();
+                match crate::extension::download_and_extract_extension(&client).await {
+                    Ok(new_ver) => (
+                        200,
+                        serde_json::json!({
+                            "success": true,
+                            "version": new_ver,
+                            "message": "Extension successfully updated by Downex. Reload pending."
+                        }),
+                    ),
+                    Err(err) => (
+                        500,
+                        serde_json::json!({
+                            "success": false,
+                            "error": format!("Failed to update extension: {}", err)
+                        }),
+                    ),
+                }
             }
             ("POST", "/api/probe") if !is_authorized => (
                 401,

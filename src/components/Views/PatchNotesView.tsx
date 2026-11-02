@@ -37,6 +37,7 @@ export const PatchNotesView: React.FC<PatchNotesViewProps> = ({ onBack }) => {
   const [expandedNotes, setExpandedNotes] = useState<Record<string, boolean>>({});
   const [isEditorOpen, setIsEditorOpen] = useState(false);
   const [editingNote, setEditingNote] = useState<DynamicPatchNotes | null>(null);
+  const [activeCategory, setActiveCategory] = useState<'all' | 'app' | 'extension'>('all');
 
   // Subscribe to patchNotesService updates
   useEffect(() => {
@@ -88,17 +89,24 @@ export const PatchNotesView: React.FC<PatchNotesViewProps> = ({ onBack }) => {
     setExpandedNotes(next);
   };
 
+  const appCount = useMemo(() => notes.filter((n) => (n.category || 'app') === 'app').length, [notes]);
+  const extCount = useMemo(() => notes.filter((n) => n.category === 'extension').length, [notes]);
+
   const filteredNotes = useMemo(() => {
+    let result = notes;
+    if (activeCategory !== 'all') {
+      result = result.filter((n) => (n.category || 'app') === activeCategory);
+    }
     const q = searchQuery.trim().toLowerCase();
-    if (!q) return notes;
-    return notes.filter((n) => {
+    if (!q) return result;
+    return result.filter((n) => {
       const v = cleanVersion(n.version).toLowerCase();
       const t = (n.title || '').toLowerCase();
       const h = (n.highlights || []).join(' ').toLowerCase();
       const r = (n.rawNotes || '').toLowerCase();
       return v.includes(q) || t.includes(q) || h.includes(q) || r.includes(q);
     });
-  }, [notes, searchQuery]);
+  }, [notes, searchQuery, activeCategory]);
 
   const formatSyncTime = (ts: number) => {
     if (!ts) return 'Local Cache';
@@ -212,6 +220,43 @@ export const PatchNotesView: React.FC<PatchNotesViewProps> = ({ onBack }) => {
           </div>
         )}
 
+        {/* Category Tabs: All, Desktop App, Companion Extension */}
+        <div className="flex items-center gap-2 border-b border-zinc-200 dark:border-zinc-800 pb-2">
+          <button
+            type="button"
+            onClick={() => setActiveCategory('all')}
+            className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+              activeCategory === 'all'
+                ? 'bg-zinc-900 text-white dark:bg-white dark:text-zinc-900 shadow-xs'
+                : 'text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100 bg-zinc-100/60 dark:bg-zinc-800/40'
+            }`}
+          >
+            All Releases ({notes.length})
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveCategory('app')}
+            className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+              activeCategory === 'app'
+                ? 'bg-sky-600 text-white shadow-xs'
+                : 'text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100 bg-zinc-100/60 dark:bg-zinc-800/40'
+            }`}
+          >
+            Desktop App ({appCount})
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveCategory('extension')}
+            className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+              activeCategory === 'extension'
+                ? 'bg-emerald-600 text-white shadow-xs'
+                : 'text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100 bg-zinc-100/60 dark:bg-zinc-800/40'
+            }`}
+          >
+            Companion Extension ({extCount})
+          </button>
+        </div>
+
         {/* Release Timeline Header */}
         <div className="flex items-center justify-between text-xs text-zinc-500 dark:text-zinc-400 px-1 pt-1">
           <div className="flex items-center gap-1.5 font-semibold text-zinc-800 dark:text-zinc-200">
@@ -253,6 +298,16 @@ export const PatchNotesView: React.FC<PatchNotesViewProps> = ({ onBack }) => {
                       <span className="text-base font-bold font-mono tracking-tight text-zinc-900 dark:text-zinc-100">
                         {formatVersion(item.version)}
                       </span>
+
+                      {item.category === 'extension' ? (
+                        <span className="px-2 py-0.5 rounded-md text-[10px] font-mono font-semibold bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-800">
+                          COMPANION EXTENSION
+                        </span>
+                      ) : (
+                        <span className="px-2 py-0.5 rounded-md text-[10px] font-mono font-semibold bg-sky-50 text-sky-700 dark:bg-sky-950/40 dark:text-sky-300 border border-sky-200 dark:border-sky-800/60">
+                          DESKTOP APP
+                        </span>
+                      )}
 
                       {isCurrentRunning && (
                         <span className="px-2 py-0.5 rounded-md text-[10px] font-mono font-semibold bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-800">

@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { Download, ListOrdered, Trash2, Settings, Minimize2, Moon, Sun, Plus, ChevronLeft, RefreshCw, Check, Activity } from 'lucide-react';
+import {
+  AlertTriangle, Download, ListOrdered, Trash2, Settings, Minimize2, Moon, Sun, Plus, ChevronLeft, RefreshCw, Check, Activity } from 'lucide-react';
 import { useDownloadStore } from '../stores/downloadStore';
 import { useAppVersionStore } from '../stores/appVersionStore';
 import { minimizeToBackground } from '../services/tauriService';
@@ -24,6 +25,9 @@ export const DownexSidebar: React.FC<DownexSidebarProps> = ({ darkMode, setDarkM
   const setSelectedView = useDownloadStore((state) => state.setSelectedView);
   const setNewModalOpen = useDownloadStore((state) => state.setNewModalOpen);
   const items = useDownloadStore((state) => state.items);
+  const hasActiveDownloads = useDownloadStore((state) =>
+    state.items.some((i) => i.status === 'downloading' || i.status === 'probing')
+  );
   const status = useAppVersionStore((state) => state.status);
   const currentVersion = useAppVersionStore((state) => state.currentVersion);
   const formattedVersion = useAppVersionStore((state) => state.formattedVersion);
@@ -74,7 +78,7 @@ export const DownexSidebar: React.FC<DownexSidebarProps> = ({ darkMode, setDarkM
 
   return (
     <aside
-      className={`relative h-full flex flex-col justify-between select-none bg-zinc-50/70 dark:bg-zinc-900/40 border-r border-zinc-200/80 dark:border-zinc-800/60 shrink-0 transition-all duration-300 ease-in-out ${
+      className={`relative z-30 h-full flex flex-col justify-between select-none bg-zinc-50/70 dark:bg-zinc-900/40 border-r border-zinc-200/80 dark:border-zinc-800/60 shrink-0 transition-all duration-300 ease-in-out ${
         isCollapsed ? 'w-14 p-2' : 'w-[196px] p-2.5'
       }`}
     >
@@ -83,7 +87,7 @@ export const DownexSidebar: React.FC<DownexSidebarProps> = ({ darkMode, setDarkM
         type="button"
         onClick={toggleCollapse}
         title={isCollapsed ? 'Expand Sidebar (Ctrl+B)' : 'Pure View / Collapse Sidebar (Ctrl+B)'}
-        className="absolute -right-2.5 top-0 -translate-y-1/2 z-50 w-5 h-5 rounded-full bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 shadow-xs flex items-center justify-center text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 hover:bg-zinc-50 dark:hover:bg-zinc-700 active:scale-95 transition-all cursor-pointer group"
+        className="absolute -right-2.5 top-0 -translate-y-1/2 z-50 w-5 h-5 rounded-full bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 shadow-sm flex items-center justify-center text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 hover:bg-zinc-50 dark:hover:bg-zinc-700 active:scale-95 transition-all cursor-pointer group pointer-events-auto"
       >
         <ChevronLeft
           className={`w-3.5 h-3.5 transition-transform duration-300 ${
@@ -108,6 +112,9 @@ export const DownexSidebar: React.FC<DownexSidebarProps> = ({ darkMode, setDarkM
                   setNewModalOpen(true);
                 } else {
                   setSelectedView(item.id);
+                  if (item.id === 'telemetry') {
+                    window.dispatchEvent(new CustomEvent('downex-retrigger-telemetry'));
+                  }
                 }
               }}
               className={`relative flex items-center transition-all cursor-pointer rounded-lg text-xs font-medium ${
@@ -176,7 +183,30 @@ export const DownexSidebar: React.FC<DownexSidebarProps> = ({ darkMode, setDarkM
             <RefreshCw className="w-4 h-4 animate-spin text-zinc-500 shrink-0" />
             {!isCollapsed && <span className="truncate">Checking...</span>}
           </div>
-        ) : status.state === 'available' && status.manifest && status.targetVersion && compareSemver(status.targetVersion, currentVersion) > 0 ? (
+        ) : hasActiveDownloads && ((status.state === 'available' && status.manifest && status.targetVersion && compareSemver(status.targetVersion, currentVersion) > 0) || (status.state === 'ready')) ? (
+            <button
+              type="button"
+              onClick={openModal}
+              title="Update Postponed: Active download in progress. Click to view."
+              className={`group relative flex items-center rounded-xl text-xs bg-amber-50/80 dark:bg-amber-950/30 border border-amber-200/80 dark:border-amber-800/60 text-amber-900 dark:text-amber-200 font-semibold cursor-pointer hover:border-amber-300 dark:hover:border-amber-700 transition-all shadow-xs overflow-hidden select-none ${
+                isCollapsed ? 'w-10 h-10 justify-center' : 'justify-between px-3 py-2'
+              }`}
+            >
+              <div className={`relative z-10 flex items-center ${isCollapsed ? 'justify-center' : 'gap-2.5 overflow-hidden'}`}>
+                <AlertTriangle className="w-4 h-4 text-amber-500 shrink-0" />
+                {!isCollapsed && <span className="truncate font-semibold tracking-tight">Update Paused</span>}
+              </div>
+              {!isCollapsed ? (
+                <span className="relative z-10 text-[9px] font-mono px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-700 dark:text-amber-300 font-bold shrink-0">
+                  BUSY
+                </span>
+              ) : (
+                <span className="absolute top-1.5 right-1.5 flex h-2 w-2 z-20">
+                  <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-amber-500" />
+                </span>
+              )}
+            </button>
+          ) : status.state === 'available' && status.manifest && status.targetVersion && compareSemver(status.targetVersion, currentVersion) > 0 ? (
           <button
             type="button"
             onClick={openModal}

@@ -430,6 +430,18 @@ impl DatabaseManager {
         Ok(())
     }
 
+    pub fn get_or_create_installation_id(&self) -> String {
+        if let Ok(Some(id)) = self.get_setting("installation_id") {
+            let trimmed = id.trim();
+            if !trimmed.is_empty() {
+                return trimmed.to_string();
+            }
+        }
+        let new_id = format!("dwnx-{}", uuid::Uuid::new_v4());
+        let _ = self.set_setting("installation_id", &new_id);
+        new_id
+    }
+
     pub fn get_lifetime_downloaded_bytes(&self) -> Result<u64> {
         let conn = self.conn.lock();
         let mut stmt = conn.prepare("SELECT value FROM app_settings WHERE key = 'lifetime_downloaded_bytes'")?;

@@ -256,21 +256,18 @@ test.describe('Downex Base Application — Download Table, Lifecycles & Controls
     await page.goto('/?window=download_complete');
 
     // Verify window elements
-    await expect(page.getByRole('heading', { name: 'Download complete' })).toBeVisible();
-    await expect(page.locator('input').first()).toHaveValue('https://releases.kernel.org/linux-6.14.tar.xz');
-    await expect(page.locator('input').nth(1)).toHaveValue('C:\\Downloads\\Downex\\linux-6.14.tar.xz');
-    await expect(page.locator('text=140 MB')).toBeVisible();
+    await expect(page.getByText('Download complete').first()).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'linux-6.14.tar.xz' })).toBeVisible();
+    await expect(page.getByText('140 MB').first()).toBeVisible();
 
     // Verify Action buttons: Open, Open Folder, Open With...
     await expect(page.locator('button:has-text("Open")').first()).toBeVisible();
-    await expect(page.locator('button:has-text("Open Folder")')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Open folder' })).toBeVisible();
     await expect(page.locator('button:has-text("Open with...")')).toBeVisible();
 
-    // Verify "Don't show this dialog again" checkbox
-    const dontShowCheckbox = page.locator('input[type="checkbox"]');
-    await dontShowCheckbox.check();
-    const persistedPref = await page.evaluate(() => localStorage.getItem('downex_dont_show_complete_dialog'));
-    expect(persistedPref).toBe('true');
+    // Verify "Don't show this dialog again" checkbox is removed and dialog is strictly one-view
+    await expect(page.locator('text=Don\'t show this dialog again')).not.toBeVisible();
+    await expect(page.locator('text=Show Downex')).not.toBeVisible();
 
     // Test Esc closes dialog
     await page.keyboard.press('Escape');

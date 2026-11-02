@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { Button } from './ui/Button';
 import { 
+  Puzzle,
+  Copy,
   Settings, 
   Eye, 
   HardDrive, 
@@ -24,6 +26,10 @@ import {
 } from 'lucide-react';
 import { useDownloadStore } from '../stores/downloadStore';
 import { 
+  getExtensionInfo,
+  openExtensionFolder,
+  checkAndSyncExtension,
+  ExtensionInfo,
   getDefaultDownloadDir, 
   getMaxSegments, 
   openFolderPicker, 
@@ -83,6 +89,50 @@ export const SettingsView: React.FC<SettingsViewProps> = () => {
   const [autostart, setAutostart] = useState<boolean>(true);
   const [savedFeedback, setSavedFeedback] = useState(false);
   const [resetFeedback, setResetFeedback] = useState(false);
+
+  const [extInfo, setExtInfo] = useState<ExtensionInfo | null>(null);
+  const [isUpdatingExt, setIsUpdatingExt] = useState(false);
+  const [copiedExtPath, setCopiedExtPath] = useState(false);
+  const [extSyncMessage, setExtSyncMessage] = useState<string | null>(null);
+
+  useEffect(() => {
+    getExtensionInfo().then(setExtInfo).catch(console.warn);
+  }, []);
+
+  const handleOpenExtensionFolder = async () => {
+    try {
+      await openExtensionFolder();
+      const info = await getExtensionInfo();
+      setExtInfo(info);
+    } catch (e) {
+      console.warn('Failed to open extension folder:', e);
+    }
+  };
+
+  const handleCopyExtPath = () => {
+    if (extInfo?.canonical_dir) {
+      navigator.clipboard.writeText(extInfo.canonical_dir);
+      setCopiedExtPath(true);
+      setTimeout(() => setCopiedExtPath(false), 2000);
+    }
+  };
+
+  const handleSyncExtension = async () => {
+    setIsUpdatingExt(true);
+    setExtSyncMessage(null);
+    try {
+      const res = await checkAndSyncExtension();
+      setExtSyncMessage(res.message);
+      const info = await getExtensionInfo();
+      setExtInfo(info);
+    } catch (e: any) {
+      setExtSyncMessage(`Sync notice: ${e?.message || e}`);
+    } finally {
+      setIsUpdatingExt(false);
+      setTimeout(() => setExtSyncMessage(null), 4000);
+    }
+  };
+
 
   // Maintenance & Lifecycle states
   const [isRepairing, setIsRepairing] = useState(false);
@@ -533,6 +583,105 @@ export const SettingsView: React.FC<SettingsViewProps> = () => {
                   </button>
                 ))}
               </div>
+            </div>
+          </div>
+        </div>
+
+                {/* SECTION: BROWSER COMPANION EXTENSION (MODULAR & AUTO-UPDATING) */}
+        <div className="space-y-2">
+          <div className="flex items-center gap-2 px-1">
+            <Puzzle className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+            <h2 className="text-xs font-semibold uppercase tracking-wider text-zinc-600 dark:text-zinc-400">
+              Browser Companion Extension
+            </h2>
+            <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-950/80 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 font-bold">
+              Modular Auto-Updating
+            </span>
+          </div>
+
+          <div className="rounded-xl bg-zinc-50/70 dark:bg-zinc-900/40 border border-zinc-200/80 dark:border-zinc-800/60 shadow-xs p-4 space-y-3.5">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="space-y-1">
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-semibold text-zinc-900 dark:text-zinc-100">
+                    Chrome, Edge & Chromium Integration
+                  </span>
+                  <span className="text-[10px] font-mono text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/50 px-1.5 py-0.5 rounded border border-emerald-200/60 dark:border-emerald-800/60">
+                    v{extInfo?.installed_version || '0.0.3'}
+                  </span>
+                </div>
+                <p className="text-[11px] text-zinc-500 dark:text-zinc-400 max-w-xl leading-relaxed">
+                  Install once in your browser. Downex automatically manages, updates, and hot-reloads media grabber rules and hooks directly on disk without requiring manual zip re-downloads.
+                </p>
+              </div>
+
+              <div className="flex items-center gap-2 shrink-0">
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={handleSyncExtension}
+                  disabled={isUpdatingExt}
+                  className="text-xs flex items-center gap-1.5"
+                  title="Check GPHost and sync latest extension files to disk"
+                >
+                  {isUpdatingExt ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RotateCcw className="w-3.5 h-3.5 text-zinc-500" />}
+                  <span>{isUpdatingExt ? 'Syncing...' : 'Sync Extension'}</span>
+                </Button>
+
+                <Button
+                  variant="primary"
+                  size="sm"
+                  onClick={handleOpenExtensionFolder}
+                  className="text-xs flex items-center gap-1.5 bg-emerald-600 hover:bg-emerald-700 text-white"
+                  title="Open folder in File Explorer to load unpacked in chrome://extensions"
+                >
+                  <FolderOpen className="w-3.5 h-3.5" />
+                  <span>Open Folder</span>
+                </Button>
+
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => openSettingsSubView('patch-notes')}
+                  className="text-xs flex items-center gap-1.5 text-zinc-600 dark:text-zinc-400"
+                  title="View chronological release history for Companion Extension"
+                >
+                  <FileText className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+                  <span>Extension Changelog</span>
+                </Button>
+              </div>
+            </div>
+
+            {/* Path Box */}
+            <div className="flex items-center justify-between px-3 py-2 rounded-lg bg-white dark:bg-zinc-950/80 border border-zinc-200 dark:border-zinc-800 text-[11px] font-mono text-zinc-600 dark:text-zinc-400">
+              <span className="truncate mr-2 select-all">
+                {extInfo?.canonical_dir || 'Loading canonical extension path...'}
+              </span>
+              <button
+                type="button"
+                onClick={handleCopyExtPath}
+                className="flex items-center gap-1 text-[11px] font-sans font-semibold text-emerald-600 dark:text-emerald-400 hover:underline shrink-0 cursor-pointer"
+              >
+                {copiedExtPath ? <Check className="w-3.5 h-3.5 text-emerald-500" /> : <Copy className="w-3.5 h-3.5" />}
+                <span>{copiedExtPath ? 'Copied' : 'Copy Path'}</span>
+              </button>
+            </div>
+
+            {/* Status message */}
+            {extSyncMessage && (
+              <div className="text-[11px] text-emerald-600 dark:text-emerald-400 bg-emerald-50/80 dark:bg-emerald-950/40 p-2 rounded-lg border border-emerald-200 dark:border-emerald-800">
+                {extSyncMessage}
+              </div>
+            )}
+
+            {/* 3-Step Setup Instructions */}
+            <div className="p-3 rounded-lg bg-zinc-100/60 dark:bg-zinc-800/40 border border-zinc-200/60 dark:border-zinc-800/60 text-[11px] text-zinc-600 dark:text-zinc-400 space-y-1">
+              <div className="font-semibold text-zinc-800 dark:text-zinc-200 mb-1">
+                30-Second One-Time Setup:
+              </div>
+              <div>1. Click <strong className="text-zinc-900 dark:text-zinc-100">Open Folder</strong> to reveal the extension directory on your machine.</div>
+              <div>2. In Chrome or Edge, navigate to <code className="px-1 py-0.5 rounded bg-zinc-200 dark:bg-zinc-700 text-zinc-800 dark:text-zinc-200 font-mono text-[10px]">chrome://extensions</code> and switch on <strong className="text-zinc-900 dark:text-zinc-100">Developer mode</strong>.</div>
+              <div>3. Click <strong className="text-zinc-900 dark:text-zinc-100">Load unpacked</strong> and select this folder. Done! Downex will automatically update it in the background forever.</div>
             </div>
           </div>
         </div>

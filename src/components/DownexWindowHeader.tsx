@@ -44,7 +44,7 @@ export const DownexWindowHeader: React.FC = () => {
 
   return (
     <div
-      className="relative h-[48px] w-full flex items-center justify-between px-3 select-none bg-white dark:bg-zinc-950 z-40 shrink-0 border-b border-zinc-200/80 dark:border-zinc-800/60"
+      className="relative h-[48px] w-full flex items-center justify-between px-3 select-none bg-white dark:bg-zinc-950 z-20 shrink-0 border-b border-zinc-200/80 dark:border-zinc-800/60"
     >
       {/* Draggable Titlebar Area: Underlying region handles native window movement */}
       <div data-tauri-drag-region className="absolute inset-0 z-0 pointer-events-auto" />

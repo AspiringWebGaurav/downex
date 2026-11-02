@@ -80,6 +80,8 @@ update*.downex.bin
 *.sig
 src-tauri/target/*.downex.bin
 src-tauri/target/*.sig
+*.zip
+downex-browser-extension.zip
 
 # ------------------------------------------------------------------------------
 # 8. Node Dependencies & Package Managers

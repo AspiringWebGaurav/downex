@@ -17,7 +17,16 @@ import {
 } from 'lucide-react';
 import { useDownloadStore } from '../stores/downloadStore';
 import { getDefaultDownloadDir, openFolderPicker, setDefaultDownloadDir, getDiskFreeSpace } from '../services/tauriService';
-import { formatBytes, formatSpeed } from '../utils/format';
+import { AnimatedNumber, AnimatedBytes, AnimatedSpeed } from './AnimatedDigits';
+
+let cachedFreeSpace: number | null = (() => {
+  try {
+    const val = localStorage.getItem('downex_cached_free_space');
+    return val ? Number(val) : null;
+  } catch {
+    return null;
+  }
+})();
 
 interface TelemetryViewProps {
   onBack?: () => void;
@@ -25,6 +34,7 @@ interface TelemetryViewProps {
 
 export const TelemetryView: React.FC<TelemetryViewProps> = ({ onBack }) => {
   const setSelectedView = useDownloadStore((state) => state.setSelectedView);
+  const telemetryEpoch = useDownloadStore((state) => state.telemetryEpoch);
   const totalSpeed = useDownloadStore((state) => state.totalSpeed);
   const speedHistory = useDownloadStore((state) => state.speedHistory);
   const peakSpeed = useDownloadStore((state) => state.peakSpeed);
@@ -33,8 +43,30 @@ export const TelemetryView: React.FC<TelemetryViewProps> = ({ onBack }) => {
   const items = useDownloadStore((state) => state.items);
   
   const [storagePath, setStoragePath] = useState<string>('Downloads\\Downex');
-  const [freeSpaceBytes, setFreeSpaceBytes] = useState<number | null>(null);
+  const [freeSpaceBytes, setFreeSpaceBytes] = useState<number | null>(() => cachedFreeSpace);
   const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
+  const [refreshKey, setRefreshKey] = useState<number>(0);
+  const [storageProgress, setStorageProgress] = useState<number>(0);
+
+
+  // Re-trigger counter animations whenever tab is clicked, opened, or re-selected
+  useEffect(() => {
+    setRefreshKey((k) => k + 1);
+  }, [telemetryEpoch]);
+
+  useEffect(() => {
+    const onRetrigger = () => {
+      setRefreshKey((k) => k + 1);
+    };
+    window.addEventListener('downex-retrigger-telemetry', onRetrigger);
+    return () => window.removeEventListener('downex-retrigger-telemetry', onRetrigger);
+  }, []);
+
+  useEffect(() => {
+    setStorageProgress(0);
+    const timer = setTimeout(() => setStorageProgress(45), 60);
+    return () => clearTimeout(timer);
+  }, [refreshKey]);
 
   const fetchStorageData = async () => {
     try {
@@ -43,11 +75,18 @@ export const TelemetryView: React.FC<TelemetryViewProps> = ({ onBack }) => {
         setStoragePath(dir);
         try {
           const space = await getDiskFreeSpace(dir);
-          if (space && space > 0) setFreeSpaceBytes(space);
+          if (space && space > 0) {
+            cachedFreeSpace = space;
+            setFreeSpaceBytes(space);
+            try {
+              localStorage.setItem('downex_cached_free_space', String(space));
+            } catch {}
+          }
         } catch {}
       }
     } catch {}
   };
+
 
   useEffect(() => {
     fetchStorageData();
@@ -71,6 +110,7 @@ export const TelemetryView: React.FC<TelemetryViewProps> = ({ onBack }) => {
 
   const handleManualRefresh = async () => {
     setIsRefreshing(true);
+    setRefreshKey((k) => k + 1);
     await fetchStorageData();
     setTimeout(() => setIsRefreshing(false), 400);
   };
@@ -143,14 +183,18 @@ export const TelemetryView: React.FC<TelemetryViewProps> = ({ onBack }) => {
         {/* ROW 1: 4 Primary Sensor Cards */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           {/* Card 1: Live Speed & Throughput */}
-          <div className="p-4 rounded-2xl bg-zinc-50/80 dark:bg-zinc-900/60 border border-zinc-200/80 dark:border-zinc-800/60 shadow-xs flex flex-col justify-between hover:border-zinc-300 dark:hover:border-zinc-700 transition-all">
+          <div
+            onClick={handleManualRefresh}
+            className="p-4 rounded-2xl bg-zinc-50/80 dark:bg-zinc-900/60 border border-zinc-200/80 dark:border-zinc-800/60 shadow-xs flex flex-col justify-between hover:border-zinc-300 dark:hover:border-zinc-700 transition-all cursor-pointer active:scale-[0.99] select-none group"
+            title="Click to refresh speed sensor"
+          >
             <div>
               <div className="flex items-center justify-between text-zinc-400 dark:text-zinc-500 mb-1">
                 <span className="text-[10px] font-mono uppercase tracking-wider font-semibold">Current Speed</span>
-                <Activity className="w-4 h-4 text-emerald-500" />
+                <Activity className="w-4 h-4 text-emerald-500 group-hover:scale-110 transition-transform" />
               </div>
               <div className="text-2xl font-black font-mono text-zinc-900 dark:text-zinc-100">
-                {formatSpeed(totalSpeed)}
+                <AnimatedSpeed key={`speed-${refreshKey}`} triggerKey={refreshKey} bytesPerSec={totalSpeed} />
               </div>
             </div>
 
@@ -159,19 +203,25 @@ export const TelemetryView: React.FC<TelemetryViewProps> = ({ onBack }) => {
                 <TrendingUp className="w-3 h-3 text-emerald-500" />
                 Peak Session
               </span>
-              <span className="font-bold text-zinc-700 dark:text-zinc-300">{formatSpeed(peakSpeed)}</span>
+              <span className="font-bold text-zinc-700 dark:text-zinc-300">
+                <AnimatedSpeed key={`peak-${refreshKey}`} triggerKey={refreshKey} bytesPerSec={peakSpeed} />
+              </span>
             </div>
           </div>
 
           {/* Card 2: Active Sockets & Parallel Workers */}
-          <div className="p-4 rounded-2xl bg-zinc-50/80 dark:bg-zinc-900/60 border border-zinc-200/80 dark:border-zinc-800/60 shadow-xs flex flex-col justify-between hover:border-zinc-300 dark:hover:border-zinc-700 transition-all">
+          <div
+            onClick={handleManualRefresh}
+            className="p-4 rounded-2xl bg-zinc-50/80 dark:bg-zinc-900/60 border border-zinc-200/80 dark:border-zinc-800/60 shadow-xs flex flex-col justify-between hover:border-zinc-300 dark:hover:border-zinc-700 transition-all cursor-pointer active:scale-[0.99] select-none group"
+            title="Click to refresh connection counters"
+          >
             <div>
               <div className="flex items-center justify-between text-zinc-400 dark:text-zinc-500 mb-1">
                 <span className="text-[10px] font-mono uppercase tracking-wider font-semibold">Active Connections</span>
-                <Zap className="w-4 h-4 text-blue-500" />
+                <Zap className="w-4 h-4 text-blue-500 group-hover:scale-110 transition-transform" />
               </div>
               <div className="text-2xl font-black font-mono text-zinc-900 dark:text-zinc-100">
-                {activeSegmentsCount} <span className="text-sm font-semibold text-zinc-500">Parts</span>
+                <AnimatedNumber key={`parts-${refreshKey}`} triggerKey={refreshKey} value={activeSegmentsCount} suffix=" Parts" />
               </div>
             </div>
 
@@ -180,16 +230,25 @@ export const TelemetryView: React.FC<TelemetryViewProps> = ({ onBack }) => {
                 <Layers className="w-3 h-3 text-blue-500" />
                 Active Tasks
               </span>
-              <span className="font-bold text-zinc-700 dark:text-zinc-300">{activeDownloads.length} running</span>
+              <span className="font-bold text-zinc-700 dark:text-zinc-300">
+                <AnimatedNumber key={`tasks-${refreshKey}`} triggerKey={refreshKey} value={activeDownloads.length} /> running
+              </span>
             </div>
           </div>
 
           {/* Card 3: Storage Target & Free Disk Space */}
-          <div className="p-4 rounded-2xl bg-zinc-50/80 dark:bg-zinc-900/60 border border-zinc-200/80 dark:border-zinc-800/60 shadow-xs flex flex-col justify-between hover:border-zinc-300 dark:hover:border-zinc-700 transition-all">
+          <div
+            onClick={(e) => {
+              if ((e.target as HTMLElement).closest('button')) return;
+              handleManualRefresh();
+            }}
+            className="p-4 rounded-2xl bg-zinc-50/80 dark:bg-zinc-900/60 border border-zinc-200/80 dark:border-zinc-800/60 shadow-xs flex flex-col justify-between hover:border-zinc-300 dark:hover:border-zinc-700 transition-all cursor-pointer active:scale-[0.99] select-none group"
+            title="Click to re-probe disk space"
+          >
             <div>
               <div className="flex items-center justify-between text-zinc-400 dark:text-zinc-500 mb-1">
                 <span className="text-[10px] font-mono uppercase tracking-wider font-semibold">Save Folder</span>
-                <HardDrive className="w-4 h-4 text-amber-500" />
+                <HardDrive className="w-4 h-4 text-amber-500 group-hover:scale-110 transition-transform" />
               </div>
               <div className="text-xs font-mono font-medium text-zinc-800 dark:text-zinc-200 truncate mt-1" title={storagePath}>
                 {storagePath}
@@ -198,10 +257,15 @@ export const TelemetryView: React.FC<TelemetryViewProps> = ({ onBack }) => {
 
             <div className="mt-3 space-y-1.5">
               <div className="h-1.5 w-full bg-zinc-200 dark:bg-zinc-800 rounded-full overflow-hidden">
-                <div className="h-full bg-emerald-500 rounded-full" style={{ width: '45%' }} />
+                <div
+                  className="h-full bg-emerald-500 rounded-full transition-all duration-1000 ease-out"
+                  style={{ width: `${storageProgress}%` }}
+                />
               </div>
               <div className="flex items-center justify-between text-[10px] font-mono text-zinc-400">
-                <span>{freeSpaceBytes ? `${formatBytes(freeSpaceBytes)} free` : 'Drive Available'}</span>
+                <span>
+                  <AnimatedBytes key={`free-${refreshKey}`} triggerKey={refreshKey} bytes={freeSpaceBytes ?? cachedFreeSpace ?? 0} suffix=" free" />
+                </span>
                 <button
                   type="button"
                   onClick={handlePickFolder}
@@ -214,14 +278,18 @@ export const TelemetryView: React.FC<TelemetryViewProps> = ({ onBack }) => {
           </div>
 
           {/* Card 4: Total Downloaded Data Till Now (Persistent SQLite Metric) */}
-          <div className="p-4 rounded-2xl bg-zinc-50/80 dark:bg-zinc-900/60 border border-zinc-200/80 dark:border-zinc-800/60 shadow-xs flex flex-col justify-between hover:border-zinc-300 dark:hover:border-zinc-700 transition-all">
+          <div
+            onClick={handleManualRefresh}
+            className="p-4 rounded-2xl bg-zinc-50/80 dark:bg-zinc-900/60 border border-zinc-200/80 dark:border-zinc-800/60 shadow-xs flex flex-col justify-between hover:border-zinc-300 dark:hover:border-zinc-700 transition-all cursor-pointer active:scale-[0.99] select-none group"
+            title="Click to re-animate lifetime telemetry"
+          >
             <div>
               <div className="flex items-center justify-between text-zinc-400 dark:text-zinc-500 mb-1">
                 <span className="text-[10px] font-mono uppercase tracking-wider font-semibold">Total Data Downloaded</span>
-                <Database className="w-4 h-4 text-violet-500" />
+                <Database className="w-4 h-4 text-violet-500 group-hover:scale-110 transition-transform" />
               </div>
               <div className="text-2xl font-black font-mono text-zinc-900 dark:text-zinc-100" title={`${lifetimeDownloadedBytes.toLocaleString()} bytes`}>
-                {formatBytes(lifetimeDownloadedBytes)}
+                <AnimatedBytes key={`lifetime-${refreshKey}`} triggerKey={refreshKey} bytes={lifetimeDownloadedBytes} />
               </div>
             </div>
 
@@ -231,7 +299,7 @@ export const TelemetryView: React.FC<TelemetryViewProps> = ({ onBack }) => {
                 Saved Locally
               </span>
               <span className="text-emerald-600 dark:text-emerald-400 font-semibold">
-                +{formatBytes(sessionDownloadedBytes)} session
+                <AnimatedBytes key={`session-${refreshKey}`} triggerKey={refreshKey} bytes={sessionDownloadedBytes} prefix="+" suffix=" session" />
               </span>
             </div>
           </div>
@@ -247,7 +315,7 @@ export const TelemetryView: React.FC<TelemetryViewProps> = ({ onBack }) => {
               </h2>
             </div>
             <div className="flex items-center gap-3 text-[10px] font-mono text-zinc-400 dark:text-zinc-500">
-              <span>Max Scale: {formatSpeed(maxHistoricalSpeed)}</span>
+              <span>Max Scale: <AnimatedSpeed key={`maxscale-${refreshKey}`} bytesPerSec={maxHistoricalSpeed} /></span>
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
               <span>Real-Time Stream</span>
             </div>
@@ -297,19 +365,27 @@ export const TelemetryView: React.FC<TelemetryViewProps> = ({ onBack }) => {
             <div className="space-y-1.5 text-xs font-mono">
               <div className="flex items-center justify-between py-1.5 border-b border-zinc-200/40 dark:border-zinc-800/40 gap-2">
                 <span className="text-zinc-500 shrink-0">Total Files:</span>
-                <span className="font-bold text-zinc-800 dark:text-zinc-200 truncate">{items.length}</span>
+                <span className="font-bold text-zinc-800 dark:text-zinc-200 truncate">
+                  <AnimatedNumber key={`total-${refreshKey}`} value={items.length} />
+                </span>
               </div>
               <div className="flex items-center justify-between py-1.5 border-b border-zinc-200/40 dark:border-zinc-800/40 gap-2">
                 <span className="text-zinc-500 shrink-0">Completed:</span>
-                <span className="font-bold text-emerald-600 dark:text-emerald-400 truncate">{completedDownloads.length}</span>
+                <span className="font-bold text-emerald-600 dark:text-emerald-400 truncate">
+                  <AnimatedNumber key={`completed-${refreshKey}`} value={completedDownloads.length} />
+                </span>
               </div>
               <div className="flex items-center justify-between py-1.5 border-b border-zinc-200/40 dark:border-zinc-800/40 gap-2">
                 <span className="text-zinc-500 shrink-0">In Queue:</span>
-                <span className="font-bold text-blue-600 dark:text-blue-400 truncate">{queuedDownloads.length}</span>
+                <span className="font-bold text-blue-600 dark:text-blue-400 truncate">
+                  <AnimatedNumber key={`queued-${refreshKey}`} value={queuedDownloads.length} />
+                </span>
               </div>
               <div className="flex items-center justify-between py-1.5 gap-2">
                 <span className="text-zinc-500 shrink-0">Downloading Now:</span>
-                <span className="font-bold text-zinc-900 dark:text-zinc-100 truncate">{activeDownloads.length}</span>
+                <span className="font-bold text-zinc-900 dark:text-zinc-100 truncate">
+                  <AnimatedNumber key={`active-${refreshKey}`} value={activeDownloads.length} />
+                </span>
               </div>
             </div>
           </div>

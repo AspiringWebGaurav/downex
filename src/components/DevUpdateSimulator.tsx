@@ -109,7 +109,7 @@ export const DevUpdateSimulator: React.FC = () => {
   };
 
   return (
-    <div className="fixed bottom-4 left-4 z-50 select-none font-sans">
+    <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-50 select-none font-sans flex flex-col items-center">
       {!isOpen ? (
         <button
           onClick={() => setIsOpen(true)}

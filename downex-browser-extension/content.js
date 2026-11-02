@@ -178,7 +178,7 @@ function attachGrabberPill(videoEl) {
         align-items: center;
         gap: 6px;
         padding: 5px 10px;
-        background: rgba(18, 18, 22, 0.88);
+        background: rgba(9, 9, 11, 0.92);
         color: #ffffff;
         border: 1px solid rgba(255, 255, 255, 0.16);
         border-radius: 9999px;
@@ -192,9 +192,9 @@ function attachGrabberPill(videoEl) {
         user-select: none;
       }
       .grab-btn:hover {
-        background: rgba(30, 30, 38, 0.96);
-        border-color: #8b5cf6;
-        box-shadow: 0 6px 20px rgba(139, 92, 246, 0.45);
+        background: rgba(18, 18, 22, 0.98);
+        border-color: #10b981;
+        box-shadow: 0 6px 20px rgba(16, 185, 129, 0.4);
         transform: translateY(-1px);
       }
       .grab-btn:active {
@@ -203,12 +203,12 @@ function attachGrabberPill(videoEl) {
       .icon {
         width: 14px;
         height: 14px;
-        stroke: #a78bfa;
+        stroke: #34d399;
         stroke-width: 2.5;
         fill: none;
       }
       .badge {
-        background: #8b5cf6;
+        background: #059669;
         color: white;
         padding: 1px 5px;
         border-radius: 4px;
@@ -223,7 +223,7 @@ function attachGrabberPill(videoEl) {
         top: calc(100% + 8px);
         right: 0;
         width: 230px;
-        background: rgba(18, 18, 24, 0.96);
+        background: rgba(9, 9, 11, 0.96);
         border: 1px solid rgba(255, 255, 255, 0.14);
         border-radius: 10px;
         padding: 6px;
@@ -263,7 +263,7 @@ function attachGrabberPill(videoEl) {
         font-size: 11px;
       }
       .menu-item:hover {
-        background: rgba(139, 92, 246, 0.22);
+        background: rgba(16, 185, 129, 0.2);
         color: #ffffff;
       }
       .menu-item .res {
@@ -291,7 +291,7 @@ function attachGrabberPill(videoEl) {
       <div class="menu" id="dropdown-menu">
         <div class="menu-header">
           <span>Downex Stream Grabber</span>
-          <span style="color:#8b5cf6;">HD/4K</span>
+          <span style="color: #34d399;">HD/4K</span>
         </div>
         <div id="format-list"></div>
       </div>
@@ -366,7 +366,7 @@ function attachGrabberPill(videoEl) {
           <button class="action-btn action-later" title="Download Later (Queue in Paused State)" style="padding: 3px 6px; border-radius: 4px; background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.12); color: #a1a1aa; cursor: pointer; font-size: 10px;">
             🕒 Later
           </button>
-          <button class="action-btn action-now" title="Start Download Immediately" style="padding: 3px 7px; border-radius: 4px; background: #8b5cf6; border: none; color: white; font-weight: 600; cursor: pointer; font-size: 10px;">
+          <button class="action-btn action-now" title="Start Download Immediately" style="padding: 3px 7px; border-radius: 4px; background: #059669; border: none; color: white; font-weight: 600; cursor: pointer; font-size: 10px;">
             ⬇ Start
           </button>
         </div>
@@ -457,6 +457,7 @@ function triggerDirectDownload(url, filename, downloadLater = false) {
       filename: filename ? filename.replace(/[\\/:*?"<>|]/g, '_') : undefined,
       referer: location.href,
       download_later: downloadLater,
+      show_dialog: true,
     },
   });
 }
@@ -587,7 +588,22 @@ document.addEventListener('click', (event) => {
   const hasDirectExt = DIRECT_DOWNLOAD_EXTENSIONS.has(ext);
   const hasDownloadAttr = anchor.hasAttribute('download');
 
-  if (hasDirectExt || hasDownloadAttr) {
+  // Layer 1 Deep Inspection: Check query string parameters for embedded download targets
+  let hasQueryExt = false;
+  if (!hasDirectExt && href.includes('?')) {
+    try {
+      const u = new URL(href);
+      for (const val of u.searchParams.values()) {
+        const pExt = val.split('?')[0].split('.').pop()?.toLowerCase();
+        if (pExt && DIRECT_DOWNLOAD_EXTENSIONS.has(pExt)) {
+          hasQueryExt = true;
+          break;
+        }
+      }
+    } catch (_) {}
+  }
+
+  if (hasDirectExt || hasDownloadAttr || hasQueryExt) {
     if (!event.ctrlKey && !event.metaKey && !event.shiftKey && event.button === 0) {
       event.preventDefault();
       event.stopPropagation();

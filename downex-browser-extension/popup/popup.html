@@ -1,708 +1,350 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Downex</title>
-  <style>
-    :root {
-      --bg: #ffffff;
-      --card-bg: #f8fafc;
-      --card-border: #e2e8f0;
-      --border: #e2e8f0;
-      --border-focus: #10b981;
-      --text: #0f172a;
-      --text-muted: #64748b;
-      --text-subtle: #94a3b8;
-      --primary: #059669;
-      --primary-hover: #047857;
-      --brand: #6366f1;
-      --success: #10b981;
-      --danger: #ef4444;
-    }
-    * {
-      box-sizing: border-box;
-      margin: 0;
-      padding: 0;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-    }
-    body {
-      width: 360px;
-      min-width: 360px;
-      max-width: 360px;
-      min-height: 250px;
-      overflow-x: hidden;
-      contain: paint;
-      background-color: var(--bg);
-      color: var(--text);
-      padding: 13px 14px;
-      font-size: 13px;
-      line-height: 1.4;
-      user-select: none;
-    }
-
-    /* Header */
-    .header {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      margin-bottom: 11px;
-      padding-bottom: 9px;
-      border-bottom: 1px solid var(--border);
-    }
-    .brand {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      cursor: pointer;
-    }
-    .logo-badge {
-      width: 22px;
-      height: 22px;
-      background: linear-gradient(135deg, #10b981, #059669);
-      border-radius: 6px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-weight: 800;
-      font-size: 11px;
-      color: white;
-      box-shadow: 0 1px 2px rgba(16, 185, 129, 0.2);
-    }
-    .title {
-      font-size: 13px;
-      font-weight: 700;
-      letter-spacing: -0.01em;
-      color: var(--text);
-    }
-    .status-badge {
-      display: inline-flex;
-      align-items: center;
-      gap: 5px;
-      font-size: 10px;
-      font-weight: 600;
-      padding: 3px 8px;
-      border-radius: 9999px;
-      background: #f1f5f9;
-      color: var(--text-muted);
-      border: 1px solid #e2e8f0;
-      cursor: pointer;
-      transition: all 0.15s;
-    }
-    .status-badge:hover {
-      background: #e2e8f0;
-    }
-    .status-dot {
-      width: 6px;
-      height: 6px;
-      border-radius: 50%;
-      background: #94a3b8;
-    }
-    .status-connected .status-dot {
-      background: #10b981;
-      box-shadow: 0 0 6px rgba(16, 185, 129, 0.6);
-    }
-    .status-connected {
-      color: #047857;
-      background: #ecfdf5;
-      border-color: #a7f3d0;
-    }
-    .status-checking {
-      color: #0284c7;
-      background: #f0f9ff;
-      border-color: #bae6fd;
-    }
-    .status-checking .status-dot {
-      background: #0284c7;
-      box-shadow: 0 0 6px rgba(2, 132, 199, 0.6);
-      animation: pulse-dot 0.8s ease-in-out infinite;
-    }
-    @keyframes pulse-dot {
-      0%, 100% { opacity: 1; transform: scale(1); }
-      50% { opacity: 0.35; transform: scale(0.65); }
-    }
-
-    /* Cards */
-    .card {
-      background: var(--card-bg);
-      border: 1px solid var(--card-border);
-      border-radius: 10px;
-      padding: 10px 11px;
-      margin-bottom: 9px;
-    }
-    .card-header {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      margin-bottom: 6px;
-    }
-    .card-label {
-      font-size: 10px;
-      font-weight: 700;
-      text-transform: uppercase;
-      letter-spacing: 0.05em;
-      color: var(--text-muted);
-      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-    }
-    .size-chip {
-      font-size: 10px;
-      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-      color: #047857;
-      background: #ecfdf5;
-      border: 1px solid #a7f3d0;
-      padding: 1px 6px;
-      border-radius: 4px;
-      font-weight: 600;
-    }
-
-    /* Input */
-    .input-box {
-      position: relative;
-      display: flex;
-      align-items: center;
-      margin-bottom: 8px;
-    }
-    .input {
-      width: 100%;
-      background: #ffffff;
-      border: 1px solid var(--border);
-      border-radius: 7px;
-      color: var(--text);
-      padding: 7px 30px 7px 9px;
-      font-size: 11px;
-      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-      outline: none;
-      transition: all 0.15s;
-    }
-    .input:focus {
-      border-color: var(--border-focus);
-      box-shadow: 0 0 0 2px rgba(16, 185, 129, 0.15);
-    }
-    .clear-btn {
-      position: absolute;
-      right: 7px;
-      background: none;
-      border: none;
-      color: var(--text-subtle);
-      cursor: pointer;
-      font-size: 11px;
-      padding: 2px 4px;
-      border-radius: 4px;
-      display: none;
-    }
-    .clear-btn:hover {
-      color: var(--text);
-      background: #f1f5f9;
-    }
-
-    /* Destination Row */
-    .dest-row {
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      margin-bottom: 9px;
-      font-size: 11px;
-      color: var(--text-muted);
-      padding: 0 2px;
-    }
-    .dest-row svg {
-      opacity: 0.6;
-      flex-shrink: 0;
-    }
-    .path-tag {
-      font-size: 10.5px;
-      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-      color: var(--text-muted);
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-    }
-
-    /* Buttons */
-    .btn-group {
-      display: grid;
-      grid-template-columns: 85px 1fr;
-      gap: 6px;
-    }
-    .btn {
-      border: none;
-      border-radius: 7px;
-      padding: 7px 10px;
-      font-size: 11px;
-      font-weight: 600;
-      cursor: pointer;
-      transition: all 0.15s;
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      gap: 4px;
-      user-select: none;
-    }
-    .btn:disabled {
-      opacity: 0.5;
-      cursor: not-allowed;
-    }
-    .btn-emerald {
-      background: var(--primary);
-      color: white;
-      box-shadow: 0 1px 2px rgba(5, 150, 105, 0.2);
-    }
-    .btn-emerald:hover:not(:disabled) {
-      background: var(--primary-hover);
-    }
-    .btn-secondary {
-      background: #ffffff;
-      color: var(--text);
-      border: 1px solid var(--border);
-    }
-    .btn-secondary:hover:not(:disabled) {
-      background: #f1f5f9;
-      border-color: #cbd5e1;
-    }
-    .btn-block {
-      width: 100%;
-    }
-
-    /* Modular Settings */
-    .chip-status {
-      display: inline-flex;
-      align-items: center;
-      gap: 4px;
-      font-size: 9px;
-      font-weight: 700;
-      letter-spacing: 0.04em;
-      text-transform: uppercase;
-      padding: 1px 6px;
-      border-radius: 9999px;
-      transition: all 0.2s ease;
-      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-    }
-    .chip-dot {
-      width: 5px;
-      height: 5px;
-      border-radius: 50%;
-    }
-    .chip-active {
-      color: #047857;
-      background: #ecfdf5;
-      border: 1px solid #a7f3d0;
-    }
-    .chip-active .chip-dot {
-      background: #10b981;
-      box-shadow: 0 0 5px rgba(16, 185, 129, 0.6);
-    }
-    .chip-disabled {
-      color: #64748b;
-      background: #f1f5f9;
-      border: 1px solid #cbd5e1;
-    }
-    .chip-disabled .chip-dot {
-      background: #94a3b8;
-    }
-
-    .setting-master-row {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      padding: 3px 0 5px 0;
-    }
-    .setting-info {
-      flex: 1;
-      min-width: 0;
-      padding-right: 8px;
-    }
-    .setting-name {
-      font-size: 11.5px;
-      font-weight: 600;
-      color: var(--text);
-      line-height: 1.25;
-    }
-    .setting-desc {
-      font-size: 9.5px;
-      color: var(--text-muted);
-      line-height: 1.25;
-      margin-top: 1px;
-    }
-    .setting-sub-name {
-      font-size: 11px;
-      font-weight: 500;
-      color: var(--text);
-    }
-    .setting-sub-desc {
-      font-size: 9px;
-      color: var(--text-subtle);
-    }
-
-    .sub-settings-container {
-      margin-left: 6px;
-      padding-left: 9px;
-      border-left: 2px solid #e2e8f0;
-      display: flex;
-      flex-direction: column;
-      gap: 5px;
-      margin-top: 3px;
-      margin-bottom: 5px;
-      transition: opacity 0.2s ease, filter 0.2s ease;
-    }
-    .sub-settings-container.is-disabled {
-      opacity: 0.4;
-      pointer-events: none;
-      filter: grayscale(0.7);
-    }
-
-    .sub-setting-row {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      padding: 1.5px 0;
-    }
-
-    .switch {
-      position: relative;
-      display: inline-block;
-      width: 28px;
-      height: 15px;
-      flex-shrink: 0;
-    }
-    .switch input {
-      opacity: 0;
-      width: 0;
-      height: 0;
-    }
-    .slider {
-      position: absolute;
-      cursor: pointer;
-      top: 0; left: 0; right: 0; bottom: 0;
-      background-color: #cbd5e1;
-      transition: .2s;
-      border-radius: 15px;
-    }
-    .slider:before {
-      position: absolute;
-      content: "";
-      height: 11px;
-      width: 11px;
-      left: 2px;
-      bottom: 2px;
-      background-color: white;
-      transition: .2s;
-      border-radius: 50%;
-      box-shadow: 0 1px 2px rgba(0,0,0,0.15);
-    }
-    input:checked + .slider {
-      background-color: var(--primary);
-    }
-    input:checked + .slider:before {
-      transform: translateX(13px);
-    }
-
-    .switch-sm {
-      width: 24px;
-      height: 13px;
-    }
-    .switch-sm .slider {
-      border-radius: 13px;
-    }
-    .switch-sm .slider:before {
-      height: 9px;
-      width: 9px;
-      left: 2px;
-      bottom: 2px;
-    }
-    .switch-sm input:checked + .slider:before {
-      transform: translateX(11px);
-    }
-
-    .settings-divider {
-      height: 1px;
-      background: var(--card-border);
-      margin: 5px 0;
-    }
-
-    /* Batch Scanner */
-    .filter-pills {
-      display: flex;
-      gap: 4px;
-      margin: 6px 0 4px 0;
-    }
-    .filter-pill {
-      font-size: 9px;
-      font-weight: 500;
-      padding: 2px 7px;
-      border-radius: 9999px;
-      background: #f1f5f9;
-      color: var(--text-muted);
-      border: 1px solid #e2e8f0;
-      cursor: pointer;
-      user-select: none;
-    }
-    .filter-pill.active {
-      background: #0f172a;
-      color: #ffffff;
-      border-color: #0f172a;
-    }
-    .links-container {
-      max-height: 130px;
-      overflow-y: auto;
-      margin-top: 6px;
-      border: 1px solid var(--border);
-      border-radius: 7px;
-      padding: 4px;
-      background: #ffffff;
-      display: none;
-    }
-    .links-container.active {
-      display: block;
-    }
-    .link-item {
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      padding: 4px 6px;
-      border-radius: 5px;
-      font-size: 10px;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      cursor: pointer;
-      color: var(--text);
-    }
-    .link-item:hover {
-      background: #f8fafc;
-    }
-    .link-item input {
-      accent-color: var(--primary);
-    }
-
-    /* Footer */
-    .footer {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      font-size: 10px;
-      color: var(--text-muted);
-      margin-top: 7px;
-      padding-top: 6px;
-      border-top: 1px solid var(--border);
-    }
-    .footer-link {
-      color: var(--text-muted);
-      text-decoration: none;
-      cursor: pointer;
-    }
-    .footer-link:hover {
-      color: var(--text);
-      text-decoration: underline;
-    }
-    .footer-refresh-btn {
-      display: inline-flex;
-      align-items: center;
-      gap: 4px;
-      font-size: 10px;
-      font-weight: 600;
-      color: var(--text-muted);
-      background: #f8fafc;
-      border: 1px solid var(--border);
-      border-radius: 5px;
-      padding: 3px 7px;
-      cursor: pointer;
-      transition: all 0.15s ease;
-      outline: none;
-      line-height: 1;
-    }
-    .footer-refresh-btn:hover {
-      background: #f1f5f9;
-      color: var(--text);
-      border-color: #cbd5e1;
-    }
-    .footer-refresh-btn:active {
-      transform: scale(0.96);
-    }
-    .footer-refresh-btn.is-refreshing {
-      background: #eff6ff;
-      color: #2563eb;
-      border-color: #bfdbfe;
-      cursor: wait;
-      pointer-events: none;
-    }
-    .footer-refresh-btn.is-success {
-      background: #ecfdf5;
-      color: #059669;
-      border-color: #a7f3d0;
-    }
-    .footer-refresh-btn.is-offline {
-      background: #f8fafc;
-      color: #64748b;
-      border-color: #e2e8f0;
-    }
-    .refresh-icon {
-      transition: transform 0.2s ease;
-      flex-shrink: 0;
-    }
-    .footer-refresh-btn.is-refreshing .refresh-icon {
-      animation: spin 0.7s linear infinite;
-    }
-    @keyframes spin {
-      from { transform: rotate(0deg); }
-      to { transform: rotate(360deg); }
-    }
-  </style>
+  <link rel="stylesheet" href="../common/downex-theme.css">
+  <link rel="stylesheet" href="popup.css">
 </head>
+
 <body>
-  <!-- Header -->
-  <div class="header">
-    <div class="brand" id="brand-header" title="Downex Download Accelerator">
-      <div class="logo-badge">D</div>
-      <div class="title">Downex</div>
-    </div>
-    <div class="status-badge" id="status-badge" title="Click to refresh connection">
-      <div class="status-dot"></div>
-      <span id="status-text">Checking...</span>
-    </div>
-  </div>
-
-  <!-- Quick Download Card (0-Click & Minimal) -->
-  <div class="card">
-    <div class="card-header">
-      <span class="card-label">Quick Download</span>
-      <span class="size-chip" id="file-size-badge" style="display: none;">Probing...</span>
+  <!-- Top Window Header (Parity with DownexWindowHeader.tsx) -->
+  <header class="popup-header">
+    <div class="brand-lockup" id="brand-home" title="Downex Download Accelerator">
+      <img src="../icons/icon-arrow.png" alt="Downex" class="brand-icon">
+      <span class="brand-text">downex</span>
+      <span class="brand-badge" id="ext-ver-badge">v0.0.0</span>
     </div>
 
-    <!-- URL Input -->
-    <div class="input-box">
-      <input type="text" id="url-input" class="input" placeholder="Paste URL or auto-detected link..." autofocus />
-      <button id="btn-clear" class="clear-btn" title="Clear">✕</button>
-    </div>
-
-    <!-- Destination Row (Minimal, Unified) -->
-    <div class="dest-row">
-      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
-      <span class="path-tag" id="path-preview" title="Unified Downex download directory">
-        Downloads\Downex\
-      </span>
-    </div>
-
-    <!-- Fast Action Buttons (Enter = Start Download) -->
-    <div class="btn-group">
-      <button id="btn-download-later" class="btn btn-secondary" title="Add to Downex queue paused">
-        🕒 Later
-      </button>
-      <button id="btn-download-now" class="btn btn-emerald" title="Start download immediately (Enter)">
-        ⬇ Start Download
-      </button>
-    </div>
-  </div>
-
-  <!-- Modular Detection & Preferences Card -->
-  <div class="card" style="padding: 9px 11px;">
-    <div class="card-header" style="margin-bottom: 7px;">
-      <span class="card-label">Detection Preferences</span>
-      <span class="chip-status chip-active" id="detection-status-chip" title="Video stream sniffing status">
-        <span class="chip-dot"></span>Video ON
-      </span>
-    </div>
-
-    <!-- Master Switch: Video & Stream Detection -->
-    <div class="setting-master-row">
-      <div class="setting-info">
-        <div class="setting-name">Video & Stream Grabber</div>
-        <div class="setting-desc">Sniff DASH, HLS & MP4 on YouTube / HTML5 players</div>
+    <div class="header-actions">
+      <!-- Live Engine Connection Pill (Shown ONLY when connected) -->
+      <div id="status-badge" class="connection-pill status-connected" style="display: none;"
+        title="Connected to Downex Desktop Engine">
+        <span class="dwnx-dot dwnx-dot-pulse" style="background: var(--dwnx-emerald);"></span>
+        <span id="status-text">Connected</span>
       </div>
-      <label class="switch" title="Master toggle: Turn ON/OFF video and stream detection">
-        <input type="checkbox" id="toggle-media" checked>
-        <span class="slider"></span>
-      </label>
-    </div>
 
-    <!-- Modular Sub-Options for Video (Hierarchical tree) -->
-    <div class="sub-settings-container" id="video-sub-settings">
-      <div class="sub-setting-row">
-        <div class="setting-info">
-          <div class="setting-sub-name">In-Player Overlay Pill</div>
-          <div class="setting-sub-desc">Attach floating download button on video players</div>
+      <!-- Header Icon Controls Group -->
+      <div class="header-icon-group">
+        <!-- Dashboard Button in Header -->
+        <button type="button" id="btn-open-dashboard" class="header-dashboard-btn"
+          title="Open Downex Management Dashboard" aria-label="Dashboard">
+          <span>Dashboard</span>
+          <span data-icon="externalLink" data-icon-size="11"></span>
+        </button>
+
+        <!-- Modern Theme Toggle -->
+        <button type="button" id="btn-theme-toggle" class="icon-btn" title="Toggle Dark/Light Mode"
+          aria-label="Toggle Theme">
+          <span data-icon="moon" data-icon-size="13"></span>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <!-- Top Middle Dynamic Lifecycle Banner -->
+  <div id="top-lifecycle-pill" class="top-center-badge" style="display: none;">
+    <span class="dwnx-dot dwnx-dot-pulse" id="top-pill-dot"></span>
+    <span id="top-pill-text">Checking 127.0.0.1:18888...</span>
+  </div>
+
+
+  <!-- Dynamic Lifecycle Toast / Error Banner (Accept, Reject, Probing, Disk Write Error, Fail) -->
+  <div id="lifecycle-banner" class="lifecycle-banner" style="display: none;">
+    <div class="lifecycle-content">
+      <span id="lifecycle-icon" data-icon="alertCircle" data-icon-size="14"></span>
+      <div>
+        <div id="lifecycle-title" class="lifecycle-title">Download Status</div>
+        <div id="lifecycle-desc" class="lifecycle-desc">Operation state details</div>
+        <div id="lifecycle-actions" class="lifecycle-actions" style="display: none;">
+          <button type="button" id="btn-fallback-browser" class="dwnx-btn dwnx-btn-sm dwnx-btn-secondary"
+            style="padding: 2px 7px; font-size: 10px;">
+            <span data-icon="download" data-icon-size="10"></span>
+            <span>Download via Browser</span>
+          </button>
         </div>
-        <label class="switch switch-sm" title="Show or hide floating download pill inside video players">
-          <input type="checkbox" id="toggle-in-player-pill" checked>
-          <span class="slider"></span>
-        </label>
-      </div>
-
-      <div class="sub-setting-row">
-        <div class="setting-info">
-          <div class="setting-sub-name">Toolbar Quality Badge</div>
-          <div class="setting-sub-desc">Show top stream resolution (HD/4K) on icon</div>
-        </div>
-        <label class="switch switch-sm" title="Show resolution or format count on extension icon">
-          <input type="checkbox" id="toggle-quality-badge" checked>
-          <span class="slider"></span>
-        </label>
       </div>
     </div>
-
-    <div class="settings-divider"></div>
-
-    <!-- File Download Options -->
-    <div class="sub-setting-row" style="margin-top: 2px;">
-      <div class="setting-info">
-        <div class="setting-name">Auto-Capture Downloads</div>
-        <div class="setting-desc">Catch browser files (.zip, .exe, .iso, etc.)</div>
-      </div>
-      <label class="switch switch-sm" title="Automatically intercept browser download links">
-        <input type="checkbox" id="toggle-intercept" checked>
-        <span class="slider"></span>
-      </label>
-    </div>
-
-    <div class="sub-setting-row" style="margin-top: 3px;">
-      <div class="setting-info">
-        <div class="setting-name">Alt-Key Quick Bypass</div>
-        <div class="setting-desc">Hold Alt while clicking to skip Downex</div>
-      </div>
-      <label class="switch switch-sm" title="Hold Alt key while clicking links to use standard browser download">
-        <input type="checkbox" id="toggle-alt-bypass" checked>
-        <span class="slider"></span>
-      </label>
-    </div>
+    <button type="button" id="btn-lifecycle-close" class="lifecycle-close-btn" title="Dismiss">✕</button>
   </div>
 
-  <!-- High-Output Page Batch Scanner -->
-  <div class="card" style="margin-bottom: 0;">
-    <button id="btn-scan-links" class="btn btn-secondary btn-block">
-      Scan Tab for Media & Links
-    </button>
-    <div id="links-box" class="links-container">
-      <div class="filter-pills" id="filter-pills" style="display: none;">
-        <span class="filter-pill active" data-filter="all">All</span>
-        <span class="filter-pill" data-filter="media">Media</span>
-        <span class="filter-pill" data-filter="archives">Archives</span>
-        <span class="filter-pill" data-filter="docs">Docs</span>
+  <!-- Modular Update Notification Banner (Silently Synced) -->
+  <div id="ext-update-banner" class="locked-screen"
+    style="display: none; background: var(--dwnx-emerald-bg); border-color: var(--dwnx-emerald-border); margin-bottom: 8px; padding: 8px 10px;">
+    <div style="display: flex; align-items: center; justify-content: space-between;">
+      <div style="display: flex; align-items: center; gap: 6px;">
+        <span data-icon="refresh" data-icon-size="12" style="color: var(--dwnx-emerald-text);"></span>
+        <span style="font-size: 11px; font-weight: 600; color: var(--dwnx-emerald-text);">
+          New Extension Version (<span id="ext-new-ver">v0.0.1</span>)
+        </span>
       </div>
-      <div id="links-list"></div>
-      <button id="btn-download-selected" class="btn btn-emerald btn-block" style="margin-top: 5px; display: none;">
-        Download Selected
+      <button type="button" id="btn-update-extension" class="dwnx-btn dwnx-btn-emerald dwnx-btn-sm"
+        style="padding: 3px 8px; font-size: 10px;">
+        Hot Reload
       </button>
     </div>
   </div>
 
-  <!-- Minimal Footer -->
-  <div class="footer">
-    <span class="footer-link" id="btn-toggle-enterprise" title="Air-gapped localhost 127.0.0.1:18888">
-      🛡️ 127.0.0.1:18888 &bull; MIT
-    </span>
-    <button type="button" class="footer-refresh-btn" id="btn-refresh-status" title="Refresh engine connection, clip & scan">
-      <svg class="refresh-icon" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-        <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/>
-      </svg>
-      <span id="refresh-label">Refresh</span>
-    </button>
+  <!-- Enterprise Dynamic Locked Screen Container -->
+  <div id="locked-container" class="enterprise-lock-card" style="display: none;">
+    <div class="lock-shield-badge">
+      <span data-icon="shield" data-icon-size="20"></span>
+    </div>
+    <div class="lock-title" id="lock-title">Downex Desktop Required</div>
+    <div class="lock-subtitle" id="lock-subtitle">
+      Install the Downex desktop application on your PC to enable high-speed downloads and video stream sniffing.
+    </div>
+
+    <!-- Dynamic Single-Action Group (Zero Confusion) -->
+    <div class="lock-cta-group">
+      <!-- Shown for Fresh Users (App Not Installed) -->
+      <a href="https://download.gauravpatil.site" target="_blank" id="btn-download-downex"
+        class="dwnx-btn dwnx-btn-emerald lock-btn-main">
+        <span style="display: flex; align-items: center; gap: 6px;">
+          <span data-icon="download" data-icon-size="14"></span>
+          <span>Download Downex for Windows (.exe)</span>
+        </span>
+        <span class="lock-btn-sub">v0.0.0 Immutable Base Setup • download.gauravpatil.site</span>
+      </a>
+
+      <!-- Shown ONLY if App was previously installed on this PC -->
+      <button type="button" id="btn-launch-downex" class="dwnx-btn dwnx-btn-emerald lock-btn-main"
+        style="display: none;">
+        <span style="display: flex; align-items: center; gap: 6px;">
+          <span data-icon="power" data-icon-size="14"></span>
+          <span>Start Downex Desktop App</span>
+        </span>
+        <span class="lock-btn-sub">Launch background service on 127.0.0.1:18888</span>
+      </button>
+
+      <!-- Minimal Helper Link Line -->
+      <div id="lock-helper-text" class="lock-helper-text"
+        style="display: flex; align-items: center; justify-content: center; gap: 8px; margin-top: 8px;">
+        <span style="font-size: 11px; color: var(--dwnx-text-muted);">Already installed?</span>
+        <button type="button" id="btn-check-connection" class="dwnx-btn dwnx-btn-secondary dwnx-btn-sm"
+          style="padding: 3px 10px; font-size: 10.5px;">
+          <span data-icon="refresh" data-icon-size="11"></span>
+          <span id="check-connection-label">Check Connection</span>
+        </button>
+      </div>
+    </div>
+
+    <!-- Status Telemetry Bar -->
+    <div class="lock-telemetry-bar">
+      <div class="telemetry-item">
+        <span class="telemetry-label">Bridge Endpoint</span>
+        <span class="telemetry-val">127.0.0.1:18888</span>
+      </div>
+      <div class="telemetry-item">
+        <span class="telemetry-label">Engine Status</span>
+        <span class="telemetry-val error" id="lock-engine-status">Offline</span>
+      </div>
+      <div class="telemetry-item">
+        <span class="telemetry-label">Extension</span>
+        <span class="telemetry-val">v0.0.0 Base</span>
+      </div>
+    </div>
   </div>
 
-  <!-- Enterprise Drawer -->
-  <div id="enterprise-drawer" style="display: none; margin-top: 6px; padding: 8px 10px; border-radius: 7px; background: #f8fafc; border: 1px solid #e2e8f0; font-size: 10px; color: #64748b;">
-    <div style="font-weight: 700; color: #0f172a; margin-bottom: 3px;">Downex Enterprise Companion (v0.0.2)</div>
-    <div>Loopback: 127.0.0.1:18888 &bull; Zero external network telemetry.</div>
+  <!-- Content View (Displayed when connected to Downex desktop engine) -->
+  <div id="unlocked-content">
+    <!-- Segmented View Controller Tabs -->
+    <nav class="tab-segments">
+      <button type="button" class="tab-btn active" data-tab="quick">
+        <span data-icon="download" data-icon-size="12"></span>
+        <span>Quick Add</span>
+      </button>
+      <button type="button" class="tab-btn" data-tab="streams">
+        <span data-icon="video" data-icon-size="12"></span>
+        <span>Streams</span>
+        <span class="tab-badge" id="tab-streams-badge" style="display: none;">0</span>
+      </button>
+      <button type="button" class="tab-btn" data-tab="settings">
+        <span data-icon="sliders" data-icon-size="12"></span>
+        <span>Settings</span>
+      </button>
+    </nav>
+
+    <!-- TAB 1: QUICK DOWNLOAD VIEW -->
+    <section id="view-quick" class="tab-view active">
+      <div class="dwnx-card" style="padding: 10px 11px;">
+        <div class="dwnx-card-header" style="padding: 0 0 8px 0; margin-bottom: 8px;">
+          <span class="dwnx-card-title">Quick Capture</span>
+          <span class="dwnx-pill dwnx-pill-emerald" id="file-size-badge" style="display: none;">Probing...</span>
+        </div>
+
+        <!-- URL Input Box -->
+        <div class="input-wrapper">
+          <input type="text" id="url-input" class="url-input" placeholder="Paste link or auto-detected URL..."
+            autofocus />
+          <button type="button" id="btn-clear" class="clear-btn" title="Clear">✕</button>
+        </div>
+
+        <!-- Unified Destination Row -->
+        <div class="dest-row">
+          <span data-icon="folder" data-icon-size="12" style="color: var(--dwnx-text-subtle);"></span>
+          <span id="path-preview" title="Default Downex download directory">Downloads\Downex\</span>
+        </div>
+
+      <!-- Action Buttons -->
+      <div class="btn-grid-actions">
+        <button type="button" id="btn-download-later" class="dwnx-btn dwnx-btn-secondary" title="Paste a link above to queue" disabled>
+          <span data-icon="clock" data-icon-size="12"></span>
+          <span>Later</span>
+        </button>
+        <button type="button" id="btn-download-now" class="dwnx-btn dwnx-btn-emerald" title="Paste a link above to start download" disabled>
+          <span data-icon="download" data-icon-size="13"></span>
+          <span>Start Download</span>
+        </button>
+      </div>
+    </section>
+
+    <!-- TAB 2: STREAMS & BATCH SNIFFER VIEW -->
+    <section id="view-streams" class="tab-view">
+      <div class="dwnx-card" style="padding: 10px 11px;">
+        <div class="dwnx-card-header" style="padding: 0 0 8px 0; margin-bottom: 8px;">
+          <span class="dwnx-card-title">Active Tab Streams</span>
+          <span class="dwnx-pill dwnx-pill-emerald" id="detection-status-chip">
+            <span class="dwnx-dot"></span>Video ON
+          </span>
+        </div>
+
+        <!-- Stream List or Clean Empty State -->
+        <div id="stream-container" class="stream-list">
+          <div class="empty-state" id="stream-empty-state">
+            <span data-icon="video" data-icon-size="22" style="color: var(--dwnx-text-subtle);"></span>
+            <p>No active media stream detected on this tab.<br>Play a video or run deep scan below.</p>
+          </div>
+        </div>
+
+        <!-- High-Output Page Batch Scanner -->
+        <div style="margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--dwnx-divider);">
+          <button type="button" id="btn-scan-links" class="dwnx-btn dwnx-btn-secondary dwnx-btn-block">
+            <span data-icon="search" data-icon-size="12"></span>
+            <span>Deep Scan Tab for All Media & Links</span>
+          </button>
+
+          <div id="links-box" class="links-container" style="display: none; margin-top: 8px;">
+            <div class="filter-pills" id="filter-pills" style="display: none; gap: 4px; margin-bottom: 6px;">
+              <button type="button" class="dwnx-pill dwnx-pill-emerald active" data-filter="all">All</button>
+              <button type="button" class="dwnx-pill" data-filter="media">Media</button>
+              <button type="button" class="dwnx-pill" data-filter="archives">Archives</button>
+              <button type="button" class="dwnx-pill" data-filter="docs">Docs</button>
+            </div>
+            <div id="links-list"
+              style="max-height: 140px; overflow-y: auto; font-family: var(--dwnx-font-mono); font-size: 10px;"></div>
+            <button type="button" id="btn-download-selected" class="dwnx-btn dwnx-btn-emerald dwnx-btn-block"
+              style="margin-top: 6px; display: none;">
+              Download Selected Links
+            </button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB 3: PREFERENCES VIEW -->
+    <section id="view-settings" class="tab-view">
+      <div class="dwnx-card">
+        <!-- Master Video Grabber Switch -->
+        <div class="setting-item">
+          <div class="setting-meta">
+            <span class="setting-title">Video & Stream Grabber</span>
+            <span class="setting-desc">Sniff DASH, HLS & MP4 streams on players</span>
+          </div>
+          <label class="dwnx-switch">
+            <input type="checkbox" id="toggle-media" checked>
+            <span class="slider"></span>
+          </label>
+        </div>
+
+        <!-- Sub-options for Video Grabber -->
+        <div id="video-sub-settings">
+          <div class="setting-sub-item">
+            <div class="setting-meta">
+              <span class="setting-title">In-Player Overlay Pill</span>
+              <span class="setting-desc">Attach floating download button on video players</span>
+            </div>
+            <label class="dwnx-switch" style="transform: scale(0.9);">
+              <input type="checkbox" id="toggle-in-player-pill" checked>
+              <span class="slider"></span>
+            </label>
+          </div>
+
+          <div class="setting-sub-item">
+            <div class="setting-meta">
+              <span class="setting-title">Toolbar Quality Badge</span>
+              <span class="setting-desc">Show stream resolution (HD/4K) on icon</span>
+            </div>
+            <label class="dwnx-switch" style="transform: scale(0.9);">
+              <input type="checkbox" id="toggle-quality-badge" checked>
+              <span class="slider"></span>
+            </label>
+          </div>
+        </div>
+
+        <!-- Auto-Capture Downloads Switch -->
+        <div class="setting-item">
+          <div class="setting-meta">
+            <span class="setting-title">Auto-Capture Downloads</span>
+            <span class="setting-desc">Catch browser files (.zip, .exe, .iso, etc.)</span>
+          </div>
+          <label class="dwnx-switch">
+            <input type="checkbox" id="toggle-intercept" checked>
+            <span class="slider"></span>
+          </label>
+        </div>
+
+        <!-- Alt-Key Quick Bypass Switch -->
+        <div class="setting-item">
+          <div class="setting-meta">
+            <span class="setting-title">Alt-Key Quick Bypass</span>
+            <span class="setting-desc">Hold Alt while clicking to skip Downex</span>
+          </div>
+          <label class="dwnx-switch">
+            <input type="checkbox" id="toggle-alt-bypass" checked>
+            <span class="slider"></span>
+          </label>
+        </div>
+      </div>
+    </section>
+
   </div>
 
+  <!-- Clean Minimal Footer -->
+  <footer class="popup-footer">
+    <div style="display: flex; align-items: center; gap: 8px;">
+      <a href="https://download.gauravpatil.site" target="_blank" class="footer-endpoint" style="text-decoration: none;"
+        title="Official Downex Base Setup Portal (download.gauravpatil.site)">
+        <span data-icon="shield" data-icon-size="11" style="color: var(--dwnx-emerald-text);"></span>
+        <span>download.gauravpatil.site</span>
+      </a>
+    </div>
+
+    <!-- Dynamic Update Actions on Right -->
+    <div style="display: flex; align-items: center; gap: 6px;">
+      <!-- Shown ONLY when extension is up-to-date and synced -->
+      <div id="footer-up-to-date" class="footer-status-synced" style="display: none;"
+        title="Extension is synced with desktop engine">
+        <span data-icon="check" data-icon-size="10" style="color: var(--dwnx-emerald);"></span>
+        <span>Up to date</span>
+      </div>
+
+      <!-- Shown ONLY when a newer extension version or file update is required -->
+      <button type="button" class="footer-btn footer-btn-reload" id="btn-footer-reload" style="display: none;"
+        title="Reload extension to apply updates">
+        <span data-icon="refresh" data-icon-size="11"></span>
+        <span id="footer-reload-text">Reload to Update</span>
+      </button>
+    </div>
+  </footer>
+
+  <!-- Enterprise Drawer (Preserved for compatibility) -->
+  <div id="enterprise-drawer" style="display: none;"></div>
+
+  <script src="../common/icons.js"></script>
   <script src="popup.js"></script>
 </body>
+
 </html>

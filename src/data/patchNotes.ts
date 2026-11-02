@@ -15,6 +15,7 @@ export interface DynamicPatchNotes {
   rawNotes?: string;
   isCustom?: boolean;
   updatedAt?: number;
+  category?: 'app' | 'extension';
 }
 
 export function parseNotesToHighlights(rawText?: string): string[] {
@@ -65,6 +66,58 @@ export function getLatestCodebaseVersion(): string {
 }
 
 export const BASELINE_PATCH_NOTES: Record<string, DynamicPatchNotes> = {
+  '0.0.28': {
+    version: '0.0.28',
+    releaseDate: 'November 2, 2026',
+    title: 'Unified Extension v0.0.5 Auto-Update Pipeline & Dynamic UI Polish',
+    highlights: [
+          "Unified Extension v0.0.5 Auto-Update Pipeline",
+          "Dynamic UI Polish"
+    ],
+    rawNotes: 'v0.0.28: Unified Extension v0.0.5 Auto-Update Pipeline & Dynamic UI Polish',
+  },
+  '0.0.27': {
+    version: '0.0.27',
+    releaseDate: 'November 1, 2026',
+    title: 'Downex Browser Extension v0.0.4 Redesign, Dedicated Multi-Page Dashboard & 3-Layer Download Interception',
+    highlights: [
+      'Downex Extension v0.0.4 UI/UX Parity: Completely redesigned companion extension with Downex desktop visual identity, pure Zinc palette, cursive Damion wordmark, and Lucide vector icons',
+      'Dedicated Multi-Page Dashboard: Full-tab extension options console with sidebar navigation, filetype interception rules, media sniffer configuration, and batch page link scanner',
+      '3-Layer Download Interception Fallback: Air-gapped link grabbing with dynamic modal popup, secondary desktop UI fallback, and native browser download protection',
+      'In-DOM Dark Glassmorphic Media Pill: Upgraded floating stream grabber inside video players with emerald accents and resolution format selector',
+      'Automatic In-Process Extension Sync: Downex desktop seeds and hot-reloads canonical extension files in %LOCALAPPDATA% with seamless in-browser update prompt',
+      'Zero-Dependency & Antivirus Heuristic Protection: Clean WebExtension architecture with zero false positive flags across Windows Defender heuristic ML engines',
+    ],
+    rawNotes: 'v0.0.27: Downex companion extension v0.0.4 redesign, dedicated multi-page dashboard, and 3-layer download interception',
+  },
+  '0.0.26': {
+    version: '0.0.26',
+    releaseDate: 'November 1, 2026',
+    title: 'Event-Driven OTA Updates, High-Visibility Emerald Green Tray & Zero-Polling Supervisor',
+    highlights: [
+      'Authoritative Single-Dispatch Event Architecture: Shifted from periodic timer polling to Server-Sent Events (SSE) stream notifications directly from GPHost, delivering instantaneous update alerts to active installations',
+      'High-Visibility Emerald Green Tray Indicator: Upgraded system tray badge to a high-contrast Emerald Green indicator (#10B981) with dynamic frame animation and status tooltip synchronization',
+      'Background Event Handling & Instant Window Sync: Installations receive update events when minimized or in the system tray, automatically updating tray icons, native toast notifications, and re-syncing the UI upon window restoration',
+      'Zero-Polling Native Rust Supervisor: Eliminated interval-based checking threads in favor of persistent SSE listening and intelligent reconnect recovery with exponential backoff',
+      'Persistent Installation ID & Machine Association: Embedded persistent SQLite-backed installation identifier for reliable client-backend correlation without compromising privacy',
+      'Full Offline Recovery & Self-Healing: Background service automatically reconciles version state upon network reconnection or system wake without duplicate event processing',
+    ],
+    rawNotes: 'v0.0.26: Event-driven OTA notification architecture, high-visibility emerald green tray indicator, and zero-polling native supervisor',
+  },
+  '0.0.25': {
+    version: '0.0.25',
+    releaseDate: 'October 31, 2026',
+    title: 'Instant Responsive Modals, One-View Completion Dialog, Animated Telemetry Digits & Clean Dev Supervisor',
+    highlights: [
+      'Instant Dynamic Modal Architecture: Re-engineered modal and dialog lifecycle across the entire app with pre-warmed window templates, deferred non-essential background tasks, and zero-flash instant opening matching IDM responsiveness',
+      'Single-View Download Completion Dialog: Expanded completion modal to 580x380 with strict overflow-hidden constraints, removing vertical scrollbars and eliminating UI clutter ("Don\'t show this dialog again" and footer text)',
+      'Live Telemetry Digit Count Animations: Added smooth countup and fluctuation easing to Speed & Stats digit counters when switching tabs or loading telemetry metrics',
+      'Queues Single-View Spacing: Optimized empty queue container layout to eliminate vertical gaps and maintain a clean one-view layout without vertical scroll',
+      'Dev Process Supervisor & Priority: Automatic Vite heartbeat watchdog and conflict resolution that terminates background dev processes on port closure and prioritizes installed production app instances on port 18888',
+      'Production Reload Guard: Intercepted accidental webview reloads and keyboard shortcuts to guarantee an uninterrupted desktop application experience',
+    ],
+    rawNotes: 'v0.0.25: Instant responsive modals, one-view completion dialog, animated telemetry digits, queues single-view spacing, and clean dev supervisor',
+  },
   '0.0.24': {
     version: '0.0.24',
     releaseDate: 'October 30, 2026',
@@ -376,5 +429,24 @@ export const BASELINE_PATCH_NOTES: Record<string, DynamicPatchNotes> = {
       'Permanent, immutable base desktop installer for Windows x64 environments',
     ],
     rawNotes: 'v0.0.0: Lifetime base anchor installer with SQLite WAL engine and browser extension integration.',
+    category: 'app',
+  },
+};
+
+export const EXTENSION_BASELINE_PATCH_NOTES: Record<string, DynamicPatchNotes> = {
+  '0.0.3': {
+    version: '0.0.3',
+    releaseDate: 'November 1, 2026',
+    title: 'Modular Self-Updating Companion Extension & Stream Interception Engine',
+    category: 'extension',
+    highlights: [
+      'Modular Auto-Updating Architecture: Zero manual zip re-downloads — extension automatically negotiates, extracts, and hot-reloads updates directly on disk via Downex Desktop loopback bridge',
+      'Synchronous Link Interception: Synchronous ID reservation eliminates concurrency races between onCreated and onDeterminingFilename, fixing download cancellation bugs',
+      'Win32 True Foreground Elevation: Intercepted downloads trigger the native Download File Info dialog with HWND_TOPMOST priority, popping up directly over Chrome, Brave, and Edge',
+      'Adaptive Media Grabber: Seamlessly sniffs DASH, HLS, and HTML5 video/audio streams with floating in-player overlay pills and toolbar resolution badges',
+      'Self-Repair & Diagnostic Engine: In-popup 4-stage health check and repair terminal for token reconciliation, cache resetting, and loopback verification',
+      'Zero-Telemetry Local Bridge: Strict localhost communication on 127.0.0.1:18888 with absolute user privacy and zero external tracking',
+    ],
+    rawNotes: 'v0.0.3 (Companion Extension): Modular auto-updating companion extension, synchronous link interception, Win32 foreground elevation, and adaptive stream grabber',
   },
 };

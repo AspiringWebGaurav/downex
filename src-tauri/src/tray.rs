@@ -8,6 +8,7 @@ static TRAY_UPDATE_STATUS: RwLock<TrayUpdateState> = RwLock::new(TrayUpdateState
     status: UpdateTrayStatus::Idle,
     version: None,
     manifest: None,
+    deferred_due_to_downloads: false,
 });
 
 #[derive(Clone, Debug, PartialEq)]
@@ -22,6 +23,75 @@ pub struct TrayUpdateState {
     pub status: UpdateTrayStatus,
     pub version: Option<String>,
     pub manifest: Option<crate::ota::ReleaseManifest>,
+    pub deferred_due_to_downloads: bool,
+}
+
+pub fn is_update_deferred() -> bool {
+    TRAY_UPDATE_STATUS.read().deferred_due_to_downloads
+}
+
+pub fn defer_update_due_to_downloads<R: Runtime>(
+    app: &AppHandle<R>,
+    version: Option<String>,
+    manifest: Option<crate::ota::ReleaseManifest>,
+) {
+    {
+        let mut guard = TRAY_UPDATE_STATUS.write();
+        guard.deferred_due_to_downloads = true;
+        guard.status = UpdateTrayStatus::Idle;
+        guard.version = version;
+        guard.manifest = manifest.clone();
+    }
+    let _ = set_tray_icon_state(app, "idle");
+    let _ = refresh_tray_menu(app);
+    let _ = app.emit("downex-update-deferred", &manifest);
+}
+
+pub fn on_downloads_completed<R: Runtime>(app: &AppHandle<R>) {
+    let (should_reveal, version, manifest) = {
+        let mut guard = TRAY_UPDATE_STATUS.write();
+        if guard.deferred_due_to_downloads && guard.manifest.is_some() {
+            guard.deferred_due_to_downloads = false;
+            guard.status = UpdateTrayStatus::Available;
+            (true, guard.version.clone(), guard.manifest.clone())
+        } else {
+            (false, None, None)
+        }
+    };
+
+    if should_reveal {
+        let remote_ver = version.unwrap_or_else(|| "latest".to_string());
+        eprintln!(
+            "[Downex OTA] All downloads completed! Revealing deferred update v{}",
+            remote_ver
+        );
+
+        // 1. Change Tray Icon to Emerald Green!
+        let _ = set_tray_icon_state(app, "update_available");
+        if let Some(tray) = app.tray_by_id("main-tray") {
+            let _ = tray.set_tooltip(Some(&format!(
+                "Downex • Update v{} Available (Click to view)",
+                remote_ver
+            )));
+        }
+        let _ = refresh_tray_menu(app);
+
+        // 2. Dispatch Non-Intrusive Windows Native Toast Notification!
+        use tauri_plugin_notification::NotificationExt;
+        let _ = app
+            .notification()
+            .builder()
+            .title("Downex")
+            .body(format!(
+                "Downex v{} update is ready. All downloads have finished.",
+                remote_ver
+            ))
+            .show();
+
+        // 3. Emit real-time unblocked event to frontend!
+        let _ = app.emit("downex-update-unblocked", &manifest);
+        let _ = app.emit("downex-update-detected", &manifest);
+    }
 }
 
 pub fn get_pending_update_manifest() -> Option<crate::ota::ReleaseManifest> {
@@ -45,7 +115,7 @@ pub fn set_tray_update_info<R: Runtime>(
     manifest: Option<crate::ota::ReleaseManifest>,
 ) {
     let new_status = match status {
-        "available" => UpdateTrayStatus::Available,
+        "available" | "update_available" => UpdateTrayStatus::Available,
         "ready" => UpdateTrayStatus::Ready,
         _ => UpdateTrayStatus::Idle,
     };
@@ -355,6 +425,9 @@ pub fn setup_system_tray<R: Runtime>(app: &AppHandle<R>) -> Result<TrayIcon<R>, 
                             let _ = window.show();
                             let _ = window.unminimize();
                             let _ = window.set_focus();
+                            if let Some(manifest) = get_pending_update_manifest() {
+                                let _ = app.emit("downex-update-detected", &manifest);
+                            }
                         }
                     } else {
                         let _ = create_or_show_main_window(app);
@@ -372,7 +445,7 @@ pub fn setup_system_tray<R: Runtime>(app: &AppHandle<R>) -> Result<TrayIcon<R>, 
 pub fn set_tray_icon_state<R: Runtime>(app: &AppHandle<R>, state: &str) -> Result<(), Box<dyn std::error::Error>> {
     if let Some(tray) = app.tray_by_id("main-tray") {
         let bytes: &[u8] = match state {
-            "update_available" | "downloading" => include_bytes!("../icons/32x32-update-1.png"),
+            "update_available" | "available" | "downloading" => include_bytes!("../icons/32x32-update-1.png"),
             "downloading_pulse" => include_bytes!("../icons/32x32-update-2.png"),
             "ready" => include_bytes!("../icons/32x32-update-ready.png"),
             _ => include_bytes!("../icons/32x32.png"),
@@ -394,7 +467,12 @@ pub fn create_or_show_main_window<R: Runtime>(app: &AppHandle<R>) -> Result<taur
         let _ = window.show();
         let _ = window.unminimize();
         let _ = window.set_focus();
+        #[cfg(target_os = "windows")]
+        crate::commands::force_window_to_foreground(&window);
         let _ = refresh_tray_menu(app);
+        if let Some(manifest) = get_pending_update_manifest() {
+            let _ = app.emit("downex-update-detected", &manifest);
+        }
         Ok(window)
     } else {
         let icon_res = Image::from_bytes(include_bytes!("../icons/128x128.png"));
@@ -413,6 +491,9 @@ pub fn create_or_show_main_window<R: Runtime>(app: &AppHandle<R>) -> Result<taur
             let _ = window.set_icon(icon);
         }
         let _ = refresh_tray_menu(app);
+        if let Some(manifest) = get_pending_update_manifest() {
+            let _ = app.emit("downex-update-detected", &manifest);
+        }
         Ok(window)
     }
 }

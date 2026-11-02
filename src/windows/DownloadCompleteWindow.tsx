@@ -49,15 +49,15 @@ const DEFAULT_BROWSER_COMPLETE_MOCK: DownloadCompletePayload = {
 };
 
 export const DownloadCompleteWindow: React.FC = () => {
-  const [payload, setPayload] = useState<DownloadCompletePayload | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-  const [dontShowAgain, setDontShowAgain] = useState(() => {
+  const [payload, setPayload] = useState<DownloadCompletePayload | null>(() => {
     try {
-      return localStorage.getItem('downex_dont_show_complete_dialog') === 'true';
+      const cached = sessionStorage.getItem('downex_last_complete_payload');
+      return cached ? JSON.parse(cached) : null;
     } catch {
-      return false;
+      return null;
     }
   });
+  const [isLoading, setIsLoading] = useState<boolean>(() => !payload);
   const [copiedField, setCopiedField] = useState<'url' | 'path' | null>(null);
   const [isDarkTheme, setIsDarkTheme] = useState<boolean>(() => {
     try {
@@ -107,17 +107,14 @@ export const DownloadCompleteWindow: React.FC = () => {
 
   // Fetch initial dynamic payload on mount or listen for completed downloads
   useEffect(() => {
-    // 1. Check if user already disabled this dialog
-    if (dontShowAgain && isTauri) {
-      closeDownloadCompleteDialog();
-      return;
-    }
-
-    // 2. Fetch payload from Rust backend (close window if no valid download payload)
+    // 1. Fetch payload from Rust backend (close window if no valid download payload)
     getDownloadCompletePayload().then((p) => {
       if (p && p.url && p.url.trim()) {
         setPayload(p);
         setIsLoading(false);
+        try {
+          sessionStorage.setItem('downex_last_complete_payload', JSON.stringify(p));
+        } catch {}
       } else {
         if (isTauri) {
           closeDownloadCompleteDialog();
@@ -135,15 +132,14 @@ export const DownloadCompleteWindow: React.FC = () => {
       }
     });
 
-    // 3. Listen to live events (both live completions and manual details triggers)
+    // 2. Listen to live events (both live completions and manual details triggers)
     const handleIncoming = (p: DownloadCompletePayload) => {
-      if (dontShowAgain && isTauri) {
-        closeDownloadCompleteDialog();
-        return;
-      }
       if (p && p.url && p.url.trim()) {
         setPayload(p);
         setIsLoading(false);
+        try {
+          sessionStorage.setItem('downex_last_complete_payload', JSON.stringify(p));
+        } catch {}
       }
     };
 
@@ -154,7 +150,7 @@ export const DownloadCompleteWindow: React.FC = () => {
       unlistenCompleted();
       unlistenOpen();
     };
-  }, [dontShowAgain]);
+  }, []);
 
   // Handle Esc key to close
   useEffect(() => {
@@ -188,13 +184,6 @@ export const DownloadCompleteWindow: React.FC = () => {
     }
   };
 
-  const handleDontShowChange = (checked: boolean) => {
-    setDontShowAgain(checked);
-    try {
-      localStorage.setItem('downex_dont_show_complete_dialog', String(checked));
-    } catch {}
-  };
-
   const copyToClipboard = (text: string, field: 'url' | 'path') => {
     try {
       navigator.clipboard?.writeText(text).catch(() => {});
@@ -207,7 +196,9 @@ export const DownloadCompleteWindow: React.FC = () => {
   const formattedSize = formatBytes(totalBytes);
 
   const CompleteCard = (
-    <div className="w-[580px] max-w-full flex flex-col bg-white dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 font-sans select-none border border-zinc-300/80 dark:border-zinc-800 shadow-2xl rounded-xl overflow-hidden">
+    <div className={`w-full flex-1 flex flex-col bg-white dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 font-sans select-none overflow-hidden ${
+      isTauri ? 'h-full' : 'w-[580px] h-[380px] max-w-full border border-zinc-300/80 dark:border-zinc-800 shadow-2xl rounded-xl'
+    }`}>
       {/* Titlebar (Draggable with standard window buttons) */}
       <div
         data-tauri-drag-region
@@ -245,8 +236,8 @@ export const DownloadCompleteWindow: React.FC = () => {
         </div>
       </div>
 
-      {/* Main Body */}
-      <div className="flex-1 p-4 flex flex-col justify-between overflow-y-auto space-y-3.5 text-xs">
+      {/* Main Body - Strictly One View without Vertical Scroll */}
+      <div className="flex-1 p-4.5 flex flex-col justify-between overflow-hidden gap-3 text-xs">
         {isLoading && !payload ? (
           <div className="flex-1 flex flex-col items-center justify-center gap-2 py-8 text-zinc-400">
             <div className="w-6 h-6 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin" />
@@ -354,7 +345,7 @@ export const DownloadCompleteWindow: React.FC = () => {
             </div>
 
             {/* Action Buttons Row (Open, Open With, Open folder, Close) */}
-            <div className="grid grid-cols-4 gap-2 pt-1">
+            <div className="grid grid-cols-4 gap-2 pt-0.5">
               <Button
                 variant="primary-emerald"
                 size="md"
@@ -412,42 +403,14 @@ export const DownloadCompleteWindow: React.FC = () => {
           </>
         )}
 
-        {/* Footer: Don't show this dialog again checkbox & Downex badge */}
-        <div className="flex items-center justify-between pt-1 border-t border-zinc-100 dark:border-zinc-900 text-[11px] text-zinc-500 dark:text-zinc-400">
-          <label className="flex items-center gap-2 cursor-pointer select-none group">
-            <input
-              type="checkbox"
-              checked={dontShowAgain}
-              onChange={(e) => handleDontShowChange(e.target.checked)}
-              className="w-3.5 h-3.5 rounded border-zinc-300 dark:border-zinc-700 text-emerald-600 focus:ring-emerald-500 cursor-pointer accent-emerald-600"
-            />
-            <span className="group-hover:text-zinc-800 dark:group-hover:text-zinc-200 transition-colors">
-              Don't show this dialog again
-            </span>
-          </label>
 
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={async () => {
-                await restoreManagerWindow();
-              }}
-              className="text-[10px] text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200 underline cursor-pointer"
-              title="Open main Downex window"
-            >
-              Show Downex
-            </button>
-            <span className="text-zinc-300 dark:text-zinc-700">•</span>
-            <span className="text-[10px] font-mono text-zinc-400">Downex Core</span>
-          </div>
-        </div>
       </div>
     </div>
   );
 
   if (isTauri) {
     return (
-      <div className="w-screen h-screen flex flex-col bg-white dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 font-sans select-none border border-zinc-300/80 dark:border-zinc-800 shadow-2xl rounded-lg overflow-hidden">
+      <div className="w-screen h-screen flex flex-col bg-white dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 font-sans select-none overflow-hidden">
         {CompleteCard}
       </div>
     );
@@ -494,11 +457,13 @@ export const DownloadCompleteWindow: React.FC = () => {
         </div>
       </div>
 
-      {CompleteCard}
+      <div className="w-[580px] max-w-full rounded-xl shadow-2xl border border-zinc-300/80 dark:border-zinc-800 bg-white dark:bg-zinc-950 overflow-hidden ring-1 ring-black/5 dark:ring-white/10 transition-all flex flex-col">
+        {CompleteCard}
+      </div>
 
       <div className="w-[580px] max-w-full mt-2.5 px-2 flex items-center justify-between text-[11px] text-zinc-500 font-mono">
-        <span>Native Dialog Size: 580 × 320 px</span>
-        <span>Simulated Desktop Mode</span>
+        <span>Native Dialog Size: 580 × 380 px</span>
+        <span>One-View Mode (No Vertical Scroll)</span>
       </div>
     </div>
   );

@@ -195,13 +195,13 @@ export const RecoveryActionModal: React.FC<RecoveryActionModalProps> = ({
 
   return (
     <div
-      className="fixed inset-0 z-50 bg-black/65 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in duration-150 select-none"
+      className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4 select-none transition-opacity duration-100"
       onClick={() => {
         if (!isLoading) onClose();
       }}
     >
       <div
-        className="w-full max-w-lg rounded-2xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 shadow-2xl overflow-hidden animate-in zoom-in-95 duration-150"
+        className="w-full max-w-lg rounded-2xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 shadow-2xl overflow-hidden modal-enter-instant"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Modal Header */}

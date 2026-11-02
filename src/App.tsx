@@ -16,7 +16,7 @@ import { PatchNotesModal } from './components/PatchNotesModal';
 import { QueueGuideModal } from './components/Modals/QueueGuideModal';
 import { SettingsView } from './components/SettingsView';
 import { TelemetryView } from './components/TelemetryView';
-import { onOpenNewDownloadModal, restoreManagerWindow, onNavigate, onCheckUpdatesFromTray, onOtaRollbackRecovered, notifyDomReady } from './services/tauriService';
+import { onOpenNewDownloadModal, onOpenDownloadInfoModal, restoreManagerWindow, onNavigate, onCheckUpdatesFromTray, onOtaRollbackRecovered, notifyDomReady } from './services/tauriService';
 import './App.css';
 
 export const App: React.FC = () => {
@@ -129,6 +129,11 @@ export const App: React.FC = () => {
       restoreManagerWindow().catch(() => {});
     });
 
+    const unlistenDownloadInfo = onOpenDownloadInfoModal((payload) => {
+      openNewModalWithData(payload);
+      restoreManagerWindow().catch(() => {});
+    });
+
     const unlistenNavigate = onNavigate((view) => {
       if (view) setSelectedView(view);
     });
@@ -146,6 +151,7 @@ export const App: React.FC = () => {
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('downex-open-new-download', handleBrowserOpen);
       unlistenTrayModal();
+      unlistenDownloadInfo();
       unlistenNavigate();
       unlistenCheckUpdates();
       unlistenRollback();
@@ -158,7 +164,7 @@ export const App: React.FC = () => {
       <DownexWindowHeader />
 
       {/* Main App Body */}
-      <div className="flex-1 flex relative min-h-0 overflow-hidden">
+      <div className="flex-1 flex relative min-h-0 z-20">
         {/* Left Navigation Sidebar */}
         <DownexSidebar darkMode={darkMode} setDarkMode={setDarkMode} />
 

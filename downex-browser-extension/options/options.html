@@ -1,0 +1,379 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Downex — Extension Dashboard</title>
+  <link rel="icon" type="image/png" href="../icons/icon32.png">
+  <link rel="stylesheet" href="../common/downex-theme.css">
+  <link rel="stylesheet" href="options.css">
+</head>
+<body>
+  <div class="dashboard-layout">
+    <!-- LEFT SIDEBAR (Parity with DownexSidebar.tsx) -->
+    <aside class="dashboard-sidebar">
+      <div>
+        <div class="sidebar-brand" id="brand-home" title="Downex Companion Extension">
+          <img src="../icons/icon-arrow.png" alt="Downex" class="sidebar-brand-icon">
+          <span class="sidebar-brand-title">downex</span>
+          <span class="sidebar-version-pill" id="dashboard-ext-ver">v0.0.0</span>
+        </div>
+
+        <nav class="sidebar-nav">
+          <button type="button" class="nav-item active" data-section="overview">
+            <span data-icon="activity" data-icon-size="14"></span>
+            <span>Overview & Bridge</span>
+          </button>
+          <button type="button" class="nav-item" data-section="rules">
+            <span data-icon="sliders" data-icon-size="14"></span>
+            <span>Interception Rules</span>
+          </button>
+          <button type="button" class="nav-item" data-section="media">
+            <span data-icon="video" data-icon-size="14"></span>
+            <span>Media & Streams</span>
+          </button>
+          <button type="button" class="nav-item" data-section="batch">
+            <span data-icon="layers" data-icon-size="14"></span>
+            <span>Batch Page Scanner</span>
+          </button>
+          <button type="button" class="nav-item" data-section="diagnostics">
+            <span data-icon="wrench" data-icon-size="14"></span>
+            <span>Diagnostics & Repair</span>
+          </button>
+        </nav>
+      </div>
+
+      <div class="sidebar-footer">
+        <!-- Engine Status Pill with Ping Indicator -->
+        <div class="dwnx-pill dwnx-pill-emerald" id="sidebar-engine-pill" style="justify-content: center; width: 100%; cursor: pointer;" title="Loopback connection state">
+          <span class="dwnx-dot dwnx-dot-pulse"></span>
+          <span id="sidebar-engine-text">Connected (127.0.0.1)</span>
+        </div>
+
+        <!-- Dark/Light Theme Switcher -->
+        <button type="button" id="btn-theme-toggle" class="dwnx-btn dwnx-btn-outline dwnx-btn-sm" style="width: 100%; justify-content: center; gap: 6px;">
+          <span data-icon="moon" data-icon-size="13"></span>
+          <span id="theme-btn-label">Dark Theme</span>
+        </button>
+      </div>
+    </aside>
+
+    <!-- MAIN CONTENT VIEW (Parity with SettingsView.tsx) -->
+    <main class="dashboard-content">
+      <div class="content-container">
+        <!-- Dynamic Header with Feedback Notification -->
+        <header class="content-header">
+          <div class="header-title-block">
+            <h1 id="page-title">
+              <span data-icon="activity" data-icon-size="18"></span>
+              <span id="page-title-text">Overview & Engine Bridge</span>
+            </h1>
+            <p id="page-subtitle">Real-time status of Downex desktop engine and browser extension bridge.</p>
+          </div>
+
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <div id="save-toast" class="dwnx-pill dwnx-pill-emerald" style="display: none;">
+              <span data-icon="check" data-icon-size="11"></span>
+              <span>Preferences Saved</span>
+            </div>
+            <button type="button" id="btn-reset-defaults" class="dwnx-btn dwnx-btn-outline dwnx-btn-sm" title="Reset all extension rules to recommended defaults">
+              <span data-icon="refresh" data-icon-size="11"></span>
+              <span>Reset Defaults</span>
+            </button>
+          </div>
+        </header>
+        <!-- Disconnected Engine Lock Banner -->
+        <div id="dashboard-offline-banner" class="locked-screen" style="display: none; margin-bottom: 16px;">
+          <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;">
+            <div>
+              <div class="locked-header">
+                <span data-icon="shield" data-icon-size="14"></span>
+                <span>Downex Desktop Engine Required</span>
+              </div>
+              <p class="locked-desc" style="margin-bottom: 0;">
+                The desktop engine is not responding on <code>127.0.0.1:18888</code>. Start Downex or install it to enable download interception and high-speed acceleration.
+              </p>
+            </div>
+            <div style="display: flex; gap: 8px; flex-shrink: 0;">
+              <a href="https://download.gauravpatil.site" target="_blank" class="dwnx-btn dwnx-btn-emerald dwnx-btn-sm" style="text-decoration: none;">
+                <span data-icon="download" data-icon-size="11"></span>
+                <span>Download App</span>
+              </a>
+              <button type="button" id="btn-dashboard-retry" class="dwnx-btn dwnx-btn-outline dwnx-btn-sm">
+                <span data-icon="refresh" data-icon-size="11"></span>
+                <span>Retry Connection</span>
+              </button>
+            </div>
+          </div>
+        </div>
+
+
+        <!-- SECTION 1: OVERVIEW & ENGINE BRIDGE -->
+        <section id="section-overview" class="dashboard-section active">
+          <div class="section-label">
+            <span data-icon="activity" data-icon-size="13"></span>
+            <span>Engine Telemetry & Handshake</span>
+          </div>
+
+          <div class="metric-grid">
+            <div class="metric-card">
+              <div class="metric-label">Engine Status</div>
+              <div class="metric-value" id="val-engine-status" style="color: var(--dwnx-emerald-dark);">Connected</div>
+            </div>
+            <div class="metric-card">
+              <div class="metric-label">App Version</div>
+              <div class="metric-value" id="val-app-version">v0.0.0</div>
+            </div>
+            <div class="metric-card">
+              <div class="metric-label">Loopback Ping</div>
+              <div class="metric-value" id="val-ping-latency">< 1 ms</div>
+            </div>
+          </div>
+
+          <div class="clubbed-card">
+            <div class="clubbed-row">
+              <div class="row-info">
+                <span class="row-title">Local Bridge Endpoint</span>
+                <span class="row-desc">Air-gapped HTTP REST loopback on <code>http://127.0.0.1:18888</code>. Zero external network exposure.</span>
+              </div>
+              <div class="dwnx-pill dwnx-pill-emerald">
+                <span class="dwnx-dot"></span>
+                <span>Active</span>
+              </div>
+            </div>
+
+            <div class="clubbed-row">
+              <div class="row-info">
+                <span class="row-title">Authentication Handshake Token</span>
+                <span class="row-desc">Cryptographically negotiated session token authorizing extension to communicate with desktop engine.</span>
+              </div>
+              <span class="dwnx-pill" id="val-token-preview" style="font-family: var(--dwnx-font-mono);">Configured</span>
+            </div>
+
+            <div class="clubbed-row">
+              <div class="row-info">
+                <span class="row-title">Companion Extension Package</span>
+                <span class="row-desc">Manifest V3 auto-updating companion managed directly by Downex desktop shell.</span>
+              </div>
+              <button type="button" id="btn-reload-ext" class="dwnx-btn dwnx-btn-secondary dwnx-btn-sm">
+                <span data-icon="refresh" data-icon-size="11"></span>
+                <span>Reload Extension</span>
+              </button>
+            </div>
+          </div>
+        </section>
+
+        <!-- SECTION 2: INTERCEPTION RULES -->
+        <section id="section-rules" class="dashboard-section">
+          <div class="section-label">
+            <span data-icon="sliders" data-icon-size="13"></span>
+            <span>Automatic Download Interception</span>
+          </div>
+
+          <div class="clubbed-card">
+            <div class="clubbed-row">
+              <div class="row-info">
+                <span class="row-title">Auto-Capture Browser Downloads</span>
+                <span class="row-desc">Automatically catch downloads started in Chrome, Edge, and Brave and hand them off to Downex multi-connection engine.</span>
+              </div>
+              <label class="dwnx-switch">
+                <input type="checkbox" id="rules-toggle-intercept" checked>
+                <span class="slider"></span>
+              </label>
+            </div>
+
+            <div class="clubbed-row">
+              <div class="row-info">
+                <span class="row-title">Alt-Key Quick Bypass</span>
+                <span class="row-desc">Hold the <kbd style="font-family: var(--dwnx-font-mono); padding: 1px 4px; border: 1px solid var(--dwnx-card-border); border-radius: 4px;">Alt</kbd> key while clicking a download link to temporarily bypass Downex and use standard browser downloader.</span>
+              </div>
+              <label class="dwnx-switch">
+                <input type="checkbox" id="rules-toggle-alt" checked>
+                <span class="slider"></span>
+              </label>
+            </div>
+
+            <div class="clubbed-row">
+              <div class="row-info">
+                <span class="row-title">Minimum File Size for Interception</span>
+                <span class="row-desc">Files smaller than this threshold will be downloaded by the browser natively. Default: 1 MB.</span>
+              </div>
+              <select id="rules-min-size" class="dwnx-input" style="width: 140px;">
+                <option value="0">Always catch (0 KB)</option>
+                <option value="524288">512 KB</option>
+                <option value="1048576" selected>1 MB (Default)</option>
+                <option value="5242880">5 MB</option>
+                <option value="10485760">10 MB</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="section-label" style="margin-top: 14px;">
+            <span data-icon="layers" data-icon-size="13"></span>
+            <span>Captured File Extensions</span>
+          </div>
+
+          <div class="clubbed-card">
+            <div class="tag-cloud" id="tag-cloud-extensions">
+              <!-- Dynamically populated tags -->
+            </div>
+            <div class="tag-input-row">
+              <input type="text" id="input-new-extension" class="dwnx-input" placeholder="Add extension (e.g., torrent, dmg, deb)..." style="flex: 1;">
+              <button type="button" id="btn-add-extension" class="dwnx-btn dwnx-btn-emerald dwnx-btn-sm">
+                Add Extension
+              </button>
+            </div>
+          </div>
+        </section>
+
+        <!-- SECTION 3: MEDIA & VIDEO SNIFFER -->
+        <section id="section-media" class="dashboard-section">
+          <div class="section-label">
+            <span data-icon="video" data-icon-size="13"></span>
+            <span>Stream Grabber & In-Player Controls</span>
+          </div>
+
+          <div class="clubbed-card">
+            <div class="clubbed-row">
+              <div class="row-info">
+                <span class="row-title">Video & Stream Grabber Engine</span>
+                <span class="row-desc">Sniff HTML5, DASH (MPD), and HLS (M3U8) multimedia streams on YouTube and streaming sites.</span>
+              </div>
+              <label class="dwnx-switch">
+                <input type="checkbox" id="media-toggle-master" checked>
+                <span class="slider"></span>
+              </label>
+            </div>
+
+            <div class="clubbed-row">
+              <div class="row-info">
+                <span class="row-title">In-Player Overlay Pill</span>
+                <span class="row-desc">Attach an ergonomic floating download button directly inside video player containers with available stream resolutions.</span>
+              </div>
+              <label class="dwnx-switch">
+                <input type="checkbox" id="media-toggle-pill" checked>
+                <span class="slider"></span>
+              </label>
+            </div>
+
+            <div class="clubbed-row">
+              <div class="row-info">
+                <span class="row-title">Toolbar Quality Badge</span>
+                <span class="row-desc">Display stream resolution tags (e.g. 1080p, 4K) directly on the browser extension icon when media is detected.</span>
+              </div>
+              <label class="dwnx-switch">
+                <input type="checkbox" id="media-toggle-badge" checked>
+                <span class="slider"></span>
+              </label>
+            </div>
+          </div>
+        </section>
+
+        <!-- SECTION 4: BATCH PAGE SCANNER -->
+        <section id="section-batch" class="dashboard-section">
+          <div class="section-label">
+            <span data-icon="search" data-icon-size="13"></span>
+            <span>Tab Link Extractor</span>
+          </div>
+
+          <div class="clubbed-card" style="padding: 14px 16px;">
+            <div style="display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px;">
+              <button type="button" id="btn-batch-scan" class="dwnx-btn dwnx-btn-emerald">
+                <span data-icon="search" data-icon-size="13"></span>
+                <span>Scan Active Browser Tab</span>
+              </button>
+
+              <div style="display: flex; gap: 6px;">
+                <button type="button" class="dwnx-pill dwnx-pill-emerald active" data-batch-filter="all">All</button>
+                <button type="button" class="dwnx-pill" data-batch-filter="media">Media</button>
+                <button type="button" class="dwnx-pill" data-batch-filter="archives">Archives</button>
+                <button type="button" class="dwnx-pill" data-batch-filter="docs">Documents</button>
+              </div>
+            </div>
+
+            <div class="batch-table-container">
+              <table class="batch-table">
+                <thead>
+                  <tr>
+                    <th style="width: 32px;"><input type="checkbox" id="batch-check-all" checked></th>
+                    <th>Name / Resource</th>
+                    <th>Type</th>
+                    <th>URL</th>
+                  </tr>
+                </thead>
+                <tbody id="batch-table-body">
+                  <tr>
+                    <td colspan="4" style="text-align: center; color: var(--dwnx-text-muted); padding: 24px;">
+                      Click "Scan Active Browser Tab" to extract all media and downloadable links from your current page.
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            <div style="display: flex; justify-content: flex-end; margin-top: 12px;">
+              <button type="button" id="btn-batch-download" class="dwnx-btn dwnx-btn-emerald" disabled>
+                <span data-icon="download" data-icon-size="13"></span>
+                <span>Queue Selected in Downex</span>
+              </button>
+            </div>
+          </div>
+        </section>
+
+        <!-- SECTION 5: DIAGNOSTICS & REPAIR -->
+        <section id="section-diagnostics" class="dashboard-section">
+          <div class="section-label">
+            <span data-icon="wrench" data-icon-size="13"></span>
+            <span>Self-Repair & Handshake Diagnostics</span>
+          </div>
+
+          <div class="clubbed-card">
+            <div class="clubbed-row">
+              <div class="row-info">
+                <span class="row-title">Test Engine Ping Latency</span>
+                <span class="row-desc">Send immediate round-trip diagnostic request to verify local loopback latency and socket responsiveness.</span>
+              </div>
+              <button type="button" id="btn-run-ping-test" class="dwnx-btn dwnx-btn-secondary dwnx-btn-sm">
+                <span data-icon="refresh" data-icon-size="11"></span>
+                <span>Run Ping Test</span>
+              </button>
+            </div>
+
+            <div class="clubbed-row">
+              <div class="row-info">
+                <span class="row-title">Renegotiate Security Token</span>
+                <span class="row-desc">Clear cached auth tokens in extension storage and request a fresh handshake key from the desktop engine.</span>
+              </div>
+              <button type="button" id="btn-refresh-token" class="dwnx-btn dwnx-btn-outline dwnx-btn-sm">
+                <span>Renegotiate</span>
+              </button>
+            </div>
+
+            <div class="clubbed-row">
+              <div class="row-info">
+                <span class="row-title">Comprehensive Self-Repair</span>
+                <span class="row-desc">Verifies MV3 service worker active state, resets alarms, flushes corrupted connection caches, and tests download dispatching.</span>
+              </div>
+              <button type="button" id="btn-run-full-repair" class="dwnx-btn dwnx-btn-emerald dwnx-btn-sm">
+                <span data-icon="wrench" data-icon-size="11"></span>
+                <span>Run Full Self-Repair</span>
+              </button>
+            </div>
+          </div>
+
+          <div class="section-label" style="margin-top: 14px;">
+            <span data-icon="terminal" data-icon-size="13"></span>
+            <span>Diagnostic Event Log</span>
+          </div>
+
+          <pre id="diagnostic-log" class="diagnostic-terminal">Ready. Diagnostic terminal initialized. Click "Run Ping Test" or "Run Full Self-Repair" to execute diagnostics.</pre>
+        </section>
+      </div>
+    </main>
+  </div>
+
+  <script src="../common/icons.js"></script>
+  <script src="options.js"></script>
+</body>
+</html>
+

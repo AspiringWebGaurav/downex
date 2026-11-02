@@ -153,18 +153,67 @@ fn main() {
         }
         write_to_stdout("\r\n[Downex] Starting background service in system tray (Port 18888)...\r\n[Downex] Optimized low-RAM background mode active.\r\n\r\n");
     } else {
-        // 5. Foreground Startup Mode: If an instance is already running in background, bring its window to front!
+        // 5. Foreground Startup Mode
+        let current_exe = std::env::current_exe().unwrap_or_default();
+        let current_exe_lower = current_exe.to_string_lossy().to_lowercase();
+        let is_current_dev = current_exe_lower.contains("target\\debug") || current_exe_lower.contains("target/debug");
+
         if let Ok(mut stream) = std::net::TcpStream::connect_timeout(
             &std::net::SocketAddr::from(([127, 0, 0, 1], 18888)),
             std::time::Duration::from_millis(500),
         ) {
             use std::io::{Read, Write};
-            let req = "POST /api/bring_to_front HTTP/1.1\r\nHost: 127.0.0.1:18888\r\nConnection: close\r\nContent-Length: 0\r\n\r\n";
-            let _ = stream.write_all(req.as_bytes());
-            let mut resp = String::new();
-            let _ = stream.read_to_string(&mut resp);
-            write_to_stdout("\r\n[Downex] Activated running background instance.\r\n\r\n");
-            return;
+
+            // Query /api/ping to check whether the running instance is a development instance
+            let ping_req = "GET /api/ping HTTP/1.1\r\nHost: 127.0.0.1:18888\r\nConnection: close\r\n\r\n";
+            let _ = stream.write_all(ping_req.as_bytes());
+            let mut ping_resp = String::new();
+            let _ = stream.read_to_string(&mut ping_resp);
+
+            let is_running_dev = ping_resp.contains("\"is_dev\":true")
+                || ping_resp.to_lowercase().contains("target\\debug")
+                || ping_resp.to_lowercase().contains("target/debug");
+
+            if !is_current_dev && is_running_dev {
+                // The user launched their INSTALLED production app, but an orphaned DEV instance is holding port 18888!
+                // Terminate the dev instance immediately so the installed app can take over and run cleanly.
+                if let Ok(mut stop_stream) = std::net::TcpStream::connect_timeout(
+                    &std::net::SocketAddr::from(([127, 0, 0, 1], 18888)),
+                    std::time::Duration::from_millis(500),
+                ) {
+                    let stop_req = "POST /api/stop HTTP/1.1\r\nHost: 127.0.0.1:18888\r\nConnection: close\r\nContent-Length: 0\r\n\r\n";
+                    let _ = stop_stream.write_all(stop_req.as_bytes());
+                }
+
+                #[cfg(target_os = "windows")]
+                {
+                    use std::os::windows::process::CommandExt;
+                    let _ = std::process::Command::new("powershell.exe")
+                        .args([
+                            "-NoProfile",
+                            "-Command",
+                            "Get-Process -Name downex -ErrorAction SilentlyContinue | Where-Object { $_.Path -like '*target\\debug*' } | Stop-Process -Force",
+                        ])
+                        .creation_flags(0x08000000)
+                        .output();
+                }
+
+                std::thread::sleep(std::time::Duration::from_millis(300));
+                write_to_stdout("\r\n[Downex] Cleared stale development instance. Launching installed application...\r\n\r\n");
+                // Continue execution into downex_lib::run() as the installed app!
+            } else {
+                let req = "POST /api/bring_to_front HTTP/1.1\r\nHost: 127.0.0.1:18888\r\nConnection: close\r\nContent-Length: 0\r\n\r\n";
+                if let Ok(mut front_stream) = std::net::TcpStream::connect_timeout(
+                    &std::net::SocketAddr::from(([127, 0, 0, 1], 18888)),
+                    std::time::Duration::from_millis(500),
+                ) {
+                    let _ = front_stream.write_all(req.as_bytes());
+                    let mut resp = String::new();
+                    let _ = front_stream.read_to_string(&mut resp);
+                    write_to_stdout("\r\n[Downex] Activated running background instance.\r\n\r\n");
+                    return;
+                }
+            }
         }
     }
 

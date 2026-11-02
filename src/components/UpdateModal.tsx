@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { Button } from './ui/Button';
 import {
   X,
@@ -13,6 +13,7 @@ import {
   Zap,
 } from 'lucide-react';
 import { useAppVersionStore } from '../stores/appVersionStore';
+import { useDownloadStore } from '../stores/downloadStore';
 import { compareSemver } from '../utils/version';
 import { formatBytes } from '../utils/format';
 
@@ -25,6 +26,13 @@ export const UpdateModal: React.FC = () => {
   const checkForUpdates = useAppVersionStore((state) => state.checkForUpdates);
   const downloadAndApplyUpdate = useAppVersionStore((state) => state.downloadAndApplyUpdate);
   const installAndRestart = useAppVersionStore((state) => state.installAndRestart);
+
+  const downloadItems = useDownloadStore((state) => state.items);
+  const activeDownloads = useMemo(
+    () => downloadItems.filter((i) => i.status === 'downloading' || i.status === 'probing'),
+    [downloadItems]
+  );
+  const hasActiveDownloads = activeDownloads.length > 0;
 
   const [isLoading, setIsLoading] = useState(false);
   const [isCloseHovered, setIsCloseHovered] = useState(false);
@@ -77,8 +85,8 @@ export const UpdateModal: React.FC = () => {
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/65 backdrop-blur-xs select-none animate-in fade-in duration-150 p-4">
-      <div className="w-[470px] max-w-full bg-white dark:bg-zinc-900 border border-zinc-200/90 dark:border-zinc-800 rounded-2xl shadow-2xl overflow-hidden flex flex-col animate-in zoom-in-95 duration-150">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 select-none p-4 transition-opacity duration-100">
+      <div className="w-[470px] max-w-full bg-white dark:bg-zinc-900 border border-zinc-200/90 dark:border-zinc-800 rounded-2xl shadow-2xl overflow-hidden flex flex-col modal-enter-instant">
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-3.5 border-b border-zinc-200/80 dark:border-zinc-800/80 bg-zinc-50/70 dark:bg-zinc-950/50">
           <div className="flex items-center gap-2.5">
@@ -227,6 +235,31 @@ export const UpdateModal: React.FC = () => {
             </div>
           )}
 
+          {/* Active Download Warning Banner */}
+          {hasActiveDownloads && (
+            <div className="mb-4 p-3.5 rounded-xl bg-amber-500/10 dark:bg-amber-500/15 border border-amber-500/30 flex items-start gap-3">
+              <AlertTriangle className="w-5 h-5 text-amber-500 shrink-0 mt-0.5" />
+              <div className="flex-1 text-xs">
+                <div className="font-semibold text-amber-600 dark:text-amber-400 flex items-center justify-between">
+                  <span>Download in Progress ({activeDownloads.length} active)</span>
+                  <span className="font-mono text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-600 dark:text-amber-300">
+                    Update Blocked
+                  </span>
+                </div>
+                <div className="text-zinc-600 dark:text-zinc-300 mt-1 leading-relaxed">
+                  Currently downloading{' '}
+                  <span className="font-semibold text-zinc-900 dark:text-zinc-100">
+                    {activeDownloads[0]?.filename || 'active file'}
+                  </span>
+                  {activeDownloads[0]?.total_bytes && activeDownloads[0]?.downloaded_bytes ? (
+                    <> ({Math.round((activeDownloads[0].downloaded_bytes / activeDownloads[0].total_bytes) * 100)}%)</>
+                  ) : null}
+                  . Restarting now will interrupt active network streams. Downex will automatically present this update and turn the tray icon green as soon as your downloads finish.
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* STATE 3: AVAILABLE / DOWNLOADING / READY */}
           {!isRestarting && !isChecking && !isUpToDate && !isError && (
             <>
@@ -350,14 +383,16 @@ export const UpdateModal: React.FC = () => {
                   </Button>
                   <Button
                     type="button"
-                    variant="primary-emerald"
+                    variant={hasActiveDownloads ? "outline" : "primary-emerald"}
                     size="md"
-                    icon={<RefreshCw className="w-3.5 h-3.5" />}
+                    icon={hasActiveDownloads ? <AlertTriangle className="w-3.5 h-3.5 text-amber-500" /> : <RefreshCw className="w-3.5 h-3.5" />}
                     loading={isInstalling || isLoading}
                     loadingText="Restarting..."
+                    disabled={hasActiveDownloads || isInstalling || isLoading}
                     onClick={handleRestart}
+                    title={hasActiveDownloads ? "Disabled while downloads are actively running" : undefined}
                   >
-                    Restart & Apply Now
+                    {hasActiveDownloads ? "Blocked (Download Running)" : "Restart & Apply Now"}
                   </Button>
                 </>
               ) : isAvailable ? (
@@ -373,15 +408,16 @@ export const UpdateModal: React.FC = () => {
                   </Button>
                   <Button
                     type="button"
-                    variant="primary-emerald"
+                    variant={hasActiveDownloads ? "outline" : "primary-emerald"}
                     size="md"
-                    icon={<Download className="w-3.5 h-3.5 stroke-[2.5]" />}
+                    icon={hasActiveDownloads ? <AlertTriangle className="w-3.5 h-3.5 text-amber-500" /> : <Download className="w-3.5 h-3.5 stroke-[2.5]" />}
                     loading={isDownloading || isLoading}
                     loadingText="Updating..."
-                    disabled={isDownloading || isInstalling || isLoading}
+                    disabled={hasActiveDownloads || isDownloading || isInstalling || isLoading}
                     onClick={handleDownloadAndInstall}
+                    title={hasActiveDownloads ? "Disabled while downloads are actively running" : undefined}
                   >
-                    Download & Install Now
+                    {hasActiveDownloads ? "Blocked (Download Running)" : "Download & Install Now"}
                   </Button>
                 </>
               ) : (

@@ -25,6 +25,12 @@ import {
   hideMainWindow,
   getClipboardText
 } from '../services/tauriService';
+import { 
+  getCachedDownloadDir, 
+  setCachedDownloadDir, 
+  getCachedDiskFreeSpace, 
+  setCachedDiskFreeSpace 
+} from '../services/modalPreload';
 
 function formatBytes(bytes?: number): string {
   if (!bytes || bytes === 0) return 'Unknown size';
@@ -60,8 +66,8 @@ export const NewDownloadModal: React.FC<{ isStandalone?: boolean }> = ({ isStand
   const [url, setUrl] = useState('');
   const [fileBaseName, setFileBaseName] = useState('');
   const [fileExtension, setFileExtension] = useState('');
-  const [savePath, setSavePath] = useState('');
-  const [freeSpaceBytes, setFreeSpaceBytes] = useState<number | null>(null);
+  const [savePath, setSavePath] = useState<string>(getCachedDownloadDir);
+  const [freeSpaceBytes, setFreeSpaceBytes] = useState<number | null>(getCachedDiskFreeSpace);
   const [rememberPath, setRememberPath] = useState(true);
   const [totalBytes, setTotalBytes] = useState<number | undefined>();
   const [supportsRanges, setSupportsRanges] = useState(true);
@@ -118,13 +124,14 @@ export const NewDownloadModal: React.FC<{ isStandalone?: boolean }> = ({ isStand
     setFileExtension(ext);
   };
 
-  // Disk space check
+  // Disk space check (updates synchronous cache)
   useEffect(() => {
     if (!savePath) return;
     let cancelled = false;
     getDiskFreeSpace(savePath).then((bytes) => {
       if (!cancelled && bytes > 0) {
         setFreeSpaceBytes(bytes);
+        setCachedDiskFreeSpace(bytes);
       }
     });
     return () => { cancelled = true; };
@@ -134,7 +141,10 @@ export const NewDownloadModal: React.FC<{ isStandalone?: boolean }> = ({ isStand
   useEffect(() => {
     if (isNewModalOpen) {
       getDefaultDownloadDir().then((dir) => {
-        setSavePath(dir);
+        if (dir && dir.trim()) {
+          setSavePath(dir.trim());
+          setCachedDownloadDir(dir.trim());
+        }
       });
 
       if (initialModalData && initialModalData.url) {
@@ -316,7 +326,7 @@ export const NewDownloadModal: React.FC<{ isStandalone?: boolean }> = ({ isStand
     <div className={`flex flex-col bg-white dark:bg-zinc-900 overflow-hidden ${
       isStandalone 
         ? 'w-full h-full' 
-        : 'w-[580px] rounded-xl border border-zinc-200 dark:border-zinc-800 shadow-2xl animate-in fade-in zoom-in-95 duration-150'
+        : 'w-[580px] rounded-xl border border-zinc-200 dark:border-zinc-800 shadow-2xl modal-enter-instant'
     }`}>
       {/* Title Bar */}
       <div 
@@ -567,7 +577,7 @@ export const NewDownloadModal: React.FC<{ isStandalone?: boolean }> = ({ isStand
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs select-none p-4">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 select-none p-4 transition-opacity duration-100">
       {dialogCard}
     </div>
   );

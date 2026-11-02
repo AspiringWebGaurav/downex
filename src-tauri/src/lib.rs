@@ -3,6 +3,7 @@ pub mod bridge;
 pub mod commands;
 pub mod db;
 pub mod engine;
+pub mod extension;
 pub mod ota;
 pub mod scheduler;
 pub mod tray;
@@ -87,20 +88,19 @@ pub fn run() {
         .on_window_event(|window, event| {
             match event {
                 tauri::WindowEvent::CloseRequested { api, .. } => {
+                    // Prevent close across all application windows so they remain pre-warmed in memory
+                    // and can be reshown instantaneously (<10ms) without blank WebView2 reload delay
+                    api.prevent_close();
+                    let _ = window.set_always_on_top(false);
+                    let _ = window.hide();
+
                     if window.label() == "main" {
-                        api.prevent_close();
-                        let _ = window.hide();
                         #[cfg(target_os = "windows")]
                         {
                             crate::commands::set_process_priority_background(true);
                             crate::commands::trim_process_working_set();
                         }
                         let _ = crate::tray::refresh_tray_menu(window.app_handle());
-                    } else {
-                        // Secondary dialogs (download_dialog, download_complete) MUST NOT prevent close!
-                        // This allows Taskbar "Close window", Alt+F4, and thumbnail X to close cleanly.
-                        let _ = window.set_always_on_top(false);
-                        let _ = window.hide();
                     }
                 }
                 tauri::WindowEvent::Focused(true) => {
@@ -134,12 +134,49 @@ pub fn run() {
                 db.clone(),
                 progress_tx,
             ));
+            queue_manager.set_app_handle(app.handle().clone());
 
             app.manage(AppState {
                 db: db.clone(),
                 queue_manager: queue_manager.clone(),
                 http_client: client.clone(),
             });
+
+            // Pre-warm secondary dialog windows (download_dialog, download_complete)
+            // in hidden state so they appear instantly (<10ms) without 2-3s delay or blank screens
+            crate::commands::prewarm_secondary_dialogs(app.handle());
+
+            // Dev Terminal Watchdog: In development mode, monitor Vite dev server at 127.0.0.1:1420
+            // If the dev terminal running `npm run dev` / `vite` is closed, 127.0.0.1:1420 terminates.
+            // The dev app exits automatically (<1s) so it never lingers as an orphaned process
+            // blocking the user's installed application or holding port 18888.
+            #[cfg(debug_assertions)]
+            {
+                let app_handle = app.handle().clone();
+                std::thread::spawn(move || {
+                    let mut consecutive_failures = 0;
+                    // Initial delay to let Vite dev server stabilize on boot
+                    std::thread::sleep(std::time::Duration::from_millis(3000));
+                    loop {
+                        std::thread::sleep(std::time::Duration::from_millis(600));
+                        let is_alive = std::net::TcpStream::connect_timeout(
+                            &std::net::SocketAddr::from(([127, 0, 0, 1], 1420)),
+                            std::time::Duration::from_millis(300),
+                        ).is_ok();
+
+                        if is_alive {
+                            consecutive_failures = 0;
+                        } else {
+                            consecutive_failures += 1;
+                            if consecutive_failures >= 2 {
+                                eprintln!("[Downex Dev Watchdog] Dev server (127.0.0.1:1420) closed. Terminal closed. Exiting dev instance now.");
+                                app_handle.exit(0);
+                                std::process::exit(0);
+                            }
+                        }
+                    }
+                });
+            }
 
             // Spawn autonomous native background update supervisor
             crate::ota::supervisor::spawn_update_supervisor(app.handle().clone(), client.clone());
@@ -151,6 +188,9 @@ pub fn run() {
 
             // Sync Windows Startup autostart entry with current executable and SQLite setting
             crate::autostart::sync_autostart_on_boot(&db);
+
+            // Ensure canonical extension files exist on disk
+            let _ = crate::extension::ensure_extension_files_on_disk();
 
             // Ensure main downloader window is displayed and focused on initial launch (unless background boot)
             if let Some(main_win) = app.get_webview_window("main") {
@@ -282,6 +322,7 @@ pub fn run() {
             cmd_check_updates,
             cmd_download_update_container,
             cmd_get_resolved_version,
+            cmd_get_installation_id,
             cmd_get_clipboard_text,
             cmd_sync_windows_installed_version,
             cmd_write_update_staging_file,
@@ -331,6 +372,13 @@ pub fn run() {
             cmd_get_tray_update_status,
             cmd_trigger_background_update_check,
             cmd_refresh_shell_icons,
+            cmd_has_active_downloads,
+            cmd_is_update_deferred,
+            cmd_notify_downloads_completed,
+            cmd_get_extension_info,
+            cmd_open_extension_folder,
+            cmd_update_companion_extension,
+            cmd_check_and_sync_extension,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Downex application");

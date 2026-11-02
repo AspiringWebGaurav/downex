@@ -34,6 +34,12 @@ import {
   DownloadInfoModalPayload,
   isTauri
 } from '../services/tauriService';
+import { 
+  getCachedDownloadDir, 
+  setCachedDownloadDir, 
+  getCachedDiskFreeSpace, 
+  setCachedDiskFreeSpace 
+} from '../services/modalPreload';
 
 function formatBytes(bytes?: number): string {
   if (!bytes || bytes === 0) return 'Unknown size';
@@ -137,8 +143,8 @@ export const DownloadDialogWindow: React.FC = () => {
   const [url, setUrl] = useState('');
   const [fileBaseName, setFileBaseName] = useState('');
   const [fileExtension, setFileExtension] = useState('');
-  const [savePath, setSavePath] = useState('');
-  const [freeSpaceBytes, setFreeSpaceBytes] = useState<number | null>(null);
+  const [savePath, setSavePath] = useState<string>(getCachedDownloadDir);
+  const [freeSpaceBytes, setFreeSpaceBytes] = useState<number | null>(getCachedDiskFreeSpace);
   const [rememberPath, setRememberPath] = useState(true);
   const [totalBytes, setTotalBytes] = useState<number | undefined>();
   const [supportsRanges, setSupportsRanges] = useState(true);
@@ -192,18 +198,18 @@ export const DownloadDialogWindow: React.FC = () => {
     }
   }, [isDarkTheme]);
 
-  // Update free disk space whenever savePath changes
+  // Update free disk space whenever savePath changes (saves to synchronous cache)
   useEffect(() => {
     if (!savePath) return;
     let cancelled = false;
     getDiskFreeSpace(savePath)
       .then((bytes) => {
         if (!cancelled && bytes > 0) {
-          // If in lowspace scenario in browser preview, preserve mock low space
           if (!isTauri && activeScenarioId === 'lowspace') {
             return;
           }
           setFreeSpaceBytes(bytes);
+          setCachedDiskFreeSpace(bytes);
         }
       })
       .catch(() => {});
@@ -212,10 +218,13 @@ export const DownloadDialogWindow: React.FC = () => {
     };
   }, [savePath, activeScenarioId]);
 
-  // Load default download directory on mount
+  // Load default download directory on mount in background
   useEffect(() => {
     getDefaultDownloadDir().then((dir) => {
-      setSavePath(dir);
+      if (dir && dir.trim()) {
+        setSavePath(dir.trim());
+        setCachedDownloadDir(dir.trim());
+      }
     });
   }, []);
 
@@ -480,7 +489,7 @@ export const DownloadDialogWindow: React.FC = () => {
       </div>
 
       {/* Main Form Body */}
-      <div className="p-4.5 flex-1 flex flex-col justify-between gap-3 overflow-y-auto">
+      <div className="p-4.5 flex-1 flex flex-col justify-between gap-3 overflow-hidden">
         {/* Row 1: Prominent Editable File Name */}
         <div>
           <div className="flex items-center justify-between mb-1.5">

@@ -8,7 +8,7 @@
  * 4. In-App Authoring: Create and edit patch notes without touching codebase or rebuilding binaries.
  */
 
-import { BASELINE_PATCH_NOTES, DynamicPatchNotes, parseNotesToHighlights } from '../data/patchNotes';
+import { BASELINE_PATCH_NOTES, EXTENSION_BASELINE_PATCH_NOTES, DynamicPatchNotes, parseNotesToHighlights } from '../data/patchNotes';
 import { cleanVersion, compareSemver, formatVersion } from '../utils/version';
 import { getDbPatchNotes, saveDbPatchNote, deleteDbPatchNote, DbPatchNoteRecord } from './tauriService';
 
@@ -42,7 +42,11 @@ class PatchNotesService {
     const map = new Map<string, DynamicPatchNotes>();
     for (const [v, item] of Object.entries(BASELINE_PATCH_NOTES)) {
       const cv = cleanVersion(v);
-      map.set(cv, { ...item, version: cv });
+      map.set(cv, { ...item, version: cv, category: 'app' });
+    }
+    for (const [v, item] of Object.entries(EXTENSION_BASELINE_PATCH_NOTES)) {
+      const cv = cleanVersion(v);
+      map.set(`ext-${cv}`, { ...item, version: cv, category: 'extension' });
     }
 
     try {
@@ -63,9 +67,13 @@ class PatchNotesService {
 
       // Add baseline seed notes
       for (const [v, item] of Object.entries(BASELINE_PATCH_NOTES)) {
-        const cv = cleanVersion(v);
-        map.set(cv, { ...item, version: cv });
-      }
+      const cv = cleanVersion(v);
+      map.set(cv, { ...item, version: cv, category: 'app' });
+    }
+    for (const [v, item] of Object.entries(EXTENSION_BASELINE_PATCH_NOTES)) {
+      const cv = cleanVersion(v);
+      map.set(`ext-${cv}`, { ...item, version: cv, category: 'extension' });
+    }
 
       // Merge DB records over baseline
       for (const rec of dbRecords) {

@@ -156,24 +156,24 @@ export const DownloadTable: React.FC = () => {
   };
 
   const renderQueueBanner = () => (
-    <div className="p-3.5 rounded-xl bg-gradient-to-r from-zinc-50 to-zinc-100/80 dark:from-zinc-900/90 dark:to-zinc-900/50 border border-zinc-200/90 dark:border-zinc-800 shadow-xs flex flex-wrap items-center justify-between gap-3 mb-1">
-      <div className="flex items-center gap-3">
+    <div className="p-2.5 sm:p-3 rounded-xl bg-gradient-to-r from-zinc-50 to-zinc-100/80 dark:from-zinc-900/90 dark:to-zinc-900/50 border border-zinc-200/90 dark:border-zinc-800 shadow-xs flex items-center justify-between gap-3 mb-2 shrink-0">
+      <div className="flex items-center gap-2.5 min-w-0">
         <div
-          className={`w-9 h-9 rounded-lg flex items-center justify-center shrink-0 ${
+          className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 ${
             isQueueRunning
               ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20'
               : 'bg-zinc-200/70 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400 border border-zinc-300/50 dark:border-zinc-700/50'
           }`}
         >
-          <ListOrdered className="w-5 h-5 stroke-[2]" />
+          <ListOrdered className="w-4 h-4 stroke-[2]" />
         </div>
-        <div>
+        <div className="min-w-0">
           <div className="flex items-center gap-2">
-            <h3 className="text-xs font-semibold text-zinc-900 dark:text-zinc-100">
+            <h3 className="text-xs font-semibold text-zinc-900 dark:text-zinc-100 shrink-0">
               Simple 1-by-1 Queue
             </h3>
             <span
-              className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium ${
+              className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium shrink-0 ${
                 isQueueRunning
                   ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 font-semibold'
                   : 'bg-zinc-200/80 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400'
@@ -187,7 +187,7 @@ export const DownloadTable: React.FC = () => {
               {isQueueRunning ? 'Queue Active' : 'Queue Paused'}
             </span>
           </div>
-          <p className="text-[11px] text-zinc-500 dark:text-zinc-400 mt-0.5">
+          <p className="text-[11px] text-zinc-500 dark:text-zinc-400 mt-0.5 truncate">
             {isQueueRunning
               ? activeItems.length > 0
                 ? `Downloading 1 file at maximum speed. ${queuedItems.length} file(s) waiting in line.`
@@ -199,7 +199,7 @@ export const DownloadTable: React.FC = () => {
         </div>
       </div>
 
-      <div className="flex items-center gap-2">
+      <div className="flex items-center gap-2 shrink-0">
         <button
           type="button"
           onClick={() => setQueueGuideOpen(true)}
@@ -234,7 +234,7 @@ export const DownloadTable: React.FC = () => {
     </div>
   );
 
-  if (displayItems.length === 0) {
+    if (displayItems.length === 0) {
     if (isSearchActive) {
       return (
         <div className="flex-1 overflow-y-auto min-h-0 p-6 flex flex-col items-center justify-center text-center select-none max-w-lg mx-auto w-full my-auto animate-in fade-in duration-200">
@@ -299,22 +299,22 @@ export const DownloadTable: React.FC = () => {
       <div className="flex-1 overflow-y-auto min-h-0 p-4 flex flex-col">
         {isQueuesView && renderQueueBanner()}
         {isQueuesView ? (
-          <div className="flex-1 flex flex-col items-center justify-center p-3 select-none max-w-3xl mx-auto w-full space-y-3.5 my-auto">
-            <div className="text-center space-y-1">
-              <div className="w-9 h-9 rounded-xl bg-emerald-500/10 dark:bg-emerald-500/20 border border-emerald-500/20 text-emerald-600 dark:text-emerald-400 flex items-center justify-center mx-auto mb-1.5 shadow-2xs">
+          <div className="flex-1 flex flex-col items-center justify-start pt-1.5 pb-2 px-2 sm:px-3 select-none w-full max-w-4xl mx-auto space-y-2.5 mt-1">
+            <div className="text-center space-y-0.5">
+              <div className="w-8 h-8 rounded-xl bg-emerald-500/10 dark:bg-emerald-500/20 border border-emerald-500/20 text-emerald-600 dark:text-emerald-400 flex items-center justify-center mx-auto mb-1 shadow-2xs">
                 <ListOrdered className="w-4 h-4 stroke-[2.5]" />
               </div>
-              <h3 className="text-sm font-bold text-zinc-900 dark:text-zinc-100">
+              <h3 className="text-sm sm:text-base font-bold text-zinc-900 dark:text-zinc-100">
                 How 1-by-1 Queue Works
               </h3>
-              <p className="text-xs text-zinc-500 dark:text-zinc-400 max-w-md mx-auto">
+              <p className="text-xs text-zinc-500 dark:text-zinc-400 max-w-lg mx-auto leading-relaxed">
                 Downloads run one after another at maximum speed without slowing down your internet.
               </p>
             </div>
 
             {/* 3 Step Cards in 3-column horizontal grid */}
-            <div className="w-full grid grid-cols-1 sm:grid-cols-3 gap-2.5 text-left">
-              <div className="p-3 rounded-xl bg-zinc-50/80 dark:bg-zinc-900/60 border border-zinc-200/80 dark:border-zinc-800 flex flex-col gap-1.5 shadow-2xs">
+            <div className="w-full grid grid-cols-3 gap-2.5 sm:gap-3 text-left">
+              <div className="p-3 sm:p-3.5 rounded-xl bg-zinc-50/90 dark:bg-zinc-900/60 border border-zinc-200/90 dark:border-zinc-800 flex flex-col justify-start gap-1.5 shadow-2xs hover:border-zinc-300 dark:hover:border-zinc-700 transition-colors">
                 <div className="flex items-center gap-2">
                   <div className="w-5 h-5 rounded-full bg-zinc-900 text-white dark:bg-white dark:text-zinc-900 flex items-center justify-center text-[10px] font-bold shrink-0">
                     1
@@ -328,7 +328,7 @@ export const DownloadTable: React.FC = () => {
                 </p>
               </div>
 
-              <div className="p-3 rounded-xl bg-zinc-50/80 dark:bg-zinc-900/60 border border-zinc-200/80 dark:border-zinc-800 flex flex-col gap-1.5 shadow-2xs">
+              <div className="p-3 sm:p-3.5 rounded-xl bg-zinc-50/90 dark:bg-zinc-900/60 border border-zinc-200/90 dark:border-zinc-800 flex flex-col justify-start gap-1.5 shadow-2xs hover:border-zinc-300 dark:hover:border-zinc-700 transition-colors">
                 <div className="flex items-center gap-2">
                   <div className="w-5 h-5 rounded-full bg-zinc-900 text-white dark:bg-white dark:text-zinc-900 flex items-center justify-center text-[10px] font-bold shrink-0">
                     2
@@ -342,7 +342,7 @@ export const DownloadTable: React.FC = () => {
                 </p>
               </div>
 
-              <div className="p-3 rounded-xl bg-emerald-50/60 dark:bg-emerald-950/30 border border-emerald-200/70 dark:border-emerald-800/60 flex flex-col gap-1.5 shadow-2xs">
+              <div className="p-3 sm:p-3.5 rounded-xl bg-emerald-50/70 dark:bg-emerald-950/30 border border-emerald-200/80 dark:border-emerald-800/70 flex flex-col justify-start gap-1.5 shadow-2xs hover:border-emerald-300 dark:hover:border-emerald-700 transition-colors">
                 <div className="flex items-center gap-2">
                   <div className="w-5 h-5 rounded-full bg-emerald-600 text-white dark:bg-emerald-500 dark:text-zinc-900 flex items-center justify-center text-[10px] font-bold shrink-0">
                     3
@@ -358,7 +358,7 @@ export const DownloadTable: React.FC = () => {
             </div>
 
             {/* Quick Actions */}
-            <div className="flex flex-wrap items-center justify-center gap-2.5 pt-0.5">
+            <div className="flex flex-wrap items-center justify-center gap-3 pt-0.5">
               <Button
                 variant="primary-emerald"
                 size="md"
@@ -371,13 +371,13 @@ export const DownloadTable: React.FC = () => {
               <button
                 type="button"
                 onClick={() => setQueueGuideOpen(true)}
-                className="text-xs font-semibold text-emerald-600 dark:text-emerald-400 hover:underline px-2.5 py-1.5 cursor-pointer"
+                className="text-xs font-semibold text-emerald-600 dark:text-emerald-400 hover:text-emerald-700 dark:hover:text-emerald-300 hover:underline px-2.5 py-1.5 cursor-pointer flex items-center gap-1 transition-colors"
               >
-                How Queues Work →
+                <span>How Queues Work</span>
+                <span>→</span>
               </button>
             </div>
-          </div>
-        ) : (
+          </div>) : (
           <div className="flex-1 flex flex-col items-center justify-center p-8 text-center select-none text-zinc-400 dark:text-zinc-600">
             <div className="w-12 h-12 rounded-full bg-zinc-100 dark:bg-zinc-900 flex items-center justify-center mb-3">
               {selectedView === 'trash' ? (

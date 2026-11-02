@@ -43,8 +43,8 @@ export const PatchNotesModal: React.FC = () => {
       ];
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs select-none animate-in fade-in duration-200">
-      <div className="w-[460px] max-w-[calc(100vw-32px)] bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl shadow-2xl overflow-hidden flex flex-col animate-in zoom-in-95 duration-200">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 select-none p-4 transition-opacity duration-100">
+      <div className="w-[460px] max-w-[calc(100vw-32px)] bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl shadow-2xl overflow-hidden flex flex-col modal-enter-instant">
         {/* Header Celebration Banner */}
         <div className="relative px-6 pt-6 pb-4 bg-gradient-to-b from-emerald-500/10 via-emerald-500/5 to-transparent border-b border-zinc-100 dark:border-zinc-800/60">
           <button

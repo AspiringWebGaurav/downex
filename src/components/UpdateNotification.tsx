@@ -24,7 +24,14 @@ export const UpdateNotification: React.FC = () => {
     Boolean(status.manifest) &&
     compareSemver(status.targetVersion!, currentVersion) > 0;
 
+  const hasActiveDownloads = useDownloadStore((state) =>
+    state.items.some((i) => i.status === 'downloading' || i.status === 'probing')
+  );
+  const isDeferredDueToDownloads = useAppVersionStore((state) => state.isDeferredDueToDownloads);
+
   const isRealActive =
+    !hasActiveDownloads &&
+    !isDeferredDueToDownloads &&
     !isToastDismissed &&
     status.state !== 'idle' &&
     status.state !== 'checking' &&

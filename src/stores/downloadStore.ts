@@ -16,6 +16,7 @@ import {
   DownloadInfoModalPayload,
   getLifetimeDownloadedBytes,
   setLifetimeDownloadedBytes,
+  notifyDownloadsCompletedNative,
 } from '../services/tauriService';
 
 interface DownloadStore {
@@ -32,6 +33,8 @@ interface DownloadStore {
   peakSpeed: number;
   lifetimeDownloadedBytes: number;
   sessionDownloadedBytes: number;
+  telemetryEpoch: number;
+  triggerTelemetryRefresh: () => void;
   showTelemetryOnHome: boolean;
   setShowTelemetryOnHome: (val: boolean) => void;
 
@@ -70,6 +73,8 @@ export const useDownloadStore = create<DownloadStore>((set, get) => ({
   peakSpeed: 0,
   lifetimeDownloadedBytes: 0,
   sessionDownloadedBytes: 0,
+  telemetryEpoch: 0,
+  triggerTelemetryRefresh: () => set((state) => ({ telemetryEpoch: state.telemetryEpoch + 1 })),
   isQueueRunning: false,
   showTelemetryOnHome: (() => {
     try {
@@ -216,7 +221,13 @@ export const useDownloadStore = create<DownloadStore>((set, get) => ({
     set((state) => ({ items: state.items.filter((i) => i.id !== id) }));
   },
 
-  setSelectedView: (view: string) => set({ selectedView: view }),
+  setSelectedView: (view: string) => {
+    if (view === 'telemetry') {
+      set((state) => ({ selectedView: view, telemetryEpoch: state.telemetryEpoch + 1 }));
+    } else {
+      set({ selectedView: view });
+    }
+  },
   settingsSubView: 'settings',
   openSettingsSubView: (subView: 'settings' | 'patch-notes') =>
     set({ selectedView: 'settings', settingsSubView: subView }),
@@ -309,6 +320,16 @@ export const useDownloadStore = create<DownloadStore>((set, get) => ({
         if (taskFinished) {
           setTimeout(() => {
             get().loadItems();
+            const stillActive = get().items.some(
+              (i) => i.status === 'downloading' || i.status === 'probing'
+            );
+            const hasQueuedInRunningQueue = get().isQueueRunning && get().items.some((i) => i.status === 'queued');
+            if (!stillActive && !hasQueuedInRunningQueue) {
+              notifyDownloadsCompletedNative().catch(() => {});
+              import('./appVersionStore').then(({ useAppVersionStore }) => {
+                useAppVersionStore.getState().onDownloadsCompleted();
+              });
+            }
           }, 300);
         }
 
@@ -373,3 +394,8 @@ export const useDownloadStore = create<DownloadStore>((set, get) => ({
     };
   },
 }));
+
+
+if (typeof window !== 'undefined' && (import.meta as any).env?.DEV) {
+  (window as any).useDownloadStore = useDownloadStore;
+}

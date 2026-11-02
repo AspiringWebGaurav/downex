@@ -11,6 +11,32 @@
           document.documentElement.classList.add('dark');
         }
       } catch (e) {}
+
+      // Early synchronous reload & context menu lockdown for production runtime
+      try {
+        (function() {
+          var isProd = window.location.protocol === 'tauri:' || 
+                       window.location.protocol === 'asset:' || 
+                       (window.location.origin && window.location.origin.indexOf('tauri.localhost') !== -1);
+          if (isProd) {
+            window.addEventListener('keydown', function(e) {
+              var isF5 = e.key === 'F5' || e.code === 'F5' || e.keyCode === 116;
+              var isR = (e.ctrlKey || e.metaKey) && !e.altKey && (e.key === 'r' || e.key === 'R' || e.code === 'KeyR' || e.keyCode === 82);
+              var isRefresh = e.key === 'BrowserRefresh' || e.key === 'Refresh';
+              if (isF5 || isR || isRefresh) {
+                e.preventDefault();
+                e.stopPropagation();
+              }
+            }, true);
+            window.addEventListener('contextmenu', function(e) {
+              var tag = e.target && e.target.tagName ? e.target.tagName.toUpperCase() : '';
+              if (tag !== 'INPUT' && tag !== 'TEXTAREA') {
+                e.preventDefault();
+              }
+            }, true);
+          }
+        })();
+      } catch (e) {}
     </script>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
