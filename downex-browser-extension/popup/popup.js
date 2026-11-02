@@ -109,14 +109,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   const btnFooterReload = document.getElementById('btn-footer-reload');
   const footerReloadText = document.getElementById('footer-reload-text');
   btnFooterReload?.addEventListener('click', () => {
-    btnFooterReload.classList.add('is-spinning');
-    btnFooterReload.disabled = true;
-    if (footerReloadText) footerReloadText.textContent = 'Reloading...';
-    chrome.storage.local.set({ should_reload_extension: false }, () => {
-      setTimeout(() => {
-        chrome.runtime.reload();
-      }, 220);
-    });
+    chrome.storage.local.set({ should_reload_extension: false });
+    handleTriggerUpdate(btnFooterReload, footerReloadText);
   });
 
   btnThemeToggle?.addEventListener('click', () => {
@@ -927,9 +921,38 @@ document.addEventListener('DOMContentLoaded', async () => {
   toggleIntercept?.addEventListener('change', saveConfigChange);
   toggleAltBypass?.addEventListener('change', saveConfigChange);
 
-  // Hot Reload Extension
+  // Hot Reload & Automatic Desktop Extension Update
+  function handleTriggerUpdate(buttonEl, labelEl) {
+    if (buttonEl) {
+      buttonEl.classList.add('is-spinning');
+      buttonEl.disabled = true;
+    }
+    if (labelEl) {
+      labelEl.textContent = 'Updating...';
+    }
+
+    try {
+      chrome.runtime.sendMessage({ type: 'TRIGGER_EXTENSION_UPDATE' }, (resp) => {
+        if (resp && resp.success) {
+          if (labelEl) labelEl.textContent = 'Reloading...';
+          setTimeout(() => {
+            chrome.runtime.reload();
+          }, 350);
+        } else {
+          // If background request fails or timeout, attempt direct reload
+          if (labelEl) labelEl.textContent = 'Reloading...';
+          setTimeout(() => {
+            chrome.runtime.reload();
+          }, 350);
+        }
+      });
+    } catch {
+      chrome.runtime.reload();
+    }
+  }
+
   btnUpdateExtension?.addEventListener('click', () => {
-    chrome.runtime.reload();
+    handleTriggerUpdate(btnUpdateExtension, extNewVer);
   });
 
   // Self Repair Diagnostics Runner

@@ -12,7 +12,7 @@
 
 const DOWNEX_BRIDGE_URL = 'http://127.0.0.1:18888';
 const CACHE_TTL_MS = 5000;
-const EXTENSION_VERSION = '0.0.0';
+const EXTENSION_VERSION = (typeof chrome !== 'undefined' && chrome.runtime?.getManifest) ? (chrome.runtime.getManifest().version || '0.0.6') : '0.0.6';
 const EXTENSION_ARCH = 'base-release';
 
 // Default configuration schema

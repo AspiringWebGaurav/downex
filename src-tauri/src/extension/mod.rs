@@ -58,6 +58,59 @@ pub fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
+
+pub fn discover_unpacked_extension_dirs() -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    let local_appdata = match std::env::var("LOCALAPPDATA") {
+        Ok(v) => PathBuf::from(v),
+        Err(_) => return dirs,
+    };
+
+    let browser_user_data_dirs = [
+        local_appdata.join("Microsoft").join("Edge").join("User Data"),
+        local_appdata.join("Google").join("Chrome").join("User Data"),
+        local_appdata.join("BraveSoftware").join("Brave-Browser").join("User Data"),
+    ];
+
+    for user_data in &browser_user_data_dirs {
+        if !user_data.exists() {
+            continue;
+        }
+        if let Ok(entries) = std::fs::read_dir(user_data) {
+            for entry in entries.flatten() {
+                let profile_dir = entry.path();
+                if !profile_dir.is_dir() {
+                    continue;
+                }
+                for pref_file in ["Preferences", "Secure Preferences"] {
+                    let pref_path = profile_dir.join(pref_file);
+                    if pref_path.exists() {
+                        if let Ok(raw) = std::fs::read_to_string(&pref_path) {
+                            if raw.contains("downex") || raw.contains("Downex") {
+                                if let Ok(json) = serde_json::from_str::<serde_json::Value>(&raw) {
+                                    if let Some(settings) = json.get("extensions").and_then(|e| e.get("settings")).and_then(|s| s.as_object()) {
+                                        for (_ext_id, val) in settings {
+                                            if let Some(path_str) = val.get("path").and_then(|p| p.as_str()) {
+                                                let p = PathBuf::from(path_str);
+                                                if p.exists() && p.join("manifest.json").exists() {
+                                                    if !dirs.contains(&p) {
+                                                        dirs.push(p);
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    dirs
+}
+
 pub fn ensure_extension_files_on_disk() -> Result<PathBuf, String> {
     let target_dir = get_canonical_extension_dir();
     let current_ver = get_installed_extension_version();
@@ -95,6 +148,12 @@ pub fn ensure_extension_files_on_disk() -> Result<PathBuf, String> {
                     eprintln!("[Downex Extension Manager] Notice on copy from {:?}: {}", candidate, e);
                 } else {
                     eprintln!("[Downex Extension Manager] Seeded canonical extension v{:?} from {:?}", cand_ver, candidate);
+                    for extra_dir in discover_unpacked_extension_dirs() {
+                        if extra_dir != target_dir {
+                            let _ = copy_dir_recursive(candidate, &extra_dir);
+                            eprintln!("[Downex Extension Manager] Also seeded unpacked directory: {:?}", extra_dir);
+                        }
+                    }
                     EXTENSION_RELOAD_PENDING.store(true, Ordering::SeqCst);
                     return Ok(target_dir);
                 }
@@ -251,6 +310,14 @@ pub async fn download_and_extract_extension_package(
     if let Err(e) = copy_dir_recursive(&temp_stage, &target_dir) {
         let _ = std::fs::remove_dir_all(&temp_stage);
         return Err(format!("Failed to copy validated extension to canonical directory: {}", e));
+    }
+
+    // Also update all discovered unpacked extension directories in browser profiles!
+    for extra_dir in discover_unpacked_extension_dirs() {
+        if extra_dir != target_dir {
+            let _ = copy_dir_recursive(&temp_stage, &extra_dir);
+            eprintln!("[Downex Extension Manager] ✓ Also updated browser unpacked directory: {:?}", extra_dir);
+        }
     }
     let _ = std::fs::remove_dir_all(&temp_stage);
 
