@@ -16,6 +16,7 @@ import { PatchNotesModal } from './components/PatchNotesModal';
 import { QueueGuideModal } from './components/Modals/QueueGuideModal';
 import { SettingsView } from './components/SettingsView';
 import { TelemetryView } from './components/TelemetryView';
+import { SpeedtestView } from './components/SpeedtestView';
 import { onOpenNewDownloadModal, restoreManagerWindow, onNavigate, onCheckUpdatesFromTray, onOtaRollbackRecovered, notifyDomReady } from './services/tauriService';
 import './App.css';
 
@@ -97,7 +98,7 @@ export const App: React.FC = () => {
         e.preventDefault();
         const searchInput = document.getElementById('search-input');
         const currentView = useDownloadStore.getState().selectedView;
-        if (currentView === 'settings' || currentView === 'telemetry') {
+        if (currentView === 'settings' || currentView === 'telemetry' || currentView === 'speedtest') {
           useDownloadStore.getState().setSelectedView('all');
           setTimeout(() => {
             const input = document.getElementById('search-input');
@@ -186,6 +187,8 @@ export const App: React.FC = () => {
             <SettingsView darkMode={darkMode} setDarkMode={setDarkMode} />
           ) : selectedView === 'telemetry' ? (
             <TelemetryView onBack={() => setSelectedView('settings')} />
+          ) : selectedView === 'speedtest' ? (
+            <SpeedtestView onBack={() => setSelectedView('all')} />
           ) : (
             <>
               {/* Top Control Bar */}
@@ -222,7 +225,7 @@ export const App: React.FC = () => {
         </main>
 
         {/* Right Telemetry & Speed Sparkline Panel (Only when enabled in settings and not on settings page) */}
-        {showTelemetryOnHome && selectedView !== 'settings' && selectedView !== 'telemetry' && (
+        {showTelemetryOnHome && selectedView !== 'settings' && selectedView !== 'telemetry' && selectedView !== 'speedtest' && (
           <TelemetryWidget layout="sidebar" />
         )}
       </div>

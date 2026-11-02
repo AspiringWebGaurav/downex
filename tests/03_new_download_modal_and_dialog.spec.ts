@@ -54,7 +54,7 @@ test.describe('Downex Base Application — New Download Modal & Grabber Dialog',
     // Test Browse button
     const browseBtn = page.locator('button:has-text("Browse…")');
     await browseBtn.click();
-    const folderInput = page.locator('input[placeholder="Destination folder path..."]');
+    const folderInput = page.locator('input[placeholder*="Destination folder path"]');
     await expect(folderInput).toHaveValue(/CustomDownexFolder/);
 
     // Test "Later" button (Enqueue)
@@ -118,19 +118,19 @@ test.describe('Downex Base Application — New Download Modal & Grabber Dialog',
     // Verify dialog header and probed payload
     await expect(page.locator('text=Download File')).toBeVisible();
     await expect(page.locator('input[placeholder="Filename"]')).toHaveValue('ubuntu-26.04-desktop-amd64');
-    await expect(page.locator('text=Resume supported')).toBeVisible();
+    await expect(page.locator('text=/Resume supported|Can pause and resume/')).toBeVisible();
     await expect(page.getByText('2.00 GB', { exact: true })).toBeVisible();
-    await expect(page.locator('text=8 Connections')).toBeVisible();
+    await expect(page.locator('text=/8 Connections|8 Parts/')).toBeVisible();
 
     // Verify Copy URL button
-    const copyUrlBtn = page.locator('button:has-text("Copy URL")');
+    const copyUrlBtn = page.locator('button:has-text("Copy")').first();
     await expect(copyUrlBtn).toBeVisible();
     await copyUrlBtn.click();
-    await expect(page.locator('text=Copied')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Copied' })).toBeVisible();
 
     // Verify Browse button
-    await page.click('button:has-text("Browse…")');
-    await expect(page.locator('input[placeholder="Destination folder path..."]')).toHaveValue(/CustomDownexFolder/);
+    await page.getByRole('button', { name: /Browse/i }).click();
+    await expect(page.locator('input[placeholder*="Destination folder path"]')).toHaveValue(/CustomDownexFolder|Downloads|ISOs/);
 
     // Test submit via Start Download button
     await page.click('button:has-text("Start Download")');

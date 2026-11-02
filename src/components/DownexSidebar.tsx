@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import {
-  AlertTriangle, Download, ListOrdered, Trash2, Settings, Minimize2, Moon, Sun, Plus, ChevronLeft, RefreshCw, Check, Activity } from 'lucide-react';
+  AlertTriangle, Download, ListOrdered, Trash2, Settings, Minimize2, Moon, Sun, Plus, ChevronLeft, RefreshCw, Check, Activity, Gauge } from 'lucide-react';
 import { useDownloadStore } from '../stores/downloadStore';
 import { useAppVersionStore } from '../stores/appVersionStore';
 import { minimizeToBackground } from '../services/tauriService';
@@ -73,6 +73,7 @@ export const DownexSidebar: React.FC<DownexSidebarProps> = ({ darkMode, setDarkM
     { id: 'telemetry', label: 'Speed & Stats', icon: Activity },
     { id: 'add_url', label: 'Add URL', icon: Plus, isAction: true },
     { id: 'settings', label: 'Settings', icon: Settings },
+    { id: 'speedtest', label: 'Speed Test', icon: Gauge },
     { id: 'trash', label: 'Trash', icon: Trash2, count: trashCount },
   ];
 

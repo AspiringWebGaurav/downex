@@ -66,6 +66,18 @@ export function getLatestCodebaseVersion(): string {
 }
 
 export const BASELINE_PATCH_NOTES: Record<string, DynamicPatchNotes> = {
+  '0.0.31': {
+    version: '0.0.31',
+    releaseDate: 'November 2, 2026',
+    title: 'Inline speed limiter pacing, browser download UI suppression, persistent dynamic modal, clean service restart',
+    highlights: [
+          "Inline speed limiter pacing",
+          "Browser download UI suppression",
+          "Persistent dynamic modal",
+          "Clean service restart"
+    ],
+    rawNotes: 'v0.0.31: Inline speed limiter pacing, browser download UI suppression, persistent dynamic modal, clean service restart',
+  },
   '0.0.30': {
     version: '0.0.30',
     releaseDate: 'November 2, 2026',

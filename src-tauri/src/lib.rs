@@ -186,7 +186,8 @@ pub fn run() {
                 app.manage(tray);
             }
 
-            // Sync Windows Startup autostart entry with current executable and SQLite setting
+            // Sync Windows Startup autostart entry with current executable and SQLite setting (production only)
+            #[cfg(not(debug_assertions))]
             crate::autostart::sync_autostart_on_boot(&db);
 
             // Ensure canonical extension files exist on disk
@@ -316,6 +317,7 @@ pub fn run() {
             cmd_pause_download,
             cmd_resume_download,
             cmd_cancel_download,
+            cmd_set_download_speed_limit,
             cmd_get_downloads,
             cmd_fetch_update_manifest,
             cmd_download_update_binary,

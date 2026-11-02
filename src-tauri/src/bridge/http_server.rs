@@ -562,6 +562,9 @@ Connection: close\r\n\r\n",
                             let url_clone = req.url.clone();
                             let req_filename_clone = req.filename.clone();
                             let custom_headers_clone = headers_opt.clone();
+                            let cookies_clone = req.cookies.clone();
+                            let referer_clone = req.referer.clone();
+                            let ua_clone = req.user_agent.clone();
                             tauri::async_runtime::spawn(async move {
                                 let headers_ref = custom_headers_clone.as_ref();
                                 if let Ok(p) = qm.probe_url_info(&url_clone, headers_ref).await {
@@ -575,6 +578,9 @@ Connection: close\r\n\r\n",
                                         "filename": resolved_name,
                                         "total_bytes": p.total_bytes,
                                         "supports_ranges": p.supports_ranges,
+                                        "cookies": cookies_clone,
+                                        "referer": referer_clone,
+                                        "user_agent": ua_clone,
                                     });
                                     if let Some(dialog_win) = handle.get_webview_window("download_dialog") {
                                         let _ = dialog_win.emit("open-download-info-modal", update_payload);

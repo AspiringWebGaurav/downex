@@ -5,7 +5,7 @@
   "version": "0.0.0",
   "identifier": "com.downex.manager",
   "build": {
-    "beforeDevCommand": "npm run dev:frontend",
+    "beforeDevCommand": "npm run dev:frontend --silent",
     "devUrl": "http://127.0.0.1:1420",
     "beforeBuildCommand": "npm run build:frontend",
     "frontendDist": "../dist"

@@ -32,6 +32,8 @@
   ],
   "permissions": [
     "downloads",
+    "downloads.ui",
+    "downloads.shelf",
     "cookies",
     "storage",
     "contextMenus"

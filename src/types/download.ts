@@ -27,6 +27,8 @@ export interface DownloadItem {
   checksum?: string | null;
   media_type?: string | null;
   supports_ranges?: boolean;
+  speed_limit_mbps?: number | null;
+  base_speed_bytes_sec?: number;
   created_at: number;
   updated_at: number;
   segments?: SegmentSnapshot[];

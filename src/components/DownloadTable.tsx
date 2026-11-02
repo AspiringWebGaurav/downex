@@ -26,6 +26,7 @@ import {
 import { useDownloadStore } from '../stores/downloadStore';
 import { openFolderPicker, openFile, openFileFolder, showDownloadCompleteDialog, isTauri, injectMockDownloadItem } from '../services/tauriService';
 import { DeleteConfirmModal } from './DeleteConfirmModal';
+import { InlineSpeedLimiter } from './InlineSpeedLimiter';
 import { DownloadItem } from '../types/download';
 
 export const DownloadTable: React.FC = () => {
@@ -730,7 +731,9 @@ export const DownloadTable: React.FC = () => {
               </div>
             </div>
 
-            {/* Main Progress Bar (Sleek Slim Height with Rich Multi-Layer Animations) */}
+            {/* Progress Bar & Inline Speed Limiter Unit (Tight 2px Gap) */}
+            <div className="flex flex-col gap-[2px]">
+              {/* Main Progress Bar (Sleek Slim Height with Rich Multi-Layer Animations) */}
             <div className="w-full h-[15px] bg-zinc-200/90 dark:bg-zinc-800/90 rounded-sm p-[1px] shadow-[inset_0_1.5px_3px_rgba(0,0,0,0.22)] border border-zinc-300/80 dark:border-zinc-700/80 relative overflow-hidden flex items-center">
               <div
                 className={`h-full rounded-xs transition-all duration-300 relative overflow-hidden ${
@@ -767,6 +770,13 @@ export const DownloadTable: React.FC = () => {
                   <div className="absolute right-0 top-0 bottom-0 w-1.5 bg-white shadow-[0_0_8px_#ffffff,0_0_14px_#34d399] animate-pulse pointer-events-none" />
                 )}
               </div>
+            </div>
+
+            {/* Inline Speed Limiter (Directly below progress bar, above details bar with 2px gap) */}
+            {(isDownloading || isPaused || isQueued) && (
+              <InlineSpeedLimiter item={item} />
+            )}
+
             </div>
 
             {/* IDM Details Toggle Bar */}

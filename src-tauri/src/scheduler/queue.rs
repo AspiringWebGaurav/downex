@@ -15,6 +15,7 @@ pub struct QueueManager {
     pool: Arc<DownloadEnginePool>,
     active_tokens: Arc<RwLock<HashMap<String, CancellationToken>>>,
     queue_semaphores: Arc<RwLock<HashMap<String, Arc<Semaphore>>>>,
+    task_limiters: Arc<RwLock<HashMap<String, Arc<crate::engine::TaskSpeedLimiter>>>>,
     progress_tx: mpsc::Sender<DownloadProgressEvent>,
     queue_running: Arc<AtomicBool>,
     app_handle: Arc<RwLock<Option<tauri::AppHandle>>>,
@@ -36,6 +37,7 @@ impl QueueManager {
             pool,
             active_tokens: Arc::new(RwLock::new(HashMap::new())),
             queue_semaphores: Arc::new(RwLock::new(semaphores)),
+            task_limiters: Arc::new(RwLock::new(HashMap::new())),
             progress_tx,
             queue_running: Arc::new(AtomicBool::new(false)),
             app_handle: Arc::new(RwLock::new(None)),
@@ -147,6 +149,7 @@ impl QueueManager {
             supports_ranges: probe.supports_ranges,
             created_at: now,
             updated_at: now,
+            speed_limit_mbps: None,
         };
 
         self.db.insert_download(&record)?;
@@ -264,6 +267,13 @@ impl QueueManager {
         let db = self.db.clone();
         let progress_tx = self.progress_tx.clone();
         let active_tokens = self.active_tokens.clone();
+        let limiter = {
+            let mut limiters = self.task_limiters.write();
+            limiters
+                .entry(task_id.clone())
+                .or_insert_with(|| Arc::new(crate::engine::TaskSpeedLimiter::new(0)))
+                .clone()
+        };
         let qm_clone = self.clone();
 
         let queue_id = record.queue_id.clone();
@@ -324,6 +334,7 @@ impl QueueManager {
                     supports_ranges,
                     headers,
                     max_conns,
+                    limiter,
                     progress_tx,
                     cancel_token,
                 )
@@ -366,6 +377,20 @@ impl QueueManager {
             return true;
         }
         false
+    }
+
+    pub fn set_task_speed_limit(&self, task_id: &str, limit_bytes_per_sec: u64) -> bool {
+        let mut limiters = self.task_limiters.write();
+        let limiter = limiters
+            .entry(task_id.to_string())
+            .or_insert_with(|| Arc::new(crate::engine::TaskSpeedLimiter::new(limit_bytes_per_sec)));
+        limiter.set_limit(limit_bytes_per_sec);
+        true
+    }
+
+    pub fn get_task_speed_limit(&self, task_id: &str) -> u64 {
+        let limiters = self.task_limiters.read();
+        limiters.get(task_id).map(|l| l.get_limit()).unwrap_or(0)
     }
 
     pub fn pause_all_tasks(&self) -> usize {

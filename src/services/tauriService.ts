@@ -17,6 +17,10 @@ export function isTauriEnv(): boolean {
 
 export const isTauri = isTauriEnv();
 
+export function isMockItem(id?: string): boolean {
+  return !isTauri || Boolean(id && id.startsWith('mock-'));
+}
+
 export interface ProbeResult {
   url: string;
   filename: string;
@@ -124,7 +128,7 @@ export async function addDownload(
 }
 
 export async function pauseDownload(id: string): Promise<boolean> {
-  if (!isTauri) {
+  if (isMockItem(id)) {
     const list = loadMockDownloads().map((item) =>
       item.id === id ? { ...item, status: 'paused' as const, speed_bytes_sec: 0 } : item
     );
@@ -135,7 +139,7 @@ export async function pauseDownload(id: string): Promise<boolean> {
 }
 
 export async function resumeDownload(id: string): Promise<boolean> {
-  if (!isTauri) {
+  if (isMockItem(id)) {
     const list = loadMockDownloads().map((item) =>
       item.id === id ? { ...item, status: 'downloading' as const, speed_bytes_sec: 10485760 } : item
     );
@@ -146,12 +150,29 @@ export async function resumeDownload(id: string): Promise<boolean> {
 }
 
 export async function cancelDownload(id: string, deleteFile = false): Promise<boolean> {
-  if (!isTauri) {
+  if (isMockItem(id)) {
     const list = loadMockDownloads().filter((item) => item.id !== id);
     saveMockDownloads(list);
     return true;
   }
   return await invoke('cmd_cancel_download', { id, deleteFile });
+}
+
+export async function setDownloadSpeedLimit(id: string, limitMbps: number | null): Promise<boolean> {
+  if (isMockItem(id)) {
+    const list = loadMockDownloads().map((item) => {
+      if (item.id === id) {
+        return { ...item, speed_limit_mbps: limitMbps };
+      }
+      return item;
+    });
+    saveMockDownloads(list);
+    return true;
+  }
+  return await invoke<boolean>('cmd_set_download_speed_limit', {
+    id,
+    limitMbps: limitMbps !== null && limitMbps > 0 ? limitMbps : null,
+  });
 }
 
 export async function startQueue(): Promise<number> {

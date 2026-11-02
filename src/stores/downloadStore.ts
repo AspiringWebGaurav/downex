@@ -17,6 +17,7 @@ import {
   getLifetimeDownloadedBytes,
   setLifetimeDownloadedBytes,
   notifyDownloadsCompletedNative,
+  setDownloadSpeedLimit,
 } from '../services/tauriService';
 
 interface DownloadStore {
@@ -48,6 +49,7 @@ interface DownloadStore {
   addNewDownload: (url: string, folder?: string, queue?: string, headers?: Record<string, string>, startImmediately?: boolean, customFilename?: string) => Promise<void>;
   changeFolderAndRetry: (id: string, newFolder: string) => Promise<void>;
   togglePause: (id: string) => Promise<void>;
+  setSpeedLimit: (id: string, limitMbps: number | null) => Promise<void>;
   removeDownload: (id: string, deleteFile?: boolean) => Promise<void>;
   setSelectedView: (view: string) => void;
   settingsSubView: 'settings' | 'patch-notes';
@@ -213,6 +215,44 @@ export const useDownloadStore = create<DownloadStore>((set, get) => ({
       set((state) => ({
         items: state.items.map((i) => (i.id === id ? { ...i, status: 'downloading' } : i)),
       }));
+    }
+  },
+
+  setSpeedLimit: async (id: string, limitMbps: number | null) => {
+    // Layer 3: Optimistic state update & LocalStorage persistence
+    try {
+      const raw = localStorage.getItem('downex_task_speed_limits');
+      const map: Record<string, number> = raw ? JSON.parse(raw) : {};
+      if (limitMbps && limitMbps > 0) {
+        map[id] = limitMbps;
+      } else {
+        delete map[id];
+      }
+      localStorage.setItem('downex_task_speed_limits', JSON.stringify(map));
+    } catch {}
+
+    set((state) => ({
+      items: state.items.map((i) => {
+        if (i.id === id) {
+          const updated = { ...i, speed_limit_mbps: limitMbps };
+          if (i.id.startsWith('mock-') && i.status === 'downloading') {
+            if (limitMbps && limitMbps > 0) {
+              updated.speed_bytes_sec = Math.round((limitMbps * 1_000_000) / 8);
+            } else {
+              updated.speed_bytes_sec = 12500000;
+            }
+          }
+          return updated;
+        }
+        return i;
+      }),
+    }));
+
+    // Layer 2: Native IPC backend limiter & SQLite database persistence
+    try {
+      await setDownloadSpeedLimit(id, limitMbps);
+    } catch (e) {
+      console.error('Failed to set speed limit in backend:', e);
     }
   },
 

@@ -7,11 +7,31 @@
  * @description Lightweight, air-gapped service worker for Downex.
  *              Intercepts browser downloads, context-menu links, and clicks,
  *              bridging them to the local Downex engine via 127.0.0.1:18888.
+ *              Cleanly suppresses Chrome/Edge browser download shelf & bubble.
  * @security Zero cloud telemetry. No external network requests. Air-gapped local loopback only.
  */
 
 const DOWNEX_BRIDGE_URL = 'http://127.0.0.1:18888';
 let cachedAuthToken = null;
+
+// Suppress native browser download UI (bubble and shelf) completely (REA IDM pattern)
+function disableBrowserDownloadUI() {
+  try {
+    if (chrome.downloads?.setUiOptions) {
+      chrome.downloads.setUiOptions({ enabled: false }).catch(() => {});
+    }
+  } catch (_) {}
+  try {
+    if (chrome.downloads?.setShelfEnabled) {
+      chrome.downloads.setShelfEnabled(false);
+    }
+  } catch (_) {}
+}
+
+// Ensure browser download UI is disabled on startup and install
+disableBrowserDownloadUI();
+chrome.runtime.onStartup.addListener(disableBrowserDownloadUI);
+chrome.runtime.onInstalled.addListener(disableBrowserDownloadUI);
 
 async function getBridgeToken() {
   if (cachedAuthToken) return cachedAuthToken;
@@ -124,7 +144,23 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   });
 });
 
-// 3. Browser Download Interception (Authoritative onDeterminingFilename)
+// 3. Early OnCreated Download Interception (Immediately pause to prevent browser UI)
+chrome.downloads.onCreated.addListener((downloadItem) => {
+  if (!downloadItem || !downloadItem.url) return;
+  const url = downloadItem.url;
+  if (!url.startsWith('http://') && !url.startsWith('https://')) return;
+
+  disableBrowserDownloadUI();
+
+  // Immediately pause the browser download to suppress any download bubble/animation
+  try {
+    chrome.downloads.pause(downloadItem.id, () => {
+      if (chrome.runtime.lastError) {}
+    });
+  } catch (_) {}
+});
+
+// 4. Authoritative onDeterminingFilename Download Interception
 const handledDownloadIds = new Set();
 const recentUrls = new Map();
 
@@ -136,14 +172,22 @@ chrome.downloads.onDeterminingFilename.addListener((downloadItem, suggest) => {
   const url = downloadItem.url;
   if (!url.startsWith('http://') && !url.startsWith('https://')) return;
 
+  disableBrowserDownloadUI();
+
   // Deduplicate rapid triggers (within 3 seconds)
   const now = Date.now();
   for (const [u, ts] of recentUrls.entries()) {
     if (now - ts > 3000) recentUrls.delete(u);
   }
-  if (recentUrls.has(url)) return;
+  if (recentUrls.has(url)) {
+    try {
+      chrome.downloads.cancel(downloadItem.id, () => {
+        chrome.downloads.erase({ id: downloadItem.id });
+      });
+    } catch (_) {}
+    return;
+  }
   recentUrls.set(url, now);
-
   handledDownloadIds.add(downloadItem.id);
 
   (async () => {
@@ -167,11 +211,21 @@ chrome.downloads.onDeterminingFilename.addListener((downloadItem, suggest) => {
         await chrome.downloads.cancel(downloadItem.id);
         await chrome.downloads.erase({ id: downloadItem.id });
       } catch (_) {}
+    } else {
+      // Fallback: If Downex desktop is not running, resume normal browser download
+      try {
+        await chrome.downloads.resume(downloadItem.id);
+      } catch (_) {}
+      try {
+        suggest();
+      } catch (_) {}
     }
   })();
+
+  return true;
 });
 
-// 4. Content Script Link-Click Message Interceptor
+// 5. Content Script Link-Click Message Interceptor
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === 'INTERCEPT_LINK_CLICK' && message.url) {
     (async () => {

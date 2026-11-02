@@ -18,6 +18,7 @@ import {
 import { useDownloadStore } from '../stores/downloadStore';
 import { 
   getDefaultDownloadDir, 
+  setDefaultDownloadDir, 
   getDiskFreeSpace, 
   openFolderPicker, 
   probeUrl, 
@@ -282,6 +283,16 @@ export const NewDownloadModal: React.FC<{ isStandalone?: boolean }> = ({ isStand
       }
       const headersOpt = Object.keys(customHeaders).length > 0 ? customHeaders : undefined;
       const fullFilename = (fileBaseName.trim() + fileExtension.trim()) || undefined;
+
+      // Persist chosen directory if "Remember this folder" is checked
+      if (rememberPath && savePath.trim()) {
+        try {
+          await setDefaultDownloadDir(savePath.trim());
+          setCachedDownloadDir(savePath.trim());
+        } catch (e) {
+          console.warn('Could not save default download directory:', e);
+        }
+      }
 
       await addNewDownload(
         url.trim(),

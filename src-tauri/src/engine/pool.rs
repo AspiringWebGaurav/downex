@@ -101,6 +101,7 @@ impl DownloadEnginePool {
         supports_ranges: bool,
         custom_headers: Option<HashMap<String, String>>,
         max_connections: u32,
+        limiter: Arc<super::limiter::TaskSpeedLimiter>,
         progress_tx: mpsc::Sender<DownloadProgressEvent>,
         cancel_token: CancellationToken,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -175,6 +176,7 @@ impl DownloadEnginePool {
         let p_cancel = cancel_token.clone();
         let p_complete = completion_token.clone();
         let p_db = self.db.clone();
+        let p_limiter = limiter.clone();
         let t_progress_tx = progress_tx.clone();
 
         let initial_downloaded: u64 = {
@@ -249,21 +251,33 @@ impl DownloadEnginePool {
                             0.0
                         };
 
-                        // Heavy low-pass EMA dampener for speed: 95% previous, 5% instant estimate
-                        // Ensures slow, realistic speedometer progression without wild packet burst fluctuation
+                        let active_limit = p_limiter.get_limit();
+
+                        // Responsive EMA dampener: 70% previous, 30% instant for rapid rate tracking
                         smoothed_speed = if smoothed_speed <= 0.0 {
                             instant_speed
                         } else if instant_speed > 0.0 {
-                            (smoothed_speed * 0.95) + (instant_speed * 0.05)
+                            (smoothed_speed * 0.70) + (instant_speed * 0.30)
                         } else {
-                            smoothed_speed * 0.92
+                            smoothed_speed * 0.85
                         };
+
+                        // When an active cap is set, adapt immediately to the ceiling
+                        if active_limit > 0 {
+                            let limit_f = active_limit as f64;
+                            if smoothed_speed > limit_f {
+                                smoothed_speed = limit_f;
+                            }
+                        }
 
                         if smoothed_speed < 100.0 {
                             smoothed_speed = 0.0;
                         }
 
-                        let speed = smoothed_speed.round() as u64;
+                        let mut speed = smoothed_speed.round() as u64;
+                        if active_limit > 0 && speed > active_limit {
+                            speed = active_limit;
+                        }
                         last_bytes = current_total;
                         last_time = now;
 
@@ -325,6 +339,7 @@ impl DownloadEnginePool {
             let w_task_id = task_id.clone();
             let w_supports_ranges = supports_ranges;
             let w_fallback = fallback_single_stream.clone();
+            let w_limiter = limiter.clone();
             let w_total_bytes = total_bytes;
 
             let handle = tauri::async_runtime::spawn(async move {
@@ -338,6 +353,7 @@ impl DownloadEnginePool {
                     w_headers,
                     w_supports_ranges,
                     w_fallback,
+                    w_limiter,
                     w_total_bytes,
                     w_cancel,
                     w_complete,
@@ -460,6 +476,7 @@ impl DownloadEnginePool {
         custom_headers: Option<HashMap<String, String>>,
         supports_ranges: bool,
         fallback_single_stream: Arc<AtomicBool>,
+        limiter: Arc<super::limiter::TaskSpeedLimiter>,
         total_bytes: Option<u64>,
         cancel_token: CancellationToken,
         completion_token: CancellationToken,
@@ -625,6 +642,7 @@ impl DownloadEnginePool {
                                 break;
                             }
                             downloaded_atomic.fetch_add(write_len, Ordering::SeqCst);
+                            limiter.throttle(write_len as usize).await;
                         }
 
                         // Check if boundary was reached with this chunk

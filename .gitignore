@@ -75,6 +75,10 @@ scratch/
 # ------------------------------------------------------------------------------
 releases/
 /releases/
+downex-immutable-base/
+/downex-immutable-base/
+downex-dynamic-binaries/
+/downex-dynamic-binaries/
 *.downex.bin
 update*.downex.bin
 *.sig

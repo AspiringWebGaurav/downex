@@ -29,6 +29,8 @@ pub struct DownloadRecord {
     pub supports_ranges: bool,
     pub created_at: i64,
     pub updated_at: i64,
+    #[serde(default)]
+    pub speed_limit_mbps: Option<f64>,
 }
 
 fn default_supports_ranges() -> bool {
@@ -154,8 +156,8 @@ impl DatabaseManager {
             "INSERT INTO downloads (
                 id, url, filename, destination_path, total_bytes, downloaded_bytes,
                 status, etag, last_modified, headers_json, queue_id, speed_bytes_sec,
-                error_message, checksum, media_type, supports_ranges, created_at, updated_at
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
+                error_message, checksum, media_type, supports_ranges, created_at, updated_at, speed_limit_mbps
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)",
             params![
                 record.id,
                 record.url,
@@ -175,12 +177,22 @@ impl DatabaseManager {
                 if record.supports_ranges { 1 } else { 0 },
                 record.created_at,
                 record.updated_at,
+                record.speed_limit_mbps,
             ],
         )?;
         Ok(())
     }
 
-    pub fn update_download_status(&self, id: &str, status: &str, speed: u64, error: Option<&str>) -> Result<()> {
+        pub fn update_download_speed_limit(&self, id: &str, limit_mbps: Option<f64>) -> Result<()> {
+        let conn = self.conn.lock();
+        conn.execute(
+            "UPDATE downloads SET speed_limit_mbps = ?1 WHERE id = ?2",
+            params![limit_mbps, id],
+        )?;
+        Ok(())
+    }
+
+pub fn update_download_status(&self, id: &str, status: &str, speed: u64, error: Option<&str>) -> Result<()> {
         let conn = self.conn.lock();
         let now = chrono::Utc::now().timestamp_millis();
         conn.execute(
@@ -233,6 +245,7 @@ impl DatabaseManager {
                 supports_ranges: supports_ranges != 0,
                 created_at: row.get(16)?,
                 updated_at: row.get(17)?,
+                speed_limit_mbps: None,
             })
         })?;
 
@@ -276,6 +289,7 @@ impl DatabaseManager {
                 supports_ranges: supports_ranges != 0,
                 created_at: row.get(16)?,
                 updated_at: row.get(17)?,
+                speed_limit_mbps: None,
             })
         })?;
 
@@ -317,6 +331,7 @@ impl DatabaseManager {
                 supports_ranges: supports_ranges != 0,
                 created_at: row.get(16)?,
                 updated_at: row.get(17)?,
+                speed_limit_mbps: None,
             })
         })?;
 

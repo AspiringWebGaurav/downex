@@ -20,6 +20,7 @@ import {
   Command,
   Download,
   FolderOpen,
+  Gauge,
 } from 'lucide-react';
 import { useDownloadStore } from '../stores/downloadStore';
 
@@ -173,6 +174,13 @@ export const InAppSearchBar: React.FC<InAppSearchBarProps> = ({ darkMode, setDar
         subtitle: 'Configure download folder, startup behavior, and system tray',
         keywords: ['settings', 'preferences', 'config', 'options', 'tray', 'startup', 'folder', 'defaults', 'repair'],
         icon: <Settings className="w-4 h-4 text-zinc-500" />,
+      },
+      {
+        id: 'speedtest',
+        title: 'Speed Test',
+        subtitle: 'Live multi-stream internet speed test (Ping, Jitter, Download, Upload)',
+        keywords: ['speed', 'test', 'speedtest', 'fast', 'ookla', 'bandwidth', 'ping', 'jitter', 'upload', 'mbps'],
+        icon: <Gauge className="w-4 h-4 text-emerald-500" />,
       },
       {
         id: 'trash',

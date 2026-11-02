@@ -24,6 +24,7 @@ import {
   addDownload, 
   closeDownloadDialog, 
   getDefaultDownloadDir, 
+  setDefaultDownloadDir, 
   getDiskFreeSpace, 
   openFolderPicker, 
   probeUrl, 
@@ -253,11 +254,13 @@ export const DownloadDialogWindow: React.FC = () => {
       setSupportsRanges(payload.supports_ranges);
     }
 
-    const headers: Record<string, string> = {};
-    if (payload.cookies) headers['Cookie'] = payload.cookies;
-    if (payload.referer) headers['Referer'] = payload.referer;
-    if (payload.user_agent) headers['User-Agent'] = payload.user_agent;
-    setIncomingHeaders(Object.keys(headers).length > 0 ? headers : undefined);
+    setIncomingHeaders((prev) => {
+      const next: Record<string, string> = { ...(prev || {}) };
+      if (payload.cookies) next['Cookie'] = payload.cookies;
+      if (payload.referer) next['Referer'] = payload.referer;
+      if (payload.user_agent) next['User-Agent'] = payload.user_agent;
+      return Object.keys(next).length > 0 ? next : undefined;
+    });
   }, [applyFilename]);
 
   const applyScenario = useCallback((scenarioKey: string) => {
@@ -389,6 +392,16 @@ export const DownloadDialogWindow: React.FC = () => {
     setSubmitting(true);
     try {
       const fullFilename = (fileBaseName.trim() + fileExtension.trim()) || undefined;
+
+      // Persist chosen directory if "Remember this folder" is checked
+      if (rememberPath && savePath.trim()) {
+        try {
+          await setDefaultDownloadDir(savePath.trim());
+          setCachedDownloadDir(savePath.trim());
+        } catch (e) {
+          console.warn('Could not save default download directory:', e);
+        }
+      }
 
       await addDownload(
         url.trim(),

@@ -1,8 +1,10 @@
+pub mod limiter;
 pub mod pool;
 pub mod probe;
 pub mod state;
 pub mod writer;
 
+pub use limiter::TaskSpeedLimiter;
 pub use pool::DownloadEnginePool;
 pub use probe::probe_url;
 pub use state::{DownloadProgressEvent, DownloadStatus, ProbeResult, SegmentSnapshot};

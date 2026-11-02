@@ -96,8 +96,32 @@ pub async fn cmd_cancel_download(app: AppHandle, id: String, delete_file: bool, 
 }
 
 #[tauri::command]
+pub fn cmd_set_download_speed_limit(
+    id: String,
+    limit_mbps: Option<f64>,
+    state: State<'_, AppState>,
+) -> Result<bool, String> {
+    let bytes_per_sec = match limit_mbps {
+        Some(mbps) if mbps > 0.0 => ((mbps * 1_000_000.0) / 8.0).round() as u64,
+        _ => 0,
+    };
+    // Layer 1: Apply live rate limit to active downloading workers in engine pool
+    state.queue_manager.set_task_speed_limit(&id, bytes_per_sec);
+    // Layer 2: Persist limit to SQLite DB for restart and pause/resume lifecycle survival
+    let _ = state.db.update_download_speed_limit(&id, limit_mbps.filter(|m| *m > 0.0));
+    Ok(true)
+}
+
+#[tauri::command]
 pub async fn cmd_get_downloads(state: State<'_, AppState>) -> Result<Vec<DownloadRecord>, String> {
-    state.db.get_all_downloads().map_err(|e| e.to_string())
+    let mut records = state.db.get_all_downloads().map_err(|e| e.to_string())?;
+    for r in &mut records {
+        let bps = state.queue_manager.get_task_speed_limit(&r.id);
+        if bps > 0 {
+            r.speed_limit_mbps = Some(((bps as f64 * 8.0) / 1_000_000.0).round());
+        }
+    }
+    Ok(records)
 }
 
 #[tauri::command]
