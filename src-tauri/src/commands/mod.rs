@@ -5,6 +5,7 @@ use std::sync::Mutex;
 use tauri::{AppHandle, Emitter, Manager, State};
 
 static LAST_DOWNLOAD_DIALOG_PAYLOAD: Mutex<Option<serde_json::Value>> = Mutex::new(None);
+static LAST_DIALOG_SHOW_TIME: Mutex<Option<(String, std::time::Instant)>> = Mutex::new(None);
 static LAST_DOWNLOAD_COMPLETE_PAYLOAD: Mutex<Option<serde_json::Value>> = Mutex::new(None);
 
 #[tauri::command]
@@ -1165,6 +1166,25 @@ pub fn prewarm_secondary_dialogs<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
 
 pub fn show_download_dialog<R: tauri::Runtime>(app: &tauri::AppHandle<R>, payload: Option<serde_json::Value>) {
     if let Some(ref p) = payload {
+        let url = p.get("url").and_then(|u| u.as_str()).unwrap_or_default().to_string();
+        if !url.is_empty() {
+            if let Ok(mut time_lock) = LAST_DIALOG_SHOW_TIME.lock() {
+                if let Some((ref last_url, ref instant)) = *time_lock {
+                    if last_url == &url && instant.elapsed() < std::time::Duration::from_millis(1500) {
+                        if let Some(window) = app.get_webview_window("download_dialog") {
+                            let _ = window.unminimize();
+                            let _ = window.show();
+                            let _ = window.set_focus();
+                            #[cfg(target_os = "windows")]
+                            force_window_to_foreground(&window);
+                        }
+                        return;
+                    }
+                }
+                *time_lock = Some((url, std::time::Instant::now()));
+            }
+        }
+
         if let Ok(mut lock) = LAST_DOWNLOAD_DIALOG_PAYLOAD.lock() {
             *lock = Some(p.clone());
         }
@@ -1174,7 +1194,6 @@ pub fn show_download_dialog<R: tauri::Runtime>(app: &tauri::AppHandle<R>, payloa
         if let Some(ref p) = payload {
             use tauri::Emitter;
             let _ = window.emit("open-download-info-modal", p);
-            let _ = app.emit("open-download-info-modal", p);
         }
         let _ = window.unminimize();
         let _ = window.center();
@@ -1212,7 +1231,6 @@ pub fn show_download_dialog<R: tauri::Runtime>(app: &tauri::AppHandle<R>, payloa
                     if let Some(ref p) = payload_clone {
                         use tauri::Emitter;
                         let _ = window.emit("open-download-info-modal", p);
-                        let _ = app_handle.emit("open-download-info-modal", p);
                     }
                     let _ = window.unminimize();
                     let _ = window.center();
@@ -1229,7 +1247,6 @@ pub fn show_download_dialog<R: tauri::Runtime>(app: &tauri::AppHandle<R>, payloa
                         if let Some(ref p) = payload_clone {
                             use tauri::Emitter;
                             let _ = main_win.emit("open-download-info-modal", p);
-                            let _ = app_handle.emit("open-download-info-modal", p);
                         }
                         let _ = main_win.unminimize();
                         let _ = main_win.show();

@@ -16,7 +16,7 @@ import { PatchNotesModal } from './components/PatchNotesModal';
 import { QueueGuideModal } from './components/Modals/QueueGuideModal';
 import { SettingsView } from './components/SettingsView';
 import { TelemetryView } from './components/TelemetryView';
-import { onOpenNewDownloadModal, onOpenDownloadInfoModal, restoreManagerWindow, onNavigate, onCheckUpdatesFromTray, onOtaRollbackRecovered, notifyDomReady } from './services/tauriService';
+import { onOpenNewDownloadModal, restoreManagerWindow, onNavigate, onCheckUpdatesFromTray, onOtaRollbackRecovered, notifyDomReady } from './services/tauriService';
 import './App.css';
 
 export const App: React.FC = () => {
@@ -129,10 +129,6 @@ export const App: React.FC = () => {
       restoreManagerWindow().catch(() => {});
     });
 
-    const unlistenDownloadInfo = onOpenDownloadInfoModal((payload) => {
-      openNewModalWithData(payload);
-      restoreManagerWindow().catch(() => {});
-    });
 
     const unlistenNavigate = onNavigate((view) => {
       if (view) setSelectedView(view);
@@ -151,7 +147,6 @@ export const App: React.FC = () => {
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('downex-open-new-download', handleBrowserOpen);
       unlistenTrayModal();
-      unlistenDownloadInfo();
       unlistenNavigate();
       unlistenCheckUpdates();
       unlistenRollback();

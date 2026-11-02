@@ -1,3 +1,4 @@
+use tauri::Manager;
 use crate::db::DatabaseManager;
 use crate::scheduler::QueueManager;
 use serde::{Deserialize, Serialize};
@@ -605,7 +606,9 @@ Connection: close\r\n\r\n",
                                         "total_bytes": p.total_bytes,
                                         "supports_ranges": p.supports_ranges,
                                     });
-                                    let _ = handle.emit("open-download-info-modal", update_payload);
+                                    if let Some(dialog_win) = handle.get_webview_window("download_dialog") {
+                                        let _ = dialog_win.emit("open-download-info-modal", update_payload);
+                                    }
                                 }
                             });
 

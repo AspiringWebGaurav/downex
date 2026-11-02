@@ -66,6 +66,27 @@ export function getLatestCodebaseVersion(): string {
 }
 
 export const BASELINE_PATCH_NOTES: Record<string, DynamicPatchNotes> = {
+  '0.0.29': {
+    version: '0.0.29',
+    releaseDate: 'November 2, 2026',
+    title: 'fix: single dynamic modal 1-time trigger, suppress background downloader window, debounced extension interception',
+    highlights: [
+          "Fix: single dynamic modal 1-time trigger",
+          "Suppress background downloader window",
+          "Debounced extension interception"
+    ],
+    rawNotes: 'fix: single dynamic modal 1-time trigger, suppress background downloader window, debounced extension interception',
+  },
+  '--help': {
+    version: '--help',
+    releaseDate: 'November 2, 2026',
+    title: 'v--help: Performance and stability release',
+    highlights: [
+          "V--help: Performance",
+          "Stability release"
+    ],
+    rawNotes: 'v--help: Performance and stability release',
+  },
   '0.0.28': {
     version: '0.0.28',
     releaseDate: 'November 2, 2026',

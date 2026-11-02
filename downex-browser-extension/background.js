@@ -317,12 +317,29 @@ async function setupContextMenus(overrideConfig) {
      4. BROWSER DOWNLOAD INTERCEPTION (Authoritative onDeterminingFilename)
      ========================================================================= */
 
-  // Track intercepted download IDs to prevent duplicate triggers
+  // Track intercepted download IDs and URLs to prevent duplicate triggers
   const handledDownloadIds = new Set();
+  const recentInterceptionUrls = new Map();
+
+  function isUrlRecentlyIntercepted(url) {
+    if (!url) return false;
+    const now = Date.now();
+    for (const [u, ts] of recentInterceptionUrls.entries()) {
+      if (now - ts > 2500) recentInterceptionUrls.delete(u);
+    }
+    const clean = url.split('#')[0].replace(/([?&])(_t|t|buster|ts|time)=\d+/g, '').replace(/[?&]$/, '').toLowerCase();
+    if (recentInterceptionUrls.has(clean)) {
+      return true;
+    }
+    recentInterceptionUrls.set(clean, now);
+    return false;
+  }
 
   async function handleDownloadInterception(downloadItem) {
     if (!downloadItem || !downloadItem.id) return false;
     if (handledDownloadIds.has(downloadItem.id)) return false;
+    handledDownloadIds.add(downloadItem.id);
+
 
     const { config } = await chrome.storage.local.get(['config']);
     const currentConfig = { ...DEFAULT_CONFIG, ...(config || {}) };
@@ -334,6 +351,17 @@ async function setupContextMenus(overrideConfig) {
     const targetUrl = downloadItem.finalUrl || downloadItem.url;
     if (!targetUrl || targetUrl.startsWith('blob:') || targetUrl.startsWith('data:') || targetUrl.startsWith('filesystem:') || targetUrl.startsWith('chrome-extension:')) {
       return false;
+    }
+
+    // Check if URL was already intercepted within the last 2.5s (e.g. by content-script click)
+    if (isUrlRecentlyIntercepted(targetUrl)) {
+      try {
+        await chrome.downloads.cancel(downloadItem.id);
+        setTimeout(() => {
+          chrome.downloads.erase({ id: downloadItem.id }).catch(() => {});
+        }, 150);
+      } catch (_) {}
+      return true;
     }
 
     // Resolve filename from downloadItem or URL
@@ -382,11 +410,7 @@ async function setupContextMenus(overrideConfig) {
       download_later: false,
     };
 
-    handledDownloadIds.add(downloadItem.id);
-    if (handledDownloadIds.size > 200) {
-      const first = handledDownloadIds.values().next().value;
-      handledDownloadIds.delete(first);
-    }
+
 
     const success = await sendDownloadRequest(payload);
     if (success) {
@@ -788,6 +812,9 @@ async function setupContextMenus(overrideConfig) {
   }
 
   async function handoffToDownex(item) {
+    if (item && item.url && isUrlRecentlyIntercepted(item.url)) {
+      return true; // Debounced
+    }
     let cookiesHeader = item.cookies || '';
     if (!cookiesHeader && item.url) {
       try {

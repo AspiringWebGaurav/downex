@@ -449,7 +449,13 @@ function updateAllPillsWithMetadata(meta) {
   });
 }
 
+let lastDownloadClick = { url: '', time: 0 };
 function triggerDirectDownload(url, filename, downloadLater = false) {
+  const now = Date.now();
+  if (lastDownloadClick.url === url && now - lastDownloadClick.time < 1500) {
+    return;
+  }
+  lastDownloadClick = { url, time: now };
   chrome.runtime.sendMessage({
     type: 'SEND_DOWNLOAD',
     data: {
