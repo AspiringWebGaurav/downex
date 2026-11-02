@@ -69,6 +69,45 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   } catch (_) {}
 
+  
+  // =========================================================================
+  // DYNAMIC TIME AGO TICKER (Relative Time Synchronization)
+  // =========================================================================
+  let lastSyncTimestamp = Date.now();
+  try {
+    chrome.storage.local.get(['last_sync_timestamp'], (r) => {
+      if (r && r.last_sync_timestamp) {
+        lastSyncTimestamp = r.last_sync_timestamp;
+        updateTimeAgoDisplay();
+      }
+    });
+  } catch (_) {}
+
+  function formatTimeAgo(ts) {
+    if (!ts) return 'Just now';
+    const sec = Math.max(0, Math.floor((Date.now() - ts) / 1000));
+    if (sec < 20) return 'Just now';
+    if (sec < 60) return `${sec}s ago`;
+    const min = Math.floor(sec / 60);
+    if (min < 60) return `${min}m ago`;
+    const hr = Math.floor(min / 60);
+    if (hr < 24) return `${hr}h ago`;
+    return `${Math.floor(hr / 24)}d ago`;
+  }
+
+  function updateTimeAgoDisplay() {
+    const label = document.getElementById('footer-synced-label');
+    const container = document.getElementById('footer-up-to-date');
+    if (label && container && container.style.display !== 'none') {
+      const ago = formatTimeAgo(lastSyncTimestamp);
+      label.textContent = `Synced ${ago}`;
+      const d = new Date(lastSyncTimestamp);
+      container.title = `Last synced with desktop engine: ${d.toLocaleTimeString()}`;
+    }
+  }
+
+  setInterval(updateTimeAgoDisplay, 10000);
+
   let extractedLinks = [];
   let currentFilter = 'all';
   let popupAuthToken = null;
@@ -332,7 +371,12 @@ document.addEventListener('DOMContentLoaded', async () => {
       } else {
         if (extUpdateBanner) extUpdateBanner.style.display = 'none';
         if (btnFooterReload) btnFooterReload.style.display = 'none';
-        if (footerUpToDate) footerUpToDate.style.display = 'inline-flex';
+        if (footerUpToDate) {
+          footerUpToDate.style.display = 'inline-flex';
+          lastSyncTimestamp = Date.now();
+          chrome.storage.local.set({ last_sync_timestamp: lastSyncTimestamp });
+          updateTimeAgoDisplay();
+        }
       }
     } else {
       const unlockedContent = document.getElementById('unlocked-content');
@@ -939,15 +983,28 @@ document.addEventListener('DOMContentLoaded', async () => {
             chrome.runtime.reload();
           }, 350);
         } else {
-          // If background request fails or timeout, attempt direct reload
-          if (labelEl) labelEl.textContent = 'Reloading...';
-          setTimeout(() => {
-            chrome.runtime.reload();
-          }, 350);
+          // Zero-Loop Guarantee: NEVER blind reload on failure!
+          if (buttonEl) {
+            buttonEl.classList.remove('is-spinning');
+            buttonEl.disabled = false;
+          }
+          const errMsg = resp?.error || 'Desktop engine could not update extension files on disk';
+          console.warn('[Downex Extension Update Notice]', errMsg);
+          if (labelEl) {
+            labelEl.textContent = 'Keep App Open';
+            setTimeout(() => {
+              if (labelEl) labelEl.textContent = 'Reload to Update';
+            }, 2500);
+          }
         }
       });
-    } catch {
-      chrome.runtime.reload();
+    } catch (e) {
+      if (buttonEl) {
+        buttonEl.classList.remove('is-spinning');
+        buttonEl.disabled = false;
+      }
+      if (labelEl) labelEl.textContent = 'Reload to Update';
+      console.warn('[Downex Extension Update Error]', e);
     }
   }
 

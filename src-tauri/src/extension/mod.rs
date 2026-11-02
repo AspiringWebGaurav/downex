@@ -61,6 +61,26 @@ pub fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
 
 pub fn discover_unpacked_extension_dirs() -> Vec<PathBuf> {
     let mut dirs = Vec::new();
+
+    // 1. Check standard user download and desktop locations
+    if let Ok(user_profile) = std::env::var("USERPROFILE") {
+        let base = PathBuf::from(user_profile);
+        let candidate_paths = [
+            base.join("Downloads").join("downex-browser-extension"),
+            base.join("Downloads").join("Downex").join("downex-browser-extension"),
+            base.join("Desktop").join("downex-browser-extension"),
+            base.join("downex-browser-extension"),
+        ];
+        for candidate in candidate_paths {
+            if candidate.exists() && candidate.join("manifest.json").exists() {
+                if !dirs.contains(&candidate) {
+                    dirs.push(candidate);
+                }
+            }
+        }
+    }
+
+    // 2. Discover active unpacked extensions registered in Edge, Chrome, and Brave profiles
     let local_appdata = match std::env::var("LOCALAPPDATA") {
         Ok(v) => PathBuf::from(v),
         Err(_) => return dirs,
@@ -293,13 +313,17 @@ pub async fn download_and_extract_extension_package(
         return Err("Failed to extract companion extension archive".to_string());
     }
 
-    // Verify stage integrity before copying to canonical location
-    let stage_manifest = temp_stage.join("manifest.json");
-    if !stage_manifest.exists() {
+    // Verify stage integrity before copying to canonical location (handles both root and nested folder packaging)
+    let source_stage_dir = if temp_stage.join("manifest.json").exists() {
+        temp_stage.clone()
+    } else if temp_stage.join("downex-browser-extension").join("manifest.json").exists() {
+        temp_stage.join("downex-browser-extension")
+    } else {
         let _ = std::fs::remove_dir_all(&temp_stage);
         return Err("Invalid extension package: manifest.json missing".to_string());
-    }
+    };
 
+    let stage_manifest = source_stage_dir.join("manifest.json");
     let stage_ver = std::fs::read_to_string(&stage_manifest).ok().and_then(|c| {
         serde_json::from_str::<serde_json::Value>(&c).ok().and_then(|j| {
             j.get("version").and_then(|v| v.as_str()).map(|s| s.to_string())
@@ -307,15 +331,15 @@ pub async fn download_and_extract_extension_package(
     }).unwrap_or_else(|| "0.0.0".to_string());
 
     // Atomically copy validated files into canonical extension dir
-    if let Err(e) = copy_dir_recursive(&temp_stage, &target_dir) {
+    if let Err(e) = copy_dir_recursive(&source_stage_dir, &target_dir) {
         let _ = std::fs::remove_dir_all(&temp_stage);
         return Err(format!("Failed to copy validated extension to canonical directory: {}", e));
     }
 
-    // Also update all discovered unpacked extension directories in browser profiles!
+    // Also update all discovered unpacked extension directories in browser profiles & download folders!
     for extra_dir in discover_unpacked_extension_dirs() {
         if extra_dir != target_dir {
-            let _ = copy_dir_recursive(&temp_stage, &extra_dir);
+            let _ = copy_dir_recursive(&source_stage_dir, &extra_dir);
             eprintln!("[Downex Extension Manager] ✓ Also updated browser unpacked directory: {:?}", extra_dir);
         }
     }

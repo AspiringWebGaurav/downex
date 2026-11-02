@@ -601,10 +601,14 @@ async function setupContextMenus(overrideConfig) {
 
           if (resp.ok) {
             const res = await resp.json();
-            sendResponse({ success: true, version: res.version, message: res.message });
-            setTimeout(() => {
-              chrome.runtime.reload();
-            }, 400);
+            if (res && res.success) {
+              sendResponse({ success: true, version: res.version, message: res.message });
+              setTimeout(() => {
+                chrome.runtime.reload();
+              }, 400);
+            } else {
+              sendResponse({ success: false, error: res?.error || 'Engine reported update failure' });
+            }
           } else {
             const errText = await resp.text();
             sendResponse({ success: false, error: `Server error: HTTP ${resp.status}: ${errText}` });
