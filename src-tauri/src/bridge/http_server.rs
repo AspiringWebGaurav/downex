@@ -310,8 +310,8 @@ Content-Length: 0\r\n\r\n",
                     .sum();
 
                 let installed_ext_ver = crate::extension::get_installed_extension_version()
-                    .unwrap_or_else(|| "0.0.0".to_string());
-                let should_reload = crate::extension::EXTENSION_RELOAD_PENDING.swap(false, std::sync::atomic::Ordering::SeqCst);
+                    .unwrap_or_else(|| "1.0.0".to_string());
+                let should_reload = false;
 
                 (
                     200,
@@ -413,36 +413,6 @@ Content-Length: 0\r\n\r\n",
                         "data": "Showing main window"
                     }),
                 )
-            }
-            ("POST", "/api/extension/update") if !is_authorized => (
-                401,
-                serde_json::json!({
-                    "success": false,
-                    "error": "Unauthorized: valid Downex bridge authentication token required"
-                }),
-            ),
-            ("POST", "/api/extension/update") => {
-                let client = reqwest::Client::builder()
-                    .timeout(std::time::Duration::from_secs(30))
-                    .build()
-                    .unwrap_or_default();
-                match crate::extension::download_and_extract_extension(&client).await {
-                    Ok(new_ver) => (
-                        200,
-                        serde_json::json!({
-                            "success": true,
-                            "version": new_ver,
-                            "message": "Extension successfully updated by Downex. Reload pending."
-                        }),
-                    ),
-                    Err(err) => (
-                        500,
-                        serde_json::json!({
-                            "success": false,
-                            "error": format!("Failed to update extension: {}", err)
-                        }),
-                    ),
-                }
             }
             ("POST", "/api/probe") if !is_authorized => (
                 401,

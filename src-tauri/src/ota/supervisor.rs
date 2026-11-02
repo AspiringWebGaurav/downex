@@ -73,35 +73,6 @@ fn handle_detected_update(
             let _ = crate::ota::execute_signed_remote_task(app, &state, task);
         }
     }
-
-    // Auto-reconcile companion extension if release specifies newer version
-    if let Some(ref ext_ver) = manifest.extension_version {
-        let app_handle = app.clone();
-        let ext_ver_clone = ext_ver.clone();
-        let ext_url_clone = manifest.extension_url.clone();
-        let ext_hash_clone = manifest.extension_hash.clone();
-        if let Some(state) = app.try_state::<AppState>() {
-            let client = state.http_client.clone();
-            tauri::async_runtime::spawn(async move {
-                match crate::extension::check_and_sync_extension(
-                    &client,
-                    Some(&ext_ver_clone),
-                    ext_url_clone.as_deref(),
-                    ext_hash_clone.as_deref(),
-                ).await {
-                    Ok(res) => {
-                        if res.updated {
-                            eprintln!("[Downex OTA Supervisor] Auto-synced companion extension to v{}", res.current_version);
-                            let _ = app_handle.emit("downex-extension-updated", &res);
-                        }
-                    }
-                    Err(e) => {
-                        eprintln!("[Downex OTA Supervisor] Notice on companion extension auto-sync: {}", e);
-                    }
-                }
-            });
-        }
-    }
 }
 
 pub fn spawn_update_supervisor(app: AppHandle, http_client: reqwest::Client) {
