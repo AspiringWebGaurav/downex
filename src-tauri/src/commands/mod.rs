@@ -1195,7 +1195,7 @@ pub fn prewarm_secondary_dialogs<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
         .shadow(true)
         .center()
         .resizable(false)
-        .always_on_top(true)
+        .always_on_top(false)
         .initialization_script("window.__DOWNEX_WINDOW_LABEL__ = 'download_complete';")
         .visible(false);
 
@@ -1314,8 +1314,8 @@ pub fn force_window_to_foreground<R: tauri::Runtime>(window: &tauri::WebviewWind
         unsafe {
             ShowWindow(hwnd_val, SW_RESTORE);
             ShowWindow(hwnd_val, SW_SHOW);
-            if window.label() == "main" {
-                // Main window must NEVER remain permanently topmost (WS_EX_TOPMOST).
+            if window.label() == "main" || window.label() == "download_complete" {
+                // Main and download_complete windows must NEVER remain permanently topmost (WS_EX_TOPMOST).
                 // Setting HWND_NOTOPMOST allows other applications (IDE, browser, etc.) to come in front
                 // naturally when clicking elsewhere outside Downex.
                 SetWindowPos(hwnd_val, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
@@ -1528,14 +1528,32 @@ pub fn show_download_complete<R: tauri::Runtime>(app: &tauri::AppHandle<R>, payl
         *lock = Some(valid_payload.clone());
     }
 
+    let json_str = serde_json::to_string(&valid_payload).unwrap_or_default();
+    let eval_script = format!(
+        "window.__DOWNEX_COMPLETE_PAYLOAD__ = {json}; if (typeof window.__onDownexCompletePayload === 'function') {{ window.__onDownexCompletePayload({json}); }}",
+        json = json_str
+    );
+
     if let Some(window) = app.get_webview_window("download_complete") {
         use tauri::Emitter;
         let _ = window.emit("open-download-complete-modal", &valid_payload);
         let _ = app.emit("open-download-complete-modal", &valid_payload);
-        let _ = window.set_always_on_top(true);
+        let _ = window.eval(&eval_script);
+
+        let _ = window.unminimize();
         let _ = window.center();
-        show_window_without_stealing_focus(&window);
+        let _ = window.show();
+        let _ = window.set_focus();
+
+        #[cfg(target_os = "windows")]
+        force_window_to_foreground(&window);
+
+        let _ = window.set_always_on_top(false);
     } else {
+        let init_script = format!(
+            "window.__DOWNEX_WINDOW_LABEL__ = 'download_complete'; window.__DOWNEX_COMPLETE_PAYLOAD__ = {};",
+            json_str
+        );
         let builder = tauri::WebviewWindowBuilder::new(
             app,
             "download_complete",
@@ -1548,8 +1566,8 @@ pub fn show_download_complete<R: tauri::Runtime>(app: &tauri::AppHandle<R>, payl
         .shadow(true)
         .center()
         .resizable(false)
-        .always_on_top(true)
-        .initialization_script("window.__DOWNEX_WINDOW_LABEL__ = 'download_complete';")
+        .always_on_top(false)
+        .initialization_script(&init_script)
         .visible(false);
 
         if let Ok(window) = builder.build() {
@@ -1559,9 +1577,17 @@ pub fn show_download_complete<R: tauri::Runtime>(app: &tauri::AppHandle<R>, payl
             use tauri::Emitter;
             let _ = window.emit("open-download-complete-modal", &valid_payload);
             let _ = app.emit("open-download-complete-modal", &valid_payload);
-            let _ = window.set_always_on_top(true);
+            let _ = window.eval(&eval_script);
+
+            let _ = window.unminimize();
             let _ = window.center();
-            show_window_without_stealing_focus(&window);
+            let _ = window.show();
+            let _ = window.set_focus();
+
+            #[cfg(target_os = "windows")]
+            force_window_to_foreground(&window);
+
+            let _ = window.set_always_on_top(false);
         }
     }
 }

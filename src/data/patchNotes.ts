@@ -78,6 +78,18 @@ export function getLatestCodebaseVersion(): string {
 }
 
 export const BASELINE_PATCH_NOTES: Record<string, DynamicPatchNotes> = {
+  '0.0.36': {
+    version: '0.0.36',
+    releaseDate: 'November 3, 2026',
+    title: 'Instant frame-0 download complete dialog, natural window unfocus, and repository hygiene',
+    highlights: [
+      'Instant Download Complete Dialog: Pre-hydrated frame-0 payload delivery eliminating loading spinner blocks and blank window popups',
+      'Natural Window Unfocus: Removed permanent topmost lock so clicking elsewhere allows other applications to focus in front cleanly',
+      'Synchronous State Hydration: Evaluates window payload directly from Rust prior to display for zero-delay rendering',
+      'Repository & Packaging Hygiene: Removed deprecated vault directories and refined companion extension packaging',
+    ],
+    rawNotes: 'v0.0.36: Instant frame-0 download complete dialog, natural window unfocus, and repository hygiene',
+  },
   '0.0.35': {
     version: '0.0.35',
     releaseDate: 'November 3, 2026',

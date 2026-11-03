@@ -996,16 +996,19 @@ export async function closeDownloadCompleteDialog(): Promise<void> {
 }
 
 export async function getDownloadCompletePayload(): Promise<DownloadCompletePayload | null> {
-  if (!isTauri) {
-    if (typeof window !== 'undefined') {
-      if ((window as any).__DOWNEX_MOCK_COMPLETE_PAYLOAD__) {
-        return (window as any).__DOWNEX_MOCK_COMPLETE_PAYLOAD__;
-      }
-      try {
-        const stored = sessionStorage.getItem('downex_mock_complete_payload');
-        if (stored) return JSON.parse(stored);
-      } catch {}
+  if (typeof window !== 'undefined') {
+    if ((window as any).__DOWNEX_COMPLETE_PAYLOAD__) {
+      return (window as any).__DOWNEX_COMPLETE_PAYLOAD__;
     }
+    if ((window as any).__DOWNEX_MOCK_COMPLETE_PAYLOAD__) {
+      return (window as any).__DOWNEX_MOCK_COMPLETE_PAYLOAD__;
+    }
+    try {
+      const stored = localStorage.getItem('downex_last_complete_payload') || sessionStorage.getItem('downex_last_complete_payload') || sessionStorage.getItem('downex_mock_complete_payload');
+      if (stored) return JSON.parse(stored);
+    } catch {}
+  }
+  if (!isTauri) {
     return null;
   }
   return await invoke<DownloadCompletePayload | null>('cmd_get_download_complete_payload');

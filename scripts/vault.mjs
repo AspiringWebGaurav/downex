@@ -332,13 +332,6 @@ async function packVault() {
 
   fs.writeFileSync(vaultFilePath, vaultBuffer);
 
-  // Also maintain backup copy in vault/vault.bin for backward compatibility
-  const legacyVaultPath = path.join(rootDir, 'vault', 'vault.bin');
-  const legacyVaultDir = path.dirname(legacyVaultPath);
-  if (!fs.existsSync(legacyVaultDir)) {
-    fs.mkdirSync(legacyVaultDir, { recursive: true });
-  }
-  fs.writeFileSync(legacyVaultPath, vaultBuffer);
 
   const checksum = crypto.createHash('sha256').update(vaultBuffer).digest('hex');
 

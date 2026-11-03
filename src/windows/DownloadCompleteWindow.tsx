@@ -26,7 +26,6 @@ import {
   getDefaultDownloadDir,
   onDownloadCompleted, 
   onOpenDownloadCompleteModal,
-  restoreManagerWindow,
   isTauri 
 } from '../services/tauriService';
 import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
@@ -39,7 +38,6 @@ function formatBytes(bytes?: number): string {
   return `${parseFloat((bytes / Math.pow(k, i)).toFixed(2))} ${sizes[i]}`;
 }
 
-
 const DEFAULT_BROWSER_COMPLETE_MOCK: DownloadCompletePayload = {
   id: 'mock-complete-1',
   url: 'https://releases.ubuntu.com/24.04/ubuntu-24.04-desktop-amd64.iso',
@@ -49,17 +47,33 @@ const DEFAULT_BROWSER_COMPLETE_MOCK: DownloadCompletePayload = {
   downloaded_bytes: 6144000000,
 };
 
-export const DownloadCompleteWindow: React.FC = () => {
-  const [payload, setPayload] = useState<DownloadCompletePayload | null>(() => {
-    try {
-      const cached = sessionStorage.getItem('downex_last_complete_payload');
-      return cached ? JSON.parse(cached) : null;
-    } catch {
-      return null;
+function getInitialCompletePayload(): DownloadCompletePayload | null {
+  if (typeof window !== 'undefined') {
+    if ((window as any).__DOWNEX_COMPLETE_PAYLOAD__) {
+      return (window as any).__DOWNEX_COMPLETE_PAYLOAD__;
     }
-  });
-  const [isLoading, setIsLoading] = useState<boolean>(() => !payload);
+    if ((window as any).__DOWNEX_MOCK_COMPLETE_PAYLOAD__) {
+      return (window as any).__DOWNEX_MOCK_COMPLETE_PAYLOAD__;
+    }
+    try {
+      const stored = localStorage.getItem('downex_last_complete_payload') || sessionStorage.getItem('downex_last_complete_payload');
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (parsed && (parsed.url || parsed.filename)) return parsed;
+      }
+    } catch {}
+  }
+  if (!isTauri) {
+    return DEFAULT_BROWSER_COMPLETE_MOCK;
+  }
+  return null;
+}
+
+export const DownloadCompleteWindow: React.FC = () => {
+  const [payload, setPayload] = useState<DownloadCompletePayload | null>(getInitialCompletePayload);
+  const [isWindowFocused, setIsWindowFocused] = useState<boolean>(true);
   const [copiedField, setCopiedField] = useState<'url' | 'path' | null>(null);
+  const [isCloseHovered, setIsCloseHovered] = useState(false);
   const [isDarkTheme, setIsDarkTheme] = useState<boolean>(() => {
     try {
       return localStorage.getItem('downex_theme') !== 'light';
@@ -68,6 +82,7 @@ export const DownloadCompleteWindow: React.FC = () => {
     }
   });
 
+  // Sync theme
   useEffect(() => {
     if (isDarkTheme) {
       document.documentElement.classList.add('dark');
@@ -77,69 +92,81 @@ export const DownloadCompleteWindow: React.FC = () => {
       localStorage.setItem('downex_theme', 'light');
     }
   }, [isDarkTheme]);
-  const [isCloseHovered, setIsCloseHovered] = useState(false);
 
-  // Cleanly reset hover state on window blur, focus, or visibility changes
+  // Synchronous payload bridge from Rust window.eval
   useEffect(() => {
-    const clearHover = () => setIsCloseHovered(false);
-    window.addEventListener('blur', clearHover);
-    window.addEventListener('focus', clearHover);
-    document.addEventListener('visibilitychange', clearHover);
-    window.addEventListener('mouseleave', clearHover);
+    (window as any).__onDownexCompletePayload = (p: DownloadCompletePayload) => {
+      if (p && (p.url || p.filename)) {
+        setPayload(p);
+        try {
+          const json = JSON.stringify(p);
+          localStorage.setItem('downex_last_complete_payload', json);
+          sessionStorage.setItem('downex_last_complete_payload', json);
+        } catch {}
+      }
+    };
     return () => {
-      window.removeEventListener('blur', clearHover);
-      window.removeEventListener('focus', clearHover);
-      document.removeEventListener('visibilitychange', clearHover);
-      window.removeEventListener('mouseleave', clearHover);
+      delete (window as any).__onDownexCompletePayload;
     };
   }, []);
 
-  // Apply dark mode theme from localStorage
+  // Out of focus handler: Cleanly yield focus and disable always-on-top when clicking elsewhere
   useEffect(() => {
-    try {
-      const theme = localStorage.getItem('downex_theme');
-      if (theme === 'dark') {
-        document.documentElement.classList.add('dark');
-      } else {
-        document.documentElement.classList.remove('dark');
+    const handleFocus = () => {
+      setIsWindowFocused(true);
+    };
+
+    const handleBlur = () => {
+      setIsWindowFocused(false);
+      setIsCloseHovered(false);
+      if (isTauri) {
+        try {
+          getCurrentWebviewWindow().setAlwaysOnTop(false).catch(() => {});
+        } catch {}
       }
-    } catch {}
+    };
+
+    window.addEventListener('focus', handleFocus);
+    window.addEventListener('blur', handleBlur);
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) handleBlur();
+      else handleFocus();
+    });
+
+    return () => {
+      window.removeEventListener('focus', handleFocus);
+      window.removeEventListener('blur', handleBlur);
+    };
   }, []);
 
-  // Fetch initial dynamic payload on mount or listen for completed downloads
+  // Fetch initial dynamic payload on mount and listen to live events
   useEffect(() => {
-    // 1. Fetch payload from Rust backend (close window if no valid download payload)
+    // 1. Fetch from Rust backend
     getDownloadCompletePayload().then((p) => {
-      if (p && p.url && p.url.trim()) {
+      if (p && (p.url || p.filename)) {
         setPayload(p);
-        setIsLoading(false);
         try {
-          sessionStorage.setItem('downex_last_complete_payload', JSON.stringify(p));
+          const json = JSON.stringify(p);
+          localStorage.setItem('downex_last_complete_payload', json);
+          sessionStorage.setItem('downex_last_complete_payload', json);
         } catch {}
-      } else {
-        if (isTauri) {
-          closeDownloadCompleteDialog();
-        } else {
-          setPayload(DEFAULT_BROWSER_COMPLETE_MOCK);
-          setIsLoading(false);
-        }
+      } else if (!isTauri && !payload) {
+        setPayload(DEFAULT_BROWSER_COMPLETE_MOCK);
       }
     }).catch(() => {
-      if (isTauri) {
-        closeDownloadCompleteDialog();
-      } else {
+      if (!isTauri && !payload) {
         setPayload(DEFAULT_BROWSER_COMPLETE_MOCK);
-        setIsLoading(false);
       }
     });
 
     // 2. Listen to live events (both live completions and manual details triggers)
     const handleIncoming = (p: DownloadCompletePayload) => {
-      if (p && p.url && p.url.trim()) {
+      if (p && (p.url || p.filename)) {
         setPayload(p);
-        setIsLoading(false);
         try {
-          sessionStorage.setItem('downex_last_complete_payload', JSON.stringify(p));
+          const json = JSON.stringify(p);
+          localStorage.setItem('downex_last_complete_payload', json);
+          sessionStorage.setItem('downex_last_complete_payload', json);
         } catch {}
       }
     };
@@ -194,20 +221,29 @@ export const DownloadCompleteWindow: React.FC = () => {
   };
 
   const totalBytes = payload?.total_bytes || payload?.downloaded_bytes || 0;
-  const formattedSize = formatBytes(totalBytes);
+  const formattedSize = totalBytes > 0 ? formatBytes(totalBytes) : 'Complete';
+  const displayFilename = payload?.filename || 'Download Complete';
+  const displayUrl = payload?.url || '';
+  const displayPath = payload?.destination_path || '';
 
   const CompleteCard = (
-    <div className={`w-full flex-1 flex flex-col bg-white dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 font-sans select-none overflow-hidden ${
-      isTauri ? 'h-full' : 'w-[580px] h-[380px] max-w-full border border-zinc-300/80 dark:border-zinc-800 shadow-2xl rounded-xl'
+    <div className={`w-full flex-1 flex flex-col bg-white dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 font-sans select-none overflow-hidden transition-shadow ${
+      isTauri 
+        ? 'h-full' 
+        : 'w-[580px] h-[380px] max-w-full border border-zinc-300/80 dark:border-zinc-800 shadow-2xl rounded-xl'
     }`}>
-      {/* Titlebar (Draggable with standard window buttons) */}
+      {/* Titlebar (Draggable with standard window buttons, dims slightly when blurred) */}
       <div
         data-tauri-drag-region
-        className="h-9 px-3 bg-zinc-100 dark:bg-zinc-900 border-b border-zinc-200 dark:border-zinc-800 flex items-center justify-between cursor-default shrink-0"
+        className={`h-9 px-3 bg-zinc-100 dark:bg-zinc-900 border-b border-zinc-200 dark:border-zinc-800 flex items-center justify-between cursor-default shrink-0 transition-opacity ${
+          isWindowFocused ? 'opacity-100' : 'opacity-85'
+        }`}
       >
         <div data-tauri-drag-region className="flex items-center gap-2">
           <img src="/icon.png" alt="Downex" className="w-4 h-4 rounded-xs shrink-0" />
-          <span data-tauri-drag-region className="font-semibold text-xs text-zinc-800 dark:text-zinc-200">
+          <span data-tauri-drag-region className={`font-semibold text-xs transition-colors ${
+            isWindowFocused ? 'text-zinc-800 dark:text-zinc-200' : 'text-zinc-500 dark:text-zinc-400'
+          }`}>
             Download complete
           </span>
         </div>
@@ -237,177 +273,143 @@ export const DownloadCompleteWindow: React.FC = () => {
         </div>
       </div>
 
-      {/* Main Body - Strictly One View without Vertical Scroll */}
+      {/* Main Body - Strictly One View without Vertical Scroll & ZERO BLANK STATE */}
       <div className="flex-1 p-4.5 flex flex-col justify-between overflow-hidden gap-3 text-xs">
-        {isLoading && !payload ? (
-          <div className="flex-1 flex flex-col items-center justify-center gap-2 py-8 text-zinc-400">
-            <div className="w-6 h-6 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin" />
-            <span className="font-mono text-xs">Loading download details</span>
+        {/* Top Header Tribute: Folder Check Icon + Filename + Complete Badge */}
+        <div className="flex items-start gap-3.5">
+          <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center text-white shrink-0 shadow-md relative group">
+            <FolderCheck className="w-6 h-6 stroke-[2]" />
+            <span className="absolute -bottom-1 -right-1 w-4 h-4 rounded-full bg-emerald-400 border-2 border-white dark:border-zinc-950 flex items-center justify-center">
+              <FileCheck className="w-2.5 h-2.5 text-emerald-950 stroke-[3]" />
+            </span>
           </div>
-        ) : !payload ? (
-          <div className="flex-1 flex flex-col items-center justify-center gap-3 py-6 text-center">
-            <p className="text-zinc-500 dark:text-zinc-400 text-xs">
-              No recent download details available.
-            </p>
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={async () => {
-                  await restoreManagerWindow();
-                  handleClose();
-                }}
-                className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-medium text-xs cursor-pointer shadow-xs transition-all"
-              >
-                Open Downex
-              </button>
-              <button
-                type="button"
-                onClick={handleClose}
-                className="px-3 py-1.5 rounded-lg bg-zinc-200 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 font-medium text-xs cursor-pointer hover:bg-zinc-300 dark:hover:bg-zinc-700 transition-all"
-              >
-                Close
-              </button>
+
+          <div className="min-w-0 flex-1 space-y-1">
+            <div className="flex items-center justify-between gap-3">
+              <h2 className="font-bold text-sm tracking-tight text-zinc-900 dark:text-zinc-100 truncate" title={displayFilename}>
+                {displayFilename}
+              </h2>
+              <span className="text-[10px] font-mono px-2.5 py-0.5 rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 font-semibold border border-emerald-500/20 shrink-0">
+                100% Complete
+              </span>
+            </div>
+            <div className="text-xs font-mono text-zinc-600 dark:text-zinc-400 font-medium">
+              <span className="font-semibold text-zinc-900 dark:text-zinc-100">
+                Downloaded {formattedSize}
+              </span>
             </div>
           </div>
-        ) : (
-          <>
-            {/* Header Tribute: Folder with Files & Size in MB + Bytes */}
-            <div className="flex items-start gap-3.5">
-              <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center text-white shrink-0 shadow-md relative group">
-                <FolderCheck className="w-6 h-6 stroke-[2]" />
-                <span className="absolute -bottom-1 -right-1 w-4 h-4 rounded-full bg-emerald-400 border-2 border-white dark:border-zinc-950 flex items-center justify-center">
-                  <FileCheck className="w-2.5 h-2.5 text-emerald-950 stroke-[3]" />
-                </span>
-              </div>
+        </div>
 
-              <div className="min-w-0 flex-1 space-y-1">
-                <div className="flex items-center justify-between gap-3">
-                  <h2 className="font-bold text-sm tracking-tight text-zinc-900 dark:text-zinc-100 truncate" title={payload?.filename}>
-                    {payload?.filename || 'Download Complete'}
-                  </h2>
-                  <span className="text-[10px] font-mono px-2.5 py-0.5 rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 font-semibold border border-emerald-500/20 shrink-0">
-                    100% Complete
-                  </span>
-                </div>
-                <div className="text-xs font-mono text-zinc-600 dark:text-zinc-400 font-medium">
-                  <span className="font-semibold text-zinc-900 dark:text-zinc-100">Downloaded {formattedSize}</span>
-                </div>
-              </div>
-            </div>
-
-            {/* Address (URL) Input Field */}
-            <div className="space-y-1">
-              <div className="flex items-center justify-between text-[11px] font-medium text-zinc-500 dark:text-zinc-400">
-                <span>Address</span>
-                {payload?.url && (
-                  <button
-                    type="button"
-                    onClick={() => copyToClipboard(payload.url, 'url')}
-                    className="text-[10px] text-blue-600 hover:text-blue-700 dark:text-blue-400 flex items-center gap-1 cursor-pointer"
-                    title="Copy URL"
-                  >
-                    {copiedField === 'url' ? <Check className="w-3 h-3 text-emerald-500" /> : <Copy className="w-3 h-3" />}
-                    <span>{copiedField === 'url' ? 'Copied' : 'Copy'}</span>
-                  </button>
-                )}
-              </div>
-              <div className="w-full text-xs font-mono bg-zinc-50 dark:bg-zinc-900/90 border border-zinc-200 dark:border-zinc-800 rounded-lg px-3 py-2 flex items-center overflow-hidden">
-                <AutoScrollText
-                  text={payload?.url || ''}
-                  className="text-xs font-mono text-zinc-800 dark:text-zinc-200"
-                  placeholder="No URL provided"
-                />
-              </div>
-            </div>
-
-            {/* The file saved as (Destination Path) Input Field */}
-            <div className="space-y-1">
-              <div className="flex items-center justify-between text-[11px] font-medium text-zinc-500 dark:text-zinc-400">
-                <span>The file saved as</span>
-                {payload?.destination_path && (
-                  <button
-                    type="button"
-                    onClick={() => copyToClipboard(payload.destination_path, 'path')}
-                    className="text-[10px] text-blue-600 hover:text-blue-700 dark:text-blue-400 flex items-center gap-1 cursor-pointer"
-                    title="Copy Path"
-                  >
-                    {copiedField === 'path' ? <Check className="w-3 h-3 text-emerald-500" /> : <Copy className="w-3 h-3" />}
-                    <span>{copiedField === 'path' ? 'Copied' : 'Copy'}</span>
-                  </button>
-                )}
-              </div>
-              <div className="w-full text-xs font-mono bg-zinc-50 dark:bg-zinc-900/90 border border-zinc-200 dark:border-zinc-800 rounded-lg px-3 py-2 flex items-center overflow-hidden">
-                <AutoScrollText
-                  text={payload?.destination_path || ''}
-                  className="text-xs font-mono text-zinc-800 dark:text-zinc-200"
-                  placeholder="No save path"
-                />
-              </div>
-            </div>
-
-            {/* Action Buttons Row (Open, Open With, Open folder, Close) */}
-            <div className="grid grid-cols-4 gap-2 pt-0.5">
-              <Button
-                variant="primary-emerald"
-                size="md"
-                icon={<ExternalLink className="w-3.5 h-3.5 stroke-[2.5]" />}
-                onClick={async () => {
-                  if (payload?.destination_path) {
-                    await openFile(payload.destination_path);
-                    handleClose();
-                  }
-                }}
-                title="Open file with default program"
+        {/* Address (URL) Input Field */}
+        <div className="space-y-1">
+          <div className="flex items-center justify-between text-[11px] font-medium text-zinc-500 dark:text-zinc-400">
+            <span>Address</span>
+            {displayUrl ? (
+              <button
+                type="button"
+                onClick={() => copyToClipboard(displayUrl, 'url')}
+                className="text-[10px] text-blue-600 hover:text-blue-700 dark:text-blue-400 flex items-center gap-1 cursor-pointer"
+                title="Copy URL"
               >
-                Open
-              </Button>
+                {copiedField === 'url' ? <Check className="w-3 h-3 text-emerald-500" /> : <Copy className="w-3 h-3" />}
+                <span>{copiedField === 'url' ? 'Copied' : 'Copy'}</span>
+              </button>
+            ) : null}
+          </div>
+          <div className="w-full text-xs font-mono bg-zinc-50 dark:bg-zinc-900/90 border border-zinc-200 dark:border-zinc-800 rounded-lg px-3 py-2 flex items-center overflow-hidden">
+            <AutoScrollText
+              text={displayUrl}
+              className="text-xs font-mono text-zinc-800 dark:text-zinc-200"
+              placeholder="https://..."
+            />
+          </div>
+        </div>
 
-              <Button
-                variant="secondary"
-                size="md"
-                icon={<AppWindow className="w-3.5 h-3.5 text-zinc-500 dark:text-zinc-400" />}
-                onClick={async () => {
-                  if (payload?.destination_path) {
-                    await openFileWith(payload.destination_path);
-                    handleClose();
-                  }
-                }}
-                title="Choose program to open with"
+        {/* The file saved as (Destination Path) Input Field */}
+        <div className="space-y-1">
+          <div className="flex items-center justify-between text-[11px] font-medium text-zinc-500 dark:text-zinc-400">
+            <span>The file saved as</span>
+            {displayPath ? (
+              <button
+                type="button"
+                onClick={() => copyToClipboard(displayPath, 'path')}
+                className="text-[10px] text-blue-600 hover:text-blue-700 dark:text-blue-400 flex items-center gap-1 cursor-pointer"
+                title="Copy Path"
               >
-                Open with...
-              </Button>
+                {copiedField === 'path' ? <Check className="w-3 h-3 text-emerald-500" /> : <Copy className="w-3 h-3" />}
+                <span>{copiedField === 'path' ? 'Copied' : 'Copy'}</span>
+              </button>
+            ) : null}
+          </div>
+          <div className="w-full text-xs font-mono bg-zinc-50 dark:bg-zinc-900/90 border border-zinc-200 dark:border-zinc-800 rounded-lg px-3 py-2 flex items-center overflow-hidden">
+            <AutoScrollText
+              text={displayPath}
+              className="text-xs font-mono text-zinc-800 dark:text-zinc-200"
+              placeholder="C:\Downloads\..."
+            />
+          </div>
+        </div>
 
-              <Button
-                variant="secondary"
-                size="md"
-                icon={<FolderOpen className="w-3.5 h-3.5 text-zinc-500 dark:text-zinc-400" />}
-                onClick={async () => {
-                  if (payload?.destination_path) {
-                    await openFileFolder(payload.destination_path);
-                  } else {
-                    const defaultDir = await getDefaultDownloadDir();
-                    if (defaultDir) await openFileFolder(defaultDir);
-                  }
-                  handleClose();
-                }}
-                title="Show in File Explorer"
-              >
-                Open folder
-              </Button>
+        {/* Action Buttons Row (Open, Open with..., Open folder, Close) */}
+        <div className="grid grid-cols-4 gap-2 pt-0.5">
+          <Button
+            variant="primary-emerald"
+            size="md"
+            icon={<ExternalLink className="w-3.5 h-3.5 stroke-[2.5]" />}
+            onClick={async () => {
+              if (displayPath) {
+                await openFile(displayPath);
+                handleClose();
+              }
+            }}
+            title="Open file with default program"
+          >
+            Open
+          </Button>
 
-              <Button
-                variant="secondary"
-                size="md"
-                onClick={handleClose}
-                title="Close this dialog"
-              >
-                Close
-              </Button>
-            </div>
-          </>
-        )}
+          <Button
+            variant="secondary"
+            size="md"
+            icon={<AppWindow className="w-3.5 h-3.5 text-zinc-500 dark:text-zinc-400" />}
+            onClick={async () => {
+              if (displayPath) {
+                await openFileWith(displayPath);
+                handleClose();
+              }
+            }}
+            title="Choose program to open with"
+          >
+            Open with...
+          </Button>
 
+          <Button
+            variant="secondary"
+            size="md"
+            icon={<FolderOpen className="w-3.5 h-3.5 text-zinc-500 dark:text-zinc-400" />}
+            onClick={async () => {
+              if (displayPath) {
+                await openFileFolder(displayPath);
+              } else {
+                const defaultDir = await getDefaultDownloadDir();
+                if (defaultDir) await openFileFolder(defaultDir);
+              }
+              handleClose();
+            }}
+            title="Show in File Explorer"
+          >
+            Open folder
+          </Button>
 
+          <Button
+            variant="secondary"
+            size="md"
+            onClick={handleClose}
+            title="Close this dialog (Esc)"
+          >
+            Close
+          </Button>
+        </div>
       </div>
     </div>
   );
@@ -421,7 +423,14 @@ export const DownloadCompleteWindow: React.FC = () => {
   }
 
   return (
-    <div className="min-h-screen w-full bg-gradient-to-br from-zinc-900 via-zinc-950 to-black text-zinc-100 flex flex-col items-center justify-center p-4 relative font-sans selection:bg-emerald-500 selection:text-white">
+    <div 
+      className="min-h-screen w-full bg-gradient-to-br from-zinc-900 via-zinc-950 to-black text-zinc-100 flex flex-col items-center justify-center p-4 relative font-sans selection:bg-emerald-500 selection:text-white"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) {
+          handleClose();
+        }
+      }}
+    >
       {/* Dev Control Bar */}
       <div className="w-[580px] max-w-full mb-3 px-3 py-2 rounded-xl bg-zinc-900/90 border border-zinc-800/90 backdrop-blur-md flex items-center justify-between shadow-xl ring-1 ring-white/5">
         <div className="flex items-center gap-2">

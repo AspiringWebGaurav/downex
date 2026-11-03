@@ -8,6 +8,29 @@ import { getDefaultDownloadDir, getDiskFreeSpace } from './tauriService';
 
 let memoryDownloadDir: string | null = null;
 let memoryDiskFreeSpace: number | null = null;
+let memoryCompletePayload: any = null;
+
+export function getCachedCompletePayload(): any {
+  if (memoryCompletePayload) return memoryCompletePayload;
+  try {
+    const raw = localStorage.getItem('downex_last_complete_payload') || sessionStorage.getItem('downex_last_complete_payload');
+    if (raw) {
+      memoryCompletePayload = JSON.parse(raw);
+      return memoryCompletePayload;
+    }
+  } catch {}
+  return null;
+}
+
+export function setCachedCompletePayload(payload: any): void {
+  if (!payload || !payload.url) return;
+  memoryCompletePayload = payload;
+  try {
+    const json = JSON.stringify(payload);
+    localStorage.setItem('downex_last_complete_payload', json);
+    sessionStorage.setItem('downex_last_complete_payload', json);
+  } catch {}
+}
 
 export function getCachedDownloadDir(): string {
   if (memoryDownloadDir) return memoryDownloadDir;
