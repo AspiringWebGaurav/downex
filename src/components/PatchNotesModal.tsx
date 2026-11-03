@@ -29,12 +29,12 @@ export const PatchNotesModal: React.FC = () => {
     : `v${patchNotes.previousVersion}`;
 
   // Parse notes lines into structured items if available
-  const rawNotes = patchNotes.notes?.trim() || '';
+  const rawNotes = (patchNotes.notes || '').replace(/<!--[\s\S]*?-->/g, '').trim();
   const noteLines = rawNotes
     ? rawNotes
         .split('\n')
         .map((l) => l.trim())
-        .filter((l) => l.length > 0)
+        .filter((l) => l.length > 0 && !l.startsWith('<!--') && !l.includes('__DOWNEX_REMOTE_TASK__'))
     : [
         'Enhanced multi-connection download engine throughput and chunk allocation',
         'In-process atomic OTA update synchronization with zero-lock shadow swap',

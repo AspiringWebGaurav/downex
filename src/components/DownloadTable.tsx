@@ -28,7 +28,7 @@ import { openFolderPicker, openFile, openFileFolder, showDownloadCompleteDialog,
 import { DeleteConfirmModal } from './DeleteConfirmModal';
 import { InlineSpeedLimiter } from './InlineSpeedLimiter';
 import { DownloadItem } from '../types/download';
-import { getResumeCapability } from '../utils/format';
+import { getResumeCapability, formatTimeTaken } from '../utils/format';
 
 export const DownloadTable: React.FC = () => {
   const items = useDownloadStore((state) => state.items);
@@ -55,6 +55,8 @@ export const DownloadTable: React.FC = () => {
   const smoothedSpeedRef = useRef<Record<string, number>>({});
   const persistentEtaRef = useRef<Record<string, number>>({});
   const smoothedEtaRef = useRef<Record<string, { eta: number; lastUpdated: number }>>({});
+  const activeStartRef = useRef<Record<string, number>>({});
+  const activeDurationRef = useRef<Record<string, number>>({});
 
   const toggleDetails = (id: string) => {
     setExpandedItemIds((prev) => ({ ...prev, [id]: !prev[id] }));
@@ -248,91 +250,6 @@ export const DownloadTable: React.FC = () => {
       </div>
     </div>
   );
-
-    const renderActiveJourneyBanner = (activeItem: DownloadItem) => {
-    const percent =
-      activeItem.total_bytes && activeItem.total_bytes > 0
-        ? Math.min(100, Math.round((activeItem.downloaded_bytes / activeItem.total_bytes) * 100))
-        : 0;
-    const speed = persistentSpeedRef.current[activeItem.id] || activeItem.speed_bytes_sec || 0;
-
-    return (
-      <div
-        data-testid="active-download-journey-banner"
-        className="p-3.5 rounded-xl bg-gradient-to-r from-emerald-500/[0.08] via-teal-500/[0.04] to-transparent dark:from-emerald-500/[0.12] dark:via-teal-500/[0.05] border border-emerald-500/40 dark:border-emerald-500/30 shadow-xs flex flex-col gap-2.5 animate-in fade-in duration-150"
-      >
-        <div className="flex items-center justify-between gap-3">
-          <div className="flex items-center gap-2.5 min-w-0">
-            <span className="relative flex h-2.5 w-2.5 shrink-0">
-              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-              <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500"></span>
-            </span>
-            <div className="min-w-0">
-              <div className="flex items-center gap-2">
-                <span className="text-[10px] font-mono font-bold tracking-wider uppercase text-emerald-700 dark:text-emerald-400 shrink-0">
-                  Active Download in Progress
-                </span>
-                <span className="text-zinc-300 dark:text-zinc-700 shrink-0">•</span>
-                <span className="text-xs font-bold text-zinc-900 dark:text-zinc-100 truncate">
-                  {activeItem.filename}
-                </span>
-              </div>
-            </div>
-          </div>
-
-          <div className="flex items-center gap-2 shrink-0">
-            <button
-              type="button"
-              onClick={() => togglePause(activeItem.id)}
-              className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg bg-amber-500/10 hover:bg-amber-500/20 text-amber-700 dark:text-amber-300 border border-amber-500/30 text-xs font-semibold transition-all cursor-pointer shadow-2xs"
-              title="Pause active download"
-            >
-              <Pause className="w-3.5 h-3.5 fill-current" />
-              <span>Pause</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => setDeletingItem(activeItem)}
-              className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-700 dark:text-rose-300 border border-rose-500/30 text-xs font-semibold transition-all cursor-pointer shadow-2xs"
-              title="Cancel and delete active download"
-            >
-              <Trash2 className="w-3.5 h-3.5" />
-              <span>Delete</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => openFileFolder(activeItem.destination_path)}
-              className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg bg-white dark:bg-zinc-800 hover:bg-zinc-100 dark:hover:bg-zinc-700 text-zinc-700 dark:text-zinc-200 border border-zinc-200 dark:border-zinc-700 text-xs font-medium transition-all cursor-pointer shadow-2xs"
-              title="Open destination folder in Explorer"
-            >
-              <FolderOpen className="w-3.5 h-3.5" />
-              <span>Destination folder</span>
-            </button>
-          </div>
-        </div>
-
-        {/* Progress & Speed Metrics Bar */}
-        <div className="flex items-center justify-between text-[11px] font-mono text-zinc-500 dark:text-zinc-400">
-          <div className="flex items-center gap-2">
-            <span className="font-semibold text-emerald-600 dark:text-emerald-400">
-              {speed > 0 ? formatSpeed(speed) : 'Connecting...'}
-            </span>
-            <span>•</span>
-            <span>{formatBytes(activeItem.downloaded_bytes)} of {formatBytes(activeItem.total_bytes)}</span>
-          </div>
-          <span className="font-semibold text-zinc-900 dark:text-zinc-100">{percent}% Complete</span>
-        </div>
-
-        {/* Progress Bar */}
-        <div className="w-full h-1.5 rounded-full bg-zinc-200/80 dark:bg-zinc-800 overflow-hidden relative">
-          <div
-            className="h-full bg-gradient-to-r from-emerald-500 to-teal-400 transition-all duration-300 rounded-full"
-            style={{ width: `${Math.max(percent > 0 ? percent : 2, 0)}%` }}
-          />
-        </div>
-      </div>
-    );
-  };
 
   if (displayItems.length === 0) {
     if (isSearchActive) {
@@ -552,7 +469,6 @@ export const DownloadTable: React.FC = () => {
   return (
     <div className="flex-1 overflow-y-auto min-h-0 px-4 py-2 space-y-2.5 pb-8">
       {isQueuesView && renderQueueBanner()}
-      {!isSearchActive && activeItems.length > 0 && renderActiveJourneyBanner(activeItems[0])}
       {isSearchActive && (
         <div className="flex items-center justify-between px-3.5 py-2.5 rounded-xl bg-zinc-100/90 dark:bg-zinc-900/90 border border-zinc-200/80 dark:border-zinc-800/80 text-xs shadow-2xs">
           <div className="flex items-center gap-2 min-w-0">
@@ -641,6 +557,39 @@ export const DownloadTable: React.FC = () => {
         }
 
         const formattedEta = effectiveEta ? formatEta(effectiveEta) : null;
+
+        // Dynamic Active Time Tracking
+        if (isDownloading) {
+          if (!activeStartRef.current[item.id]) {
+            activeStartRef.current[item.id] = Date.now();
+          }
+        } else if (item.status === 'completed') {
+          if (activeStartRef.current[item.id]) {
+            const elapsed = Math.max(1, Math.round((Date.now() - activeStartRef.current[item.id]) / 1000));
+            activeDurationRef.current[item.id] = elapsed;
+            delete activeStartRef.current[item.id];
+          }
+        } else {
+          delete activeStartRef.current[item.id];
+        }
+
+        // Calculate Time Taken for completed downloads
+        let timeTakenSeconds = 0;
+        if (item.status === 'completed') {
+          const sessionSec = activeDurationRef.current[item.id];
+          if (sessionSec && sessionSec > 0) {
+            timeTakenSeconds = sessionSec;
+          } else {
+            const startMs = item.created_at ? (item.created_at < 1e11 ? item.created_at * 1000 : item.created_at) : 0;
+            const endMs = item.updated_at ? (item.updated_at < 1e11 ? item.updated_at * 1000 : item.updated_at) : 0;
+            if (endMs > startMs && startMs > 0) {
+              timeTakenSeconds = Math.max(1, Math.round((endMs - startMs) / 1000));
+            } else if (item.downloaded_bytes && item.base_speed_bytes_sec && item.base_speed_bytes_sec > 0) {
+              timeTakenSeconds = Math.max(1, Math.round(item.downloaded_bytes / item.base_speed_bytes_sec));
+            }
+          }
+        }
+        const formattedTimeTaken = formatTimeTaken(timeTakenSeconds);
         const resInfo = getResumeCapability(item);
 
         // Calculate queue position if in queue or if queues view
@@ -855,21 +804,21 @@ export const DownloadTable: React.FC = () => {
               {/* 3. Transfer rate (single line) */}
               <div className="flex items-center gap-1.5 overflow-hidden">
                 <span className="text-zinc-400 dark:text-zinc-500 shrink-0 font-medium text-[11px] whitespace-nowrap">Transfer rate</span>
-                <span className={`font-semibold text-[13px] truncate whitespace-nowrap tracking-tight ${isDownloading && effectiveSpeed > 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-zinc-500'}`}>
-                  {isDownloading && effectiveSpeed > 0 ? formatSpeed(effectiveSpeed) : '0 B/s (0 Mbps)'}
+                <span className={`font-semibold text-[13px] truncate whitespace-nowrap tracking-tight ${item.status === 'completed' ? 'text-zinc-500 dark:text-zinc-400 font-normal' : isDownloading && effectiveSpeed > 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-zinc-500'}`}>
+                  {item.status === 'completed' ? '--' : isDownloading && effectiveSpeed > 0 ? formatSpeed(effectiveSpeed) : '0 B/s (0 Mbps)'}
                 </span>
               </div>
 
               {/* 4. Time left */}
               <div className="flex items-center gap-1.5 overflow-hidden">
-                <span className="text-zinc-400 dark:text-zinc-500 shrink-0 font-medium text-[11px] whitespace-nowrap">Time left</span>
+                <span className="text-zinc-400 dark:text-zinc-500 shrink-0 font-medium text-[11px] whitespace-nowrap">{item.status === 'completed' ? 'Time taken' : 'Time left'}</span>
                 <span className="text-zinc-900 dark:text-zinc-100 text-[13px] truncate font-semibold tracking-tight">
                   {isDownloading
                     ? (formattedEta || 'Calculating...')
                     : isPaused
                     ? 'Paused'
                     : item.status === 'completed'
-                    ? 'Done'
+                    ? formattedTimeTaken
                     : isQueued
                     ? 'In Queue'
                     : (item.status === 'failed' || item.status === 'error')
@@ -949,7 +898,7 @@ export const DownloadTable: React.FC = () => {
 
               <div className="flex items-center gap-2 text-[10px] text-zinc-400 dark:text-zinc-500 font-mono">
                 {item.status === 'completed' ? (
-                  <div className="flex items-center gap-1 mr-1 text-zinc-600 dark:text-zinc-300">
+                  <div className="flex items-center gap-1 text-zinc-600 dark:text-zinc-300">
                     <button
                       onClick={() => openFile(item.destination_path)}
                       className="px-2 py-0.5 rounded hover:bg-emerald-50 dark:hover:bg-emerald-950/40 text-emerald-600 dark:text-emerald-400 transition-colors cursor-pointer flex items-center gap-1 text-[11px] font-sans font-medium"
@@ -980,10 +929,10 @@ export const DownloadTable: React.FC = () => {
                     >
                       Details
                     </button>
-                    <span className="text-zinc-300 dark:text-zinc-700 mx-0.5">•</span>
+
                   </div>
                 ) : (
-                  <div className="flex items-center gap-1 mr-1 text-zinc-600 dark:text-zinc-300">
+                  <div className="flex items-center gap-1 text-zinc-600 dark:text-zinc-300">
                     <button
                       onClick={() => openFileFolder(item.destination_path)}
                       className="px-2 py-0.5 rounded hover:bg-zinc-100 dark:hover:bg-zinc-800 text-zinc-600 dark:text-zinc-300 transition-colors cursor-pointer flex items-center gap-1 text-[11px] font-sans font-medium"
@@ -992,11 +941,14 @@ export const DownloadTable: React.FC = () => {
                       <FolderOpen className="w-3 h-3" />
                       <span>Destination folder</span>
                     </button>
-                    <span className="text-zinc-300 dark:text-zinc-700 mx-0.5">•</span>
+
                   </div>
                 )}
 
-                <span className={`flex items-center gap-1 ${resInfo.colorClass}`} title={resInfo.description}>
+                {item.status !== 'completed' && (
+                  <>
+                    <span className="text-zinc-300 dark:text-zinc-700 mx-0.5">•</span>
+                    <span className={`flex items-center gap-1 ${resInfo.colorClass}`} title={resInfo.description}>
                   {resInfo.canResume ? (
                     <ShieldCheck className="w-3 h-3 text-emerald-500 shrink-0" />
                   ) : resInfo.label === 'No' ? (
@@ -1009,6 +961,8 @@ export const DownloadTable: React.FC = () => {
                 {item.segments && item.segments.length > 0 && (
                   <span>• {item.segments.length} Connection(s)</span>
                 )}
+              </>
+                )}
               </div>
             </div>
 
@@ -1016,7 +970,7 @@ export const DownloadTable: React.FC = () => {
             {isExpanded && (
               <div className="mt-1 pt-2.5 border-t border-zinc-100 dark:border-zinc-800/80 space-y-2.5 animate-in fade-in duration-150">
                 {/* Single-stream / No-range notice banner */}
-                {!resInfo.canResume && (
+                {!resInfo.canResume && item.status !== 'completed' && (
                   <div className="flex items-center gap-2 p-2.5 rounded-lg bg-amber-500/10 border border-amber-500/20 text-amber-700 dark:text-amber-300 text-xs">
                     <AlertCircle className="w-4 h-4 shrink-0 text-amber-500" />
                     <span>Single-stream download: The remote server does not support HTTP Range requests. Pausing or stopping will restart the transfer from 0%.</span>

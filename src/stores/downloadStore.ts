@@ -341,9 +341,10 @@ export const useDownloadStore = create<DownloadStore>((set, get) => ({
               supports_ranges: event.supports_ranges !== undefined ? event.supports_ranges : item.supports_ranges,
               downloaded_bytes: isCompleted && total ? total : event.downloaded_bytes,
               total_bytes: total,
-              speed_bytes_sec: effectiveSpeed,
-              eta_seconds: effectiveEta,
+              speed_bytes_sec: isCompleted ? 0 : effectiveSpeed,
+              eta_seconds: isCompleted ? 0 : effectiveEta,
               status: event.status as any,
+              updated_at: isCompleted ? Date.now() : item.updated_at,
               segments: isDownloading && event.segments && event.segments.length > 0 ? event.segments : item.segments,
             };
           }

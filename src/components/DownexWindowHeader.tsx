@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { X, Check, RefreshCw, Download, AlertTriangle } from 'lucide-react';
+import { X, Check, RefreshCw, Download, AlertTriangle, Minus } from 'lucide-react';
 import { minimizeToBackground } from '../services/tauriService';
 import { useAppVersionStore } from '../stores/appVersionStore';
+import { useDownloadStore } from '../stores/downloadStore';
 import { compareSemver } from '../utils/version';
 
 export const DownexWindowHeader: React.FC = () => {
@@ -10,12 +11,22 @@ export const DownexWindowHeader: React.FC = () => {
   const status = useAppVersionStore((state) => state.status);
   const openModal = useAppVersionStore((state) => state.openModal);
   const [isCloseHovered, setIsCloseHovered] = useState(false);
+  const [isMinimizeHovered, setIsMinimizeHovered] = useState(false);
+
+  // Dynamically monitor active downloads (downloading or probing)
+  const hasActiveDownloads = useDownloadStore((state) =>
+    state.items.some((i) => i.status === 'downloading' || i.status === 'probing')
+  );
+
   const hasUpdate = Boolean(status.manifest?.version) && (status.state === 'available' || status.state === 'ready') && compareSemver(status.manifest!.version, currentVersion) > 0;
 
   // Cleanly reset hover state on window blur, focus, or visibility changes
   // to prevent stuck hover/highlight states when the UI or modal appears
   useEffect(() => {
-    const clearHover = () => setIsCloseHovered(false);
+    const clearHover = () => {
+      setIsCloseHovered(false);
+      setIsMinimizeHovered(false);
+    };
 
     window.addEventListener('blur', clearHover);
     window.addEventListener('focus', clearHover);
@@ -30,6 +41,25 @@ export const DownexWindowHeader: React.FC = () => {
     };
   }, []);
 
+  const handleMinimizeToTray = async () => {
+    setIsMinimizeHovered(false);
+    if (document.activeElement instanceof HTMLElement) {
+      document.activeElement.blur();
+    }
+    try {
+      await minimizeToBackground();
+    } catch (err) {
+      console.error('Failed to minimize to tray:', err);
+      try {
+        const { getCurrentWebviewWindow } = await import('@tauri-apps/api/webviewWindow');
+        const win = getCurrentWebviewWindow();
+        await win.hide();
+      } catch (fallbackErr) {
+        console.error('Fallback minimize error:', fallbackErr);
+      }
+    }
+  };
+
   const handleClose = async () => {
     setIsCloseHovered(false);
     if (document.activeElement instanceof HTMLElement) {
@@ -39,6 +69,13 @@ export const DownexWindowHeader: React.FC = () => {
       await minimizeToBackground();
     } catch (err) {
       console.error('Failed to minimize to background:', err);
+      try {
+        const { getCurrentWebviewWindow } = await import('@tauri-apps/api/webviewWindow');
+        const win = getCurrentWebviewWindow();
+        await win.hide();
+      } catch (fallbackErr) {
+        console.error('Fallback close error:', fallbackErr);
+      }
     }
   };
 
@@ -171,14 +208,32 @@ export const DownexWindowHeader: React.FC = () => {
         ) : null}
       </div>
 
-      {/* Right Window Control: Close 'X' Button (Strict Hover-Only Highlight) */}
+      {/* Right Window Controls: Dynamic Minimise-to-Tray Button & Close Button */}
       <div className="relative z-10 flex items-center pointer-events-auto">
+        {hasActiveDownloads && (
+          <button
+            type="button"
+            onClick={handleMinimizeToTray}
+            onMouseEnter={() => setIsMinimizeHovered(true)}
+            onMouseLeave={() => setIsMinimizeHovered(false)}
+            title="Minimise to System Tray (Active downloads running in background)"
+            aria-label="Minimise to System Tray"
+            className={`group relative w-8 h-6 flex items-center justify-center rounded-[2px] transition-colors duration-100 cursor-pointer focus:outline-none ${
+              isMinimizeHovered
+                ? 'bg-zinc-200/80 dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100'
+                : 'text-zinc-400 dark:text-zinc-500 bg-transparent'
+            }`}
+          >
+            <Minus className="w-3.5 h-3.5 stroke-[2.2]" />
+          </button>
+        )}
         <button
           type="button"
           onClick={handleClose}
           onMouseEnter={() => setIsCloseHovered(true)}
           onMouseLeave={() => setIsCloseHovered(false)}
           title="Close to System Tray"
+          aria-label="Close to System Tray"
           className={`group relative w-8 h-6 flex items-center justify-center rounded-[2px] transition-colors duration-100 cursor-pointer focus:outline-none ${
             isCloseHovered
               ? 'bg-[#e81123] text-white'

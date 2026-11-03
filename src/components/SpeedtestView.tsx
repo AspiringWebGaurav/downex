@@ -122,8 +122,8 @@ export const SpeedtestView: React.FC<SpeedtestViewProps> = ({ onBack }) => {
   // High-Precision SVG Gauge Math
   // Center: (160, 125), Radius: 95, Sweep: 240 degrees (from 150° to 390°)
   const cx = 160;
-  const cy = 125;
-  const radius = 95;
+  const cy = 120;
+  const radius = 100;
   const strokeWidth = 9;
   const totalArcLength = 2 * Math.PI * radius * (240 / 360);
   const activeOffset = totalArcLength * (1 - normalizedSpeed);
@@ -229,6 +229,84 @@ export const SpeedtestView: React.FC<SpeedtestViewProps> = ({ onBack }) => {
 
       {/* 2. Central Speedometer Gauge Zone (~210px, clean unobstructed geometry) */}
       <div className="relative flex flex-col items-center justify-center my-auto py-2">
+        {/* Systematic Mode Switcher / State Bar (Fixed height prevents layout shifting) */}
+        <div className="h-9 flex items-center justify-center mb-1 shrink-0">
+          {isCompleted ? (
+            <div className="flex items-center p-0.5 rounded-full bg-zinc-100 dark:bg-zinc-800/90 border border-zinc-200/80 dark:border-zinc-700/80 shadow-2xs">
+              <button
+                type="button"
+                onClick={() => setActiveResultTab('download')}
+                className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-mono font-bold transition-all cursor-pointer ${
+                  activeResultTab === 'download'
+                    ? 'bg-emerald-500 text-white shadow-xs'
+                    : 'text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100'
+                }`}
+                title="Display Download Speed on Gauge"
+              >
+                <ArrowDown className="w-3.5 h-3.5" />
+                <span>Download</span>
+                {metrics.downloadMbps !== null && (
+                  <span className={`text-[11px] font-semibold ml-0.5 ${
+                    activeResultTab === 'download' ? 'text-emerald-100' : 'text-zinc-400 dark:text-zinc-500'
+                  }`}>
+                    {metrics.downloadMbps.toFixed(1)}
+                  </span>
+                )}
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveResultTab('upload')}
+                className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-mono font-bold transition-all cursor-pointer ${
+                  activeResultTab === 'upload'
+                    ? 'bg-violet-500 text-white shadow-xs'
+                    : 'text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100'
+                }`}
+                title="Display Upload Speed on Gauge"
+              >
+                <ArrowUp className="w-3.5 h-3.5" />
+                <span>Upload</span>
+                {metrics.uploadMbps !== null && (
+                  <span className={`text-[11px] font-semibold ml-0.5 ${
+                    activeResultTab === 'upload' ? 'text-violet-100' : 'text-zinc-400 dark:text-zinc-500'
+                  }`}>
+                    {metrics.uploadMbps.toFixed(1)}
+                  </span>
+                )}
+              </button>
+            </div>
+          ) : isTesting ? (
+            <span className={`flex items-center gap-2 px-3 py-1 rounded-full text-xs font-mono font-semibold border ${
+              metrics.phase === 'upload'
+                ? 'bg-violet-500/10 text-violet-600 dark:text-violet-400 border-violet-500/20'
+                : metrics.phase === 'download'
+                ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20'
+                : 'bg-blue-500/10 text-blue-600 dark:text-blue-400 border-blue-500/20'
+            }`}>
+              {metrics.phase === 'upload' ? (
+                <>
+                  <ArrowUp className="w-3.5 h-3.5 animate-bounce" />
+                  Testing Multi-Stream Upload Throughput
+                </>
+              ) : metrics.phase === 'download' ? (
+                <>
+                  <ArrowDown className="w-3.5 h-3.5 animate-bounce" />
+                  Testing Multi-Stream Download Throughput
+                </>
+              ) : (
+                <>
+                  <span className="w-2 h-2 rounded-full bg-blue-500 animate-ping" />
+                  Measuring Edge Latency & Jitter
+                </>
+              )}
+            </span>
+          ) : (
+            <span className="text-xs font-mono text-zinc-400 dark:text-zinc-500 flex items-center gap-1.5">
+              <Wifi className="w-3.5 h-3.5 text-emerald-500" />
+              <span>{metrics.serverLocation || 'Cloudflare Edge CDN'} • Ready</span>
+            </span>
+          )}
+        </div>
+
         <div className="relative w-72 h-52 flex items-center justify-center">
           {/* Ambient Glow */}
           <div 
@@ -322,74 +400,44 @@ export const SpeedtestView: React.FC<SpeedtestViewProps> = ({ onBack }) => {
                 <span className="text-[11px] font-mono font-bold tracking-widest uppercase mt-0.5">START</span>
               </button>
             ) : isCompleted ? (
-              <div className="flex flex-col items-center justify-center pointer-events-auto">
-                {/* Segmented Switcher Tabs: Download & Upload */}
-                <div className="flex items-center p-0.5 rounded-xl bg-zinc-100 dark:bg-zinc-800/80 border border-zinc-200/80 dark:border-zinc-700/80 shadow-2xs mb-1">
-                  <button
-                    type="button"
-                    onClick={() => setActiveResultTab('download')}
-                    className={`flex items-center gap-1 px-2.5 py-0.5 rounded-lg text-xs font-mono font-bold transition-all cursor-pointer ${
-                      activeResultTab === 'download'
-                        ? 'bg-emerald-500 text-white shadow-xs'
-                        : 'text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100'
-                    }`}
-                  >
-                    <ArrowDown className="w-3 h-3" />
-                    <span>Download</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setActiveResultTab('upload')}
-                    className={`flex items-center gap-1 px-2.5 py-0.5 rounded-lg text-xs font-mono font-bold transition-all cursor-pointer ${
-                      activeResultTab === 'upload'
-                        ? 'bg-violet-500 text-white shadow-xs'
-                        : 'text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100'
-                    }`}
-                  >
-                    <ArrowUp className="w-3 h-3" />
-                    <span>Upload</span>
-                  </button>
-                </div>
-
-                {/* Active Speed Digits */}
-                <div className="flex items-baseline gap-1">
-                  <span className={`text-4xl sm:text-5xl font-black font-mono tracking-tight drop-shadow-xs ${
+              <div className="flex flex-col items-center justify-center">
+                {/* Active Speed Digits (Horizontally centered with generous breathing room from arc) */}
+                <div className="flex items-center justify-center">
+                  <span className={`text-4xl sm:text-[44px] leading-none font-black font-mono tracking-tight drop-shadow-xs transition-colors duration-200 ${
                     activeResultTab === 'upload' ? 'text-violet-600 dark:text-violet-400' : 'text-emerald-600 dark:text-emerald-400'
                   }`}>
                     {displaySpeed.toFixed(1)}
                   </span>
-                  <span className="text-xs font-mono font-bold uppercase tracking-wider text-zinc-400 dark:text-zinc-500">
-                    Mbps
-                  </span>
                 </div>
 
-                {/* Dynamic Dual Summary */}
-                <div className="flex items-center gap-1.5 mt-0.5 text-[10.5px] font-mono">
-                  <span className={`font-semibold uppercase tracking-wider ${
-                    activeResultTab === 'upload' ? 'text-violet-600 dark:text-violet-400' : 'text-emerald-600 dark:text-emerald-400'
-                  }`}>
-                    {activeResultTab === 'upload' ? 'Upload Speed' : 'Download Speed'}
-                  </span>
-                  <span className="text-zinc-300 dark:text-zinc-700">•</span>
-                  <span className="text-zinc-400 dark:text-zinc-500">
-                    {activeResultTab === 'upload'
-                      ? `↓ ${metrics.downloadMbps?.toFixed(1) ?? '--'} Mbps`
-                      : `↑ ${metrics.uploadMbps?.toFixed(1) ?? '--'} Mbps`}
-                  </span>
-                </div>
+                {/* Centered Baseline Unit */}
+                <span className="text-[11px] font-mono font-bold uppercase tracking-widest text-zinc-400 dark:text-zinc-500 mt-1">
+                  Mbps
+                </span>
+
+                {/* Subtitle / Mode Indication */}
+                <span className={`text-[10px] font-mono font-semibold uppercase tracking-widest mt-1.5 ${
+                  activeResultTab === 'upload' ? 'text-violet-600 dark:text-violet-400' : 'text-emerald-600 dark:text-emerald-400'
+                }`}>
+                  {activeResultTab === 'upload' ? 'Upload Speed' : 'Download Speed'}
+                </span>
               </div>
             ) : (
               <div className="flex flex-col items-center justify-center">
-                <span className="text-4xl sm:text-5xl font-black font-mono tracking-tight text-zinc-900 dark:text-zinc-50 drop-shadow-xs">
-                  {displaySpeed.toFixed(1)}
-                </span>
-                <span className="text-xs font-mono font-bold uppercase tracking-wider text-zinc-400 dark:text-zinc-500 mt-0.5">
+                <div className="flex items-center justify-center">
+                  <span className={`text-4xl sm:text-[44px] leading-none font-black font-mono tracking-tight drop-shadow-xs transition-colors duration-200 ${
+                    metrics.phase === 'upload' ? 'text-violet-600 dark:text-violet-400' : 'text-emerald-600 dark:text-emerald-400'
+                  }`}>
+                    {displaySpeed.toFixed(1)}
+                  </span>
+                </div>
+                <span className="text-[11px] font-mono font-bold uppercase tracking-widest text-zinc-400 dark:text-zinc-500 mt-1">
                   Mbps
                 </span>
-                <span className={`text-[10px] font-mono font-semibold uppercase tracking-widest mt-1 ${
+                <span className={`text-[10px] font-mono font-semibold uppercase tracking-widest mt-1.5 ${
                   metrics.phase === 'upload' ? 'text-violet-600 dark:text-violet-400' : 'text-emerald-600 dark:text-emerald-400'
                 }`}>
-                  {metrics.phase === 'upload' ? 'Upload Test' : metrics.phase === 'download' ? 'Download Test' : 'Probing Latency'}
+                  {metrics.phase === 'upload' ? 'Upload Stream' : metrics.phase === 'download' ? 'Download Stream' : 'Probing Latency'}
                 </span>
               </div>
             )}
@@ -445,6 +493,7 @@ export const SpeedtestView: React.FC<SpeedtestViewProps> = ({ onBack }) => {
         {/* Metric 3: Download */}
         <div 
           onClick={() => isCompleted && setActiveResultTab('download')}
+          title={isCompleted ? "Click to display Download Speed on gauge" : undefined}
           className={`p-3 rounded-2xl border flex flex-col justify-between shadow-2xs transition-all ${
             isCompleted ? 'cursor-pointer hover:border-emerald-500/50' : ''
           } ${
@@ -457,7 +506,9 @@ export const SpeedtestView: React.FC<SpeedtestViewProps> = ({ onBack }) => {
               <ArrowDown className="w-3.5 h-3.5 text-emerald-500" />
               Download
             </span>
-            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+            <span className={`w-1.5 h-1.5 rounded-full ${
+              isCompleted && activeResultTab === 'download' ? 'bg-emerald-500 ring-2 ring-emerald-500/40' : 'bg-emerald-500'
+            }`} />
           </div>
           <div className="mt-2 flex items-baseline gap-1">
             <span className="text-2xl font-black font-mono text-emerald-600 dark:text-emerald-400">
@@ -470,6 +521,7 @@ export const SpeedtestView: React.FC<SpeedtestViewProps> = ({ onBack }) => {
         {/* Metric 4: Upload */}
         <div 
           onClick={() => isCompleted && setActiveResultTab('upload')}
+          title={isCompleted ? "Click to display Upload Speed on gauge" : undefined}
           className={`p-3 rounded-2xl border flex flex-col justify-between shadow-2xs transition-all ${
             isCompleted ? 'cursor-pointer hover:border-violet-500/50' : ''
           } ${
@@ -482,7 +534,9 @@ export const SpeedtestView: React.FC<SpeedtestViewProps> = ({ onBack }) => {
               <ArrowUp className="w-3.5 h-3.5 text-violet-500" />
               Upload
             </span>
-            <span className="w-1.5 h-1.5 rounded-full bg-violet-500" />
+            <span className={`w-1.5 h-1.5 rounded-full ${
+              isCompleted && activeResultTab === 'upload' ? 'bg-violet-500 ring-2 ring-violet-500/40' : 'bg-violet-500'
+            }`} />
           </div>
           <div className="mt-2 flex items-baseline gap-1">
             <span className="text-2xl font-black font-mono text-violet-600 dark:text-violet-400">

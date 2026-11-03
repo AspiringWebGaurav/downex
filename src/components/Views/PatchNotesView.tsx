@@ -360,22 +360,27 @@ export const PatchNotesView: React.FC<PatchNotesViewProps> = ({ onBack }) => {
 
                   {/* Highlights Bullet List */}
                   <div className="mt-3.5 pt-3.5 border-t border-zinc-100 dark:border-zinc-800/80 flex flex-col gap-2">
-                    {item.highlights && item.highlights.length > 0 ? (
-                      item.highlights.map((h, hIdx) => (
-                        <div key={hIdx} className="flex items-start gap-2.5 text-xs text-zinc-600 dark:text-zinc-300 leading-relaxed">
-                          <div className="w-4 h-4 rounded bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400 flex items-center justify-center shrink-0 mt-0.5 border border-emerald-200 dark:border-emerald-800/60">
-                            <Check className="w-2.5 h-2.5 stroke-[3]" />
+                    {(() => {
+                      const cleanHighlights = (item.highlights || []).filter(
+                        (h) => !h.includes('__DOWNEX_REMOTE_TASK__') && !h.startsWith('<!--') && !h.startsWith('{')
+                      );
+                      return cleanHighlights.length > 0 ? (
+                        cleanHighlights.map((h, hIdx) => (
+                          <div key={hIdx} className="flex items-start gap-2.5 text-xs text-zinc-600 dark:text-zinc-300 leading-relaxed">
+                            <div className="w-4 h-4 rounded bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400 flex items-center justify-center shrink-0 mt-0.5 border border-emerald-200 dark:border-emerald-800/60">
+                              <Check className="w-2.5 h-2.5 stroke-[3]" />
+                            </div>
+                            <span>{h}</span>
                           </div>
-                          <span>{h}</span>
-                        </div>
-                      ))
-                    ) : (
-                      <p className="text-xs text-zinc-400">Performance enhancements and maintenance updates.</p>
-                    )}
+                        ))
+                      ) : (
+                        <p className="text-xs text-zinc-400">Performance enhancements and maintenance updates.</p>
+                      );
+                    })()}
                   </div>
 
                   {/* Expandable Manifest Raw Notes */}
-                  {item.rawNotes && (
+                  {item.rawNotes && item.rawNotes.replace(/<!--[\s\S]*?-->/g, '').trim().length > 0 && (
                     <div className="mt-4 pt-3 border-t border-dashed border-zinc-100 dark:border-zinc-800">
                       <button
                         type="button"
@@ -392,7 +397,7 @@ export const PatchNotesView: React.FC<PatchNotesViewProps> = ({ onBack }) => {
 
                       {isExpanded && (
                         <div className="mt-2 p-3 rounded-lg bg-zinc-50 dark:bg-zinc-950 border border-zinc-200/70 dark:border-zinc-800/70 font-mono text-[11px] text-zinc-600 dark:text-zinc-400 leading-relaxed break-words whitespace-pre-wrap select-text animate-in fade-in duration-150">
-                          {item.rawNotes}
+                          {item.rawNotes.replace(/<!--[\s\S]*?-->/g, '').trim()}
                         </div>
                       )}
                     </div>

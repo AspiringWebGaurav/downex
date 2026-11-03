@@ -100,6 +100,7 @@ pub fn run() {
                             crate::commands::set_process_priority_background(true);
                             crate::commands::trim_process_working_set();
                         }
+                        let _ = crate::tray::sync_download_task_tray(window.app_handle());
                         let _ = crate::tray::refresh_tray_menu(window.app_handle());
                     }
                 }
@@ -107,6 +108,8 @@ pub fn run() {
                     #[cfg(target_os = "windows")]
                     crate::commands::set_process_priority_background(false);
                     if window.label() == "main" {
+                        let _ = window.set_always_on_top(false);
+                        crate::tray::clean_all_task_trays(window.app_handle());
                         let _ = crate::tray::refresh_tray_menu(window.app_handle());
                     }
                 }
@@ -210,6 +213,7 @@ pub fn run() {
             {
                 crate::commands::touch_user_shortcuts();
                 crate::commands::refresh_windows_shell_icon_cache();
+                crate::tray::sweep_windows_zombie_tray_icons();
             }
             if !is_background_boot {
                 #[cfg(target_os = "windows")]
@@ -266,6 +270,7 @@ pub fn run() {
                     let _ = app_handle.emit("download-progress", &progress);
 
                     if is_completed {
+                        let _ = crate::tray::sync_download_task_tray_with_progress(&app_handle, Some(&progress));
                         let _ = crate::tray::refresh_tray_menu(&app_handle);
                         if let Ok(Some(record)) = db_handle.get_download(&task_id) {
                             if !record.url.trim().is_empty() && (record.total_bytes.unwrap_or(0) > 0 || record.downloaded_bytes > 0) {
@@ -281,6 +286,8 @@ pub fn run() {
                                 crate::commands::show_download_complete(&app_handle, Some(payload));
                             }
                         }
+                    } else {
+                        crate::tray::update_download_task_progress(&app_handle, &progress);
                     }
                 }
             });

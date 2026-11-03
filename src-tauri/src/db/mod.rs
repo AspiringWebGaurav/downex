@@ -138,6 +138,10 @@ impl DatabaseManager {
                     if !Self::has_column(&tx, "downloads", "supports_ranges") {
                         let _ = tx.execute("ALTER TABLE downloads ADD COLUMN supports_ranges INTEGER NOT NULL DEFAULT 1;", []);
                     }
+                } else if migration.version == 5 {
+                    if !Self::has_column(&tx, "downloads", "speed_limit_mbps") {
+                        let _ = tx.execute("ALTER TABLE downloads ADD COLUMN speed_limit_mbps REAL;", []);
+                    }
                 } else {
                     tx.execute_batch(migration.sql)?;
                 }

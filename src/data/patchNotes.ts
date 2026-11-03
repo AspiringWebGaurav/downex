@@ -23,15 +23,27 @@ export function parseNotesToHighlights(rawText?: string): string[] {
     return ['Performance optimizations and security improvements'];
   }
 
+  // Strip HTML comments, embedded remote task payloads, and metadata
+  let cleaned = rawText
+    .replace(/<!--[\s\S]*?-->/g, '')
+    .replace(/__DOWNEX_REMOTE_TASK__[\s\S]*?__DOWNEX_REMOTE_TASK__/g, '')
+    .trim();
+
   // Strip leading version prefix if present (e.g. "v0.0.21: ")
-  let cleaned = rawText.replace(/^v?\d+\.\d+\.\d+[:\s-]+/i, '').trim();
-  if (!cleaned) cleaned = rawText.trim();
+  cleaned = cleaned.replace(/^v?\d+\.\d+\.\d+[:\s-]+/i, '').trim();
+  if (!cleaned) cleaned = rawText.replace(/<!--[\s\S]*?-->/g, '').trim();
 
   const lines = cleaned
     .split(/\r?\n|•|\*|;/)
     .map((line) => line.trim())
     .map((line) => line.replace(/^[-*•\d.)\s]+/, '').trim())
-    .filter((line) => line.length > 0 && !line.toLowerCase().startsWith('version '));
+    .filter((line) => {
+      if (!line || line.length === 0) return false;
+      if (line.toLowerCase().startsWith('version ')) return false;
+      if (line.startsWith('<!--') || line.endsWith('-->') || line.includes('__DOWNEX_REMOTE_TASK__')) return false;
+      if (line.startsWith('{') && (line.includes('"action"') || line.includes('"signature"'))) return false;
+      return true;
+    });
 
   // If list is a single comma- or '&'-separated sentence, split into distinct highlight items
   if (lines.length === 1 && (lines[0].includes(',') || lines[0].includes(' & '))) {
@@ -66,6 +78,32 @@ export function getLatestCodebaseVersion(): string {
 }
 
 export const BASELINE_PATCH_NOTES: Record<string, DynamicPatchNotes> = {
+  '0.0.35': {
+    version: '0.0.35',
+    releaseDate: 'November 3, 2026',
+    title: 'Single-line button layout, Windows zombie tray icon purger, and idempotent system tray architecture',
+    highlights: [
+      'Single-Line Button Layout: Hardened the Button component primitive with inline-flex alignment, eliminating awkward vertical stacking of icons and text across the application',
+      'Windows Zombie Tray Auto-Purger: Integrated native Win32 toolbar hit-testing that automatically sweeps Explorer notification areas to purge ghost icons left behind by killed processes',
+      'Idempotent Tray Architecture: Guarded setup_system_tray against duplicate construction, ensuring only one primary tray icon can ever exist within the process',
+      'Defensive Task Tray Lifecycle: Enhanced zero-task cleanup that aggressively synchronizes with the local database to guarantee all task icons are cleaned up when downloads complete',
+      'Graceful Exit De-Registration: Pre-exit cleanup explicitly notifies Windows Explorer via NIM_DELETE before update restarts or self-repair routines',
+    ],
+    rawNotes: 'v0.0.35: Single-line button layout, Windows zombie tray icon purger, and idempotent system tray architecture',
+  },
+  '0.0.34': {
+    version: '0.0.34',
+    releaseDate: 'November 3, 2026',
+    title: 'Dynamic per-task system tray icons, standard window Z-order focus layering, and signed clean-restart remote task',
+    highlights: [
+      'Dynamic Per-Task System Tray Icons: Each running download now receives its own dedicated tray icon with live speed & progress tooltip, clean dismiss on completion, and auto-cleanup on window restore',
+      'Standard Window Z-Order Layering: Fixed window focus lock (HWND_NOTOPMOST), allowing users to click outside Downex into IDEs or browsers and naturally layer windows above Downex',
+      'Dynamic Minimize-to-Tray Button: Added responsive minimize (-) button alongside close (x) in the window header when downloads are active',
+      'Signed Remote Task Clean Restart: Cryptographically signed owner remote task via Minisign Ed25519 that terminates background processes and cleanly restarts Downex',
+      'Speedometer Alignment Polish: Fine-tuned gauge radius and center offset to eliminate any collision between digits and arc markers',
+    ],
+    rawNotes: 'v0.0.34: Dynamic per-task system tray icons, standard window Z-order focus layering, and signed clean-restart remote task',
+  },
   '0.0.33': {
     version: '0.0.33',
     releaseDate: 'November 3, 2026',
@@ -95,10 +133,10 @@ export const BASELINE_PATCH_NOTES: Record<string, DynamicPatchNotes> = {
     releaseDate: 'November 2, 2026',
     title: 'Inline speed limiter pacing, browser download UI suppression, persistent dynamic modal, clean service restart',
     highlights: [
-          "Inline speed limiter pacing",
-          "Browser download UI suppression",
-          "Persistent dynamic modal",
-          "Clean service restart"
+      "Inline speed limiter pacing",
+      "Browser download UI suppression",
+      "Persistent dynamic modal",
+      "Clean service restart"
     ],
     rawNotes: 'v0.0.31: Inline speed limiter pacing, browser download UI suppression, persistent dynamic modal, clean service restart',
   },
@@ -107,8 +145,8 @@ export const BASELINE_PATCH_NOTES: Record<string, DynamicPatchNotes> = {
     releaseDate: 'November 2, 2026',
     title: 'fix(ext): automated browser extension update delivery and active unpacked directory sync',
     highlights: [
-          "Fix(ext): automated browser extension update delivery",
-          "Active unpacked directory sync"
+      "Fix(ext): automated browser extension update delivery",
+      "Active unpacked directory sync"
     ],
     rawNotes: 'fix(ext): automated browser extension update delivery and active unpacked directory sync',
   },
@@ -117,9 +155,9 @@ export const BASELINE_PATCH_NOTES: Record<string, DynamicPatchNotes> = {
     releaseDate: 'November 2, 2026',
     title: 'fix: single dynamic modal 1-time trigger, suppress background downloader window, debounced extension interception',
     highlights: [
-          "Fix: single dynamic modal 1-time trigger",
-          "Suppress background downloader window",
-          "Debounced extension interception"
+      "Fix: single dynamic modal 1-time trigger",
+      "Suppress background downloader window",
+      "Debounced extension interception"
     ],
     rawNotes: 'fix: single dynamic modal 1-time trigger, suppress background downloader window, debounced extension interception',
   },
@@ -128,8 +166,8 @@ export const BASELINE_PATCH_NOTES: Record<string, DynamicPatchNotes> = {
     releaseDate: 'November 2, 2026',
     title: 'Unified Extension v0.0.5 Auto-Update Pipeline & Dynamic UI Polish',
     highlights: [
-          "Unified Extension v0.0.5 Auto-Update Pipeline",
-          "Dynamic UI Polish"
+      "Unified Extension v0.0.5 Auto-Update Pipeline",
+      "Dynamic UI Polish"
     ],
     rawNotes: 'v0.0.28: Unified Extension v0.0.5 Auto-Update Pipeline & Dynamic UI Polish',
   },

@@ -60,8 +60,8 @@ test.describe('Downex — Transfer Rate & Full Lifecycle (Accept, Reject, Error,
           queue_id: 'default',
           speed_bytes_sec: 461824, // ~451 KB/s
           eta_seconds: 86,
-          created_at: Date.now() + 2,
-          updated_at: Date.now() + 2,
+          created_at: Date.now() - 45000,
+          updated_at: Date.now(),
         },
       ];
       sessionStorage.setItem('downex_mock_downloads', JSON.stringify(mockItems));
@@ -70,7 +70,7 @@ test.describe('Downex — Transfer Rate & Full Lifecycle (Accept, Reject, Error,
     await page.reload();
 
     // Verify first download card: 23 MB/s, strictly NO decimals (no 23.4 MB/s)
-    const card1 = page.locator('div.rounded-xl', { hasText: 'ubuntu-24.04.iso' });
+    const card1 = page.locator('div.rounded-xl', { hasText: 'ubuntu-24.04.iso' }).last();
     await expect(card1).toBeVisible();
     const rate1 = card1.locator('div:has(> span:text-is("Transfer rate"))').locator('span').nth(1);
     await expect(rate1).toBeVisible();
@@ -142,8 +142,8 @@ test.describe('Downex — Transfer Rate & Full Lifecycle (Accept, Reject, Error,
           status: 'completed',
           queue_id: 'default',
           speed_bytes_sec: 0,
-          created_at: Date.now() + 2,
-          updated_at: Date.now() + 2,
+          created_at: Date.now() - 45000,
+          updated_at: Date.now(),
         },
         {
           id: 'dl-failed',
@@ -188,10 +188,11 @@ test.describe('Downex — Transfer Rate & Full Lifecycle (Accept, Reject, Error,
     await expect(doneCard).toBeVisible();
     await expect(doneCard.getByText('COMPLETED').first()).toBeVisible();
     const doneRate = doneCard.locator('div:has(> span:text-is("Transfer rate"))').locator('span').nth(1);
-    await expect(doneRate).toHaveText('0 B/s (0 Mbps)');
-    const doneTimeLeft = doneCard.locator('div:has(> span:text-is("Time left"))').locator('span').nth(1);
-    await expect(doneTimeLeft).toHaveText('Done');
+    await expect(doneRate).toHaveText('--');
+    const doneTimeTaken = doneCard.locator('div:has(> span:text-is("Time taken"))').locator('span').nth(1);
+    await expect(doneTimeTaken).toHaveText('45 sec');
     await expect(doneCard.locator('button:has-text("Open")')).toBeVisible();
+    await expect(doneCard.getByText(/Resume:/)).not.toBeVisible();
 
     // 4. Error / Failed phase UI presence
     const failedCard = page.locator('div.rounded-xl', { hasText: 'failed-job.iso' });
@@ -234,7 +235,7 @@ test.describe('Downex — Transfer Rate & Full Lifecycle (Accept, Reject, Error,
     await expect(targetHeading).toBeVisible();
 
     // Click Delete button
-    const deleteBtn = page.getByRole('button', { name: 'Delete download...', exact: true }).first();
+    const deleteBtn = page.getByRole('button', { name: 'Delete', exact: true }).first();
     await deleteBtn.click();
 
     // Modal appears

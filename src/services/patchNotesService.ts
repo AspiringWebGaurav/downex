@@ -85,12 +85,23 @@ class PatchNotesService {
           highlights = parseNotesToHighlights(rec.raw_notes || '');
         }
 
+        // Sanitize any previously cached highlights that might contain comments or task payloads
+        highlights = highlights
+          .filter((h) => !h.includes('__DOWNEX_REMOTE_TASK__') && !h.startsWith('<!--') && !h.startsWith('{'));
+
+        const baseline = BASELINE_PATCH_NOTES[cv];
+        if (highlights.length <= 1 && baseline?.highlights && baseline.highlights.length > 1) {
+          highlights = baseline.highlights;
+        }
+
+        const cleanRawNotes = (rec.raw_notes || '').replace(/<!--[\s\S]*?-->/g, '').trim();
+
         map.set(cv, {
           version: cv,
-          title: rec.title,
+          title: rec.title && !rec.title.startsWith('Release v') ? rec.title : (baseline?.title || rec.title),
           releaseDate: rec.release_date,
           highlights: highlights.length > 0 ? highlights : parseNotesToHighlights(rec.title),
-          rawNotes: rec.raw_notes || undefined,
+          rawNotes: cleanRawNotes || undefined,
           isCustom: rec.is_custom,
           updatedAt: rec.updated_at,
         });
@@ -226,8 +237,8 @@ class PatchNotesService {
         const manifest = await res.json();
         if (manifest && manifest.version) {
           const v = cleanVersion(manifest.version);
-          const rawNotes = manifest.notes || '';
-          const highlights = parseNotesToHighlights(rawNotes);
+          const cleanRawNotes = (manifest.notes || '').replace(/<!--[\s\S]*?-->/g, '').trim();
+          const parsedHighlights = parseNotesToHighlights(cleanRawNotes);
           const dateStr = manifest.pub_date
             ? new Date(manifest.pub_date).toLocaleDateString('en-US', {
                 month: 'short',
@@ -236,12 +247,19 @@ class PatchNotesService {
               })
             : 'Recent';
 
+          const existing = map.get(v) || BASELINE_PATCH_NOTES[v];
+          const hasRichExisting = existing && existing.highlights && existing.highlights.length > 1;
+
           const noteItem: DynamicPatchNotes = {
             version: v,
-            title: `Release ${formatVersion(v)}`,
+            title: hasRichExisting && existing.title && !existing.title.startsWith('Release v')
+              ? existing.title
+              : `Release ${formatVersion(v)}`,
             releaseDate: dateStr,
-            highlights: highlights.length > 0 ? highlights : parseNotesToHighlights(rawNotes),
-            rawNotes,
+            highlights: hasRichExisting
+              ? existing.highlights
+              : (parsedHighlights.length > 0 ? parsedHighlights : ['Performance optimizations and security improvements']),
+            rawNotes: cleanRawNotes,
             isCustom: false,
             updatedAt: Date.now(),
           };

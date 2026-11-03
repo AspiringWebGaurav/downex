@@ -50,6 +50,31 @@ export function splitSpeed(bytesPerSec?: number | null): { value: number; unit: 
   return { value: mb, unit: 'MB/s', decimals: 1 };
 }
 
+/**
+ * Formats a duration in seconds into human-readable time taken (e.g. "45 sec", "2 min 15 sec", "1 hr 12 min").
+ */
+export function formatTimeTaken(seconds?: number | null): string {
+  if (seconds === undefined || seconds === null || !isFinite(seconds) || seconds <= 0) {
+    return '< 1 sec';
+  }
+  const totalSec = Math.round(seconds);
+  if (totalSec < 1) return '< 1 sec';
+  if (totalSec < 60) return `${totalSec} sec`;
+
+  const hours = Math.floor(totalSec / 3600);
+  const minutes = Math.floor((totalSec % 3600) / 60);
+  const secs = totalSec % 60;
+
+  if (hours > 0) {
+    if (secs > 0) return `${hours} hr ${minutes} min ${secs} sec`;
+    if (minutes > 0) return `${hours} hr ${minutes} min`;
+    return `${hours} hr`;
+  }
+
+  if (secs > 0) return `${minutes} min ${secs} sec`;
+  return `${minutes} min`;
+}
+
 export interface ResumeCapabilityInfo {
   canResume: boolean;
   label: 'Yes' | 'No' | 'Unknown';

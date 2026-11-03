@@ -51,6 +51,7 @@ pub async fn cmd_add_download(
 #[tauri::command]
 pub async fn cmd_pause_download(app: AppHandle, id: String, state: State<'_, AppState>) -> Result<bool, String> {
     let res = state.queue_manager.pause_task(&id);
+    let _ = crate::tray::sync_download_task_tray(&app);
     let _ = crate::tray::refresh_tray_menu(&app);
     Ok(res)
 }
@@ -58,6 +59,7 @@ pub async fn cmd_pause_download(app: AppHandle, id: String, state: State<'_, App
 #[tauri::command]
 pub async fn cmd_start_queue(app: AppHandle, state: State<'_, AppState>) -> Result<usize, String> {
     let res = state.queue_manager.start_queue().await;
+    let _ = crate::tray::sync_download_task_tray(&app);
     let _ = crate::tray::refresh_tray_menu(&app);
     Ok(res)
 }
@@ -65,6 +67,7 @@ pub async fn cmd_start_queue(app: AppHandle, state: State<'_, AppState>) -> Resu
 #[tauri::command]
 pub fn cmd_pause_queue(app: AppHandle, state: State<'_, AppState>) -> Result<bool, String> {
     let res = state.queue_manager.pause_queue();
+    let _ = crate::tray::sync_download_task_tray(&app);
     let _ = crate::tray::refresh_tray_menu(&app);
     Ok(res)
 }
@@ -77,6 +80,7 @@ pub fn cmd_is_queue_running(state: State<'_, AppState>) -> Result<bool, String> 
 #[tauri::command]
 pub fn cmd_queue_download(app: AppHandle, id: String, state: State<'_, AppState>) -> Result<bool, String> {
     let res = state.queue_manager.queue_download(&id);
+    let _ = crate::tray::sync_download_task_tray(&app);
     let _ = crate::tray::refresh_tray_menu(&app);
     Ok(res)
 }
@@ -84,6 +88,7 @@ pub fn cmd_queue_download(app: AppHandle, id: String, state: State<'_, AppState>
 #[tauri::command]
 pub async fn cmd_resume_download(app: AppHandle, id: String, state: State<'_, AppState>) -> Result<bool, String> {
     let res = state.queue_manager.resume_task(&id).await;
+    let _ = crate::tray::sync_download_task_tray(&app);
     let _ = crate::tray::refresh_tray_menu(&app);
     Ok(res)
 }
@@ -91,6 +96,7 @@ pub async fn cmd_resume_download(app: AppHandle, id: String, state: State<'_, Ap
 #[tauri::command]
 pub async fn cmd_cancel_download(app: AppHandle, id: String, delete_file: bool, state: State<'_, AppState>) -> Result<bool, String> {
     let res = state.queue_manager.cancel_task(&id, delete_file);
+    let _ = crate::tray::sync_download_task_tray(&app);
     let _ = crate::tray::refresh_tray_menu(&app);
     Ok(res)
 }
@@ -1091,9 +1097,21 @@ pub fn cmd_notify_dom_ready(app: AppHandle) {
             if let Ok(icon) = tauri::image::Image::from_bytes(include_bytes!("../../icons/128x128.png")) {
                 let _ = w.set_icon(icon);
             }
+            let _ = w.set_always_on_top(false);
             let _ = w.show();
             let _ = w.unminimize();
             let _ = w.set_focus();
+            #[cfg(target_os = "windows")]
+            {
+                use windows_sys::Win32::UI::WindowsAndMessaging::{SetWindowPos, HWND_NOTOPMOST, HWND_TOP, SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW};
+                if let Ok(h) = w.hwnd() {
+                    let hwnd_val = h.0 as _;
+                    unsafe {
+                        SetWindowPos(hwnd_val, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
+                        SetWindowPos(hwnd_val, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
+                    }
+                }
+            }
         }
         #[cfg(target_os = "windows")]
         {
@@ -1119,6 +1137,7 @@ pub async fn cmd_minimize_to_background(app: AppHandle) -> Result<(), String> {
             set_process_priority_background(true);
             trim_process_working_set();
         }
+        let _ = crate::tray::sync_download_task_tray(&app);
         let _ = crate::tray::refresh_tray_menu(&app);
     }
     Ok(())
@@ -1288,14 +1307,22 @@ pub fn show_download_dialog<R: tauri::Runtime>(app: &tauri::AppHandle<R>, payloa
 pub fn force_window_to_foreground<R: tauri::Runtime>(window: &tauri::WebviewWindow<R>) {
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         BringWindowToTop, SetForegroundWindow, SetWindowPos, ShowWindow,
-        HWND_TOPMOST, SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW, SW_RESTORE, SW_SHOW,
+        HWND_NOTOPMOST, HWND_TOP, HWND_TOPMOST, SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW, SW_RESTORE, SW_SHOW,
     };
     if let Ok(h) = window.hwnd() {
         let hwnd_val = h.0 as _;
         unsafe {
             ShowWindow(hwnd_val, SW_RESTORE);
             ShowWindow(hwnd_val, SW_SHOW);
-            SetWindowPos(hwnd_val, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
+            if window.label() == "main" {
+                // Main window must NEVER remain permanently topmost (WS_EX_TOPMOST).
+                // Setting HWND_NOTOPMOST allows other applications (IDE, browser, etc.) to come in front
+                // naturally when clicking elsewhere outside Downex.
+                SetWindowPos(hwnd_val, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
+                SetWindowPos(hwnd_val, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
+            } else {
+                SetWindowPos(hwnd_val, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
+            }
             BringWindowToTop(hwnd_val);
             SetForegroundWindow(hwnd_val);
         }
@@ -1405,6 +1432,7 @@ pub fn cmd_restore_manager_window(app: AppHandle) -> Result<(), String> {
 pub fn cmd_hide_main_window(app: AppHandle) -> Result<(), String> {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.hide();
+        let _ = crate::tray::sync_download_task_tray(&app);
         let _ = crate::tray::refresh_tray_menu(&app);
     }
     Ok(())
@@ -1619,6 +1647,11 @@ pub fn cmd_repair_application(app: AppHandle) -> Result<(), String> {
     {
         use std::os::windows::process::CommandExt;
 
+        // Clean up tray icons before initiating exit/repair so Windows Explorer receives NIM_DELETE
+        let _ = app.remove_tray_by_id("main-tray");
+        crate::tray::clean_all_task_trays(&app);
+        crate::tray::sweep_windows_zombie_tray_icons();
+
         let _ = cmd_clean_superseded_old_binaries();
 
         let current_exe = std::env::current_exe().map_err(|e| e.to_string())?;
@@ -1644,9 +1677,13 @@ for ($i = 0; $i -lt 30; $i++) {{
 }}
 Stop-Process -Id $oldPid -Force -ErrorAction SilentlyContinue
 
-# 2. Terminate any lingering background Downex instances
+# 2. Terminate any lingering background Downex instances, child webviews, and process trees
+try {{
+    taskkill.exe /F /IM downex.exe /T 2>$null
+    taskkill.exe /F /IM Downex.exe /T 2>$null
+}} catch {{}}
 Get-Process -Name "Downex","downex" -ErrorAction SilentlyContinue | Where-Object {{ $_.Id -ne $PID }} | Stop-Process -Force -ErrorAction SilentlyContinue
-Start-Sleep -Milliseconds 300
+Start-Sleep -Milliseconds 400
 
 # 3. Clean any locks and old files
 $old = "$exe.old"
@@ -1665,6 +1702,56 @@ foreach ($sc in $scPaths) {{
         try {{ (Get-Item $sc).LastWriteTime = (Get-Date) }} catch {{}}
     }}
 }}
+
+# 3c. Sweep dead tray icons in Windows Explorer
+try {{
+    Add-Type -TypeDefinition @"
+    using System;
+    using System.Runtime.InteropServices;
+    public class TrayCleaner {{
+        [DllImport("user32.dll", SetLastError = true)]
+        public static extern IntPtr FindWindow(string lpClassName, string lpWindowName);
+        [DllImport("user32.dll", SetLastError = true)]
+        public static extern IntPtr FindWindowEx(IntPtr parentHandle, IntPtr childAfter, string className, string windowTitle);
+        [DllImport("user32.dll")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool GetClientRect(IntPtr hWnd, out RECT lpRect);
+        [DllImport("user32.dll")]
+        public static extern IntPtr SendMessage(IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam);
+        [StructLayout(LayoutKind.Sequential)]
+        public struct RECT {{ public int Left, Top, Right, Bottom; }}
+        public static void Sweep(IntPtr hWnd) {{
+            if (hWnd == IntPtr.Zero) return;
+            RECT rc;
+            if (!GetClientRect(hWnd, out rc)) return;
+            for (int x = 0; x < rc.Right; x += 8) {{
+                for (int y = 0; y < rc.Bottom; y += 8) {{
+                    SendMessage(hWnd, 0x0200, IntPtr.Zero, (IntPtr)((y << 16) | (x & 0xFFFF)));
+                }}
+            }}
+        }}
+        public static void Clean() {{
+            try {{
+                IntPtr st = FindWindow("Shell_TrayWnd", null);
+                if (st != IntPtr.Zero) {{
+                    IntPtr tn = FindWindowEx(st, IntPtr.Zero, "TrayNotifyWnd", null);
+                    if (tn != IntPtr.Zero) {{
+                        IntPtr sp = FindWindowEx(tn, IntPtr.Zero, "SysPager", null);
+                        IntPtr tb = FindWindowEx(sp != IntPtr.Zero ? sp : tn, IntPtr.Zero, "ToolbarWindow32", null);
+                        Sweep(tb);
+                    }}
+                }}
+                IntPtr of = FindWindow("NotifyIconOverflowWindow", null);
+                if (of != IntPtr.Zero) {{
+                    IntPtr tb = FindWindowEx(of, IntPtr.Zero, "ToolbarWindow32", null);
+                    Sweep(tb);
+                }}
+            }} catch {{}}
+        }}
+    }}
+"@ -ErrorAction SilentlyContinue
+    [TrayCleaner]::Clean()
+}} catch {{}}
 
 # 4. Launch clean application
 Start-Process -FilePath $exe -WorkingDirectory $dir -ArgumentList "--restarted-after-repair"

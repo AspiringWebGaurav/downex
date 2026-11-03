@@ -598,14 +598,15 @@ export const SettingsView: React.FC<SettingsViewProps> = () => {
 
               <div className="flex items-center gap-2 shrink-0">
                 <Button
+                  type="button"
                   variant="primary"
                   size="sm"
                   onClick={handleOpenExtensionFolder}
-                  className="text-xs flex items-center gap-1.5 bg-emerald-600 hover:bg-emerald-700 text-white"
+                  icon={<FolderOpen className="w-3.5 h-3.5" />}
+                  className="whitespace-nowrap shrink-0"
                   title="Open folder in File Explorer to load unpacked in chrome://extensions"
                 >
-                  <FolderOpen className="w-3.5 h-3.5" />
-                  <span>Open Folder</span>
+                  Open Folder
                 </Button>
               </div>
             </div>

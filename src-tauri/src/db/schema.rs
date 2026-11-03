@@ -58,13 +58,6 @@ pub struct Migration {
 
 pub const MIGRATIONS: &[Migration] = &[
     Migration {
-        version: 5,
-        description: "Add speed_limit_mbps to downloads table for persistent speed cap retention across app restarts",
-        sql: r#"
-        ALTER TABLE downloads ADD COLUMN speed_limit_mbps REAL;
-        "#,
-    },
-    Migration {
         version: 1,
         description: "Initial base schema (downloads, segments, queues, app_settings)",
         sql: CREATE_TABLES_SQL,
@@ -97,6 +90,13 @@ pub const MIGRATIONS: &[Migration] = &[
             is_custom INTEGER NOT NULL DEFAULT 0,
             updated_at INTEGER NOT NULL
         );
+        "#,
+    },
+    Migration {
+        version: 5,
+        description: "Add speed_limit_mbps to downloads table for persistent speed cap retention across app restarts",
+        sql: r#"
+        ALTER TABLE downloads ADD COLUMN speed_limit_mbps REAL;
         "#,
     },
 ];
