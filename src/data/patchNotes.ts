@@ -66,6 +66,30 @@ export function getLatestCodebaseVersion(): string {
 }
 
 export const BASELINE_PATCH_NOTES: Record<string, DynamicPatchNotes> = {
+  '0.0.33': {
+    version: '0.0.33',
+    releaseDate: 'November 3, 2026',
+    title: 'Exact folder navigation, centralized resume parity, non-intrusive modal focus & speed test polish',
+    highlights: [
+      'Exact Destination Folder Navigation: Folder buttons in download tables, complete dialogs, and dynamic modals now open the exact target directory instead of falling back to default downloads',
+      'Centralized Resume Capability: Unified resume detection between live engine pool, dynamic download dialog, and download tables with true server byte-range verification',
+      'Downloading Journey & Action Controls: Dedicated in-progress downloading journey with pause, resume, cancel, and delete controls',
+      'Non-Intrusive Completion Dialog Focus: Eliminated aggressive window focus-stealing when download completion modals appear while typing',
+      'Speed Test Diagnostics Polish: Added dedicated reset trigger, refined real-time gauge metrics, and clean post-test dynamic result presentation',
+    ],
+    rawNotes: 'v0.0.33: Exact folder navigation, centralized resume parity, non-intrusive modal focus, and speed test polish',
+  },
+  '0.0.32': {
+    version: '0.0.32',
+    releaseDate: 'November 3, 2026',
+    title: 'Clean integer transfer rate formatting and resilient lifecycle presence',
+    highlights: [
+      'Clean Integer Transfer Rate: Eliminated floating decimal jitter in MB/s metrics (e.g. 23 MB/s instead of 23.4 MB/s)',
+      'Resilient Lifecycle Presence: Enhanced UI stability and status badges across active, paused, queued, completed, and error phases',
+      'Accurate Error State Handling: Fixed time left reporting on failed downloads with one-click folder recovery and retry',
+    ],
+    rawNotes: 'v0.0.32: Clean integer transfer rate formatting and resilient lifecycle presence',
+  },
   '0.0.31': {
     version: '0.0.31',
     releaseDate: 'November 2, 2026',

@@ -28,6 +28,7 @@ import { openFolderPicker, openFile, openFileFolder, showDownloadCompleteDialog,
 import { DeleteConfirmModal } from './DeleteConfirmModal';
 import { InlineSpeedLimiter } from './InlineSpeedLimiter';
 import { DownloadItem } from '../types/download';
+import { getResumeCapability } from '../utils/format';
 
 export const DownloadTable: React.FC = () => {
   const items = useDownloadStore((state) => state.items);
@@ -129,9 +130,22 @@ export const DownloadTable: React.FC = () => {
   };
 
   const formatSpeed = (bytesPerSec: number) => {
-    if (!bytesPerSec || bytesPerSec <= 0) return '0 B/s (0 Mbps)';
+    if (!bytesPerSec || bytesPerSec <= 0 || !isFinite(bytesPerSec)) return '0 B/s (0 Mbps)';
     const mbps = Math.round((bytesPerSec * 8) / 1_000_000);
-    return `${formatBytes(bytesPerSec)}/s (${mbps} Mbps)`;
+    const k = 1024;
+    if (bytesPerSec >= k * k * k) {
+      const gb = (bytesPerSec / (k * k * k)).toFixed(1);
+      return `${gb} GB/s (${mbps} Mbps)`;
+    }
+    if (bytesPerSec >= k * k) {
+      const mb = Math.round(bytesPerSec / (k * k));
+      return `${mb} MB/s (${mbps} Mbps)`;
+    }
+    if (bytesPerSec >= k) {
+      const kb = Math.round(bytesPerSec / k);
+      return `${kb} KB/s (${mbps} Mbps)`;
+    }
+    return `${Math.round(bytesPerSec)} B/s (${mbps} Mbps)`;
   };
 
   const formatEta = (seconds?: number | null) => {
@@ -235,7 +249,92 @@ export const DownloadTable: React.FC = () => {
     </div>
   );
 
-    if (displayItems.length === 0) {
+    const renderActiveJourneyBanner = (activeItem: DownloadItem) => {
+    const percent =
+      activeItem.total_bytes && activeItem.total_bytes > 0
+        ? Math.min(100, Math.round((activeItem.downloaded_bytes / activeItem.total_bytes) * 100))
+        : 0;
+    const speed = persistentSpeedRef.current[activeItem.id] || activeItem.speed_bytes_sec || 0;
+
+    return (
+      <div
+        data-testid="active-download-journey-banner"
+        className="p-3.5 rounded-xl bg-gradient-to-r from-emerald-500/[0.08] via-teal-500/[0.04] to-transparent dark:from-emerald-500/[0.12] dark:via-teal-500/[0.05] border border-emerald-500/40 dark:border-emerald-500/30 shadow-xs flex flex-col gap-2.5 animate-in fade-in duration-150"
+      >
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <span className="relative flex h-2.5 w-2.5 shrink-0">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+              <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500"></span>
+            </span>
+            <div className="min-w-0">
+              <div className="flex items-center gap-2">
+                <span className="text-[10px] font-mono font-bold tracking-wider uppercase text-emerald-700 dark:text-emerald-400 shrink-0">
+                  Active Download in Progress
+                </span>
+                <span className="text-zinc-300 dark:text-zinc-700 shrink-0">•</span>
+                <span className="text-xs font-bold text-zinc-900 dark:text-zinc-100 truncate">
+                  {activeItem.filename}
+                </span>
+              </div>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              type="button"
+              onClick={() => togglePause(activeItem.id)}
+              className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg bg-amber-500/10 hover:bg-amber-500/20 text-amber-700 dark:text-amber-300 border border-amber-500/30 text-xs font-semibold transition-all cursor-pointer shadow-2xs"
+              title="Pause active download"
+            >
+              <Pause className="w-3.5 h-3.5 fill-current" />
+              <span>Pause</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setDeletingItem(activeItem)}
+              className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-700 dark:text-rose-300 border border-rose-500/30 text-xs font-semibold transition-all cursor-pointer shadow-2xs"
+              title="Cancel and delete active download"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              <span>Delete</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => openFileFolder(activeItem.destination_path)}
+              className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg bg-white dark:bg-zinc-800 hover:bg-zinc-100 dark:hover:bg-zinc-700 text-zinc-700 dark:text-zinc-200 border border-zinc-200 dark:border-zinc-700 text-xs font-medium transition-all cursor-pointer shadow-2xs"
+              title="Open destination folder in Explorer"
+            >
+              <FolderOpen className="w-3.5 h-3.5" />
+              <span>Destination folder</span>
+            </button>
+          </div>
+        </div>
+
+        {/* Progress & Speed Metrics Bar */}
+        <div className="flex items-center justify-between text-[11px] font-mono text-zinc-500 dark:text-zinc-400">
+          <div className="flex items-center gap-2">
+            <span className="font-semibold text-emerald-600 dark:text-emerald-400">
+              {speed > 0 ? formatSpeed(speed) : 'Connecting...'}
+            </span>
+            <span>•</span>
+            <span>{formatBytes(activeItem.downloaded_bytes)} of {formatBytes(activeItem.total_bytes)}</span>
+          </div>
+          <span className="font-semibold text-zinc-900 dark:text-zinc-100">{percent}% Complete</span>
+        </div>
+
+        {/* Progress Bar */}
+        <div className="w-full h-1.5 rounded-full bg-zinc-200/80 dark:bg-zinc-800 overflow-hidden relative">
+          <div
+            className="h-full bg-gradient-to-r from-emerald-500 to-teal-400 transition-all duration-300 rounded-full"
+            style={{ width: `${Math.max(percent > 0 ? percent : 2, 0)}%` }}
+          />
+        </div>
+      </div>
+    );
+  };
+
+  if (displayItems.length === 0) {
     if (isSearchActive) {
       return (
         <div className="flex-1 overflow-y-auto min-h-0 p-6 flex flex-col items-center justify-center text-center select-none max-w-lg mx-auto w-full my-auto animate-in fade-in duration-200">
@@ -453,6 +552,7 @@ export const DownloadTable: React.FC = () => {
   return (
     <div className="flex-1 overflow-y-auto min-h-0 px-4 py-2 space-y-2.5 pb-8">
       {isQueuesView && renderQueueBanner()}
+      {!isSearchActive && activeItems.length > 0 && renderActiveJourneyBanner(activeItems[0])}
       {isSearchActive && (
         <div className="flex items-center justify-between px-3.5 py-2.5 rounded-xl bg-zinc-100/90 dark:bg-zinc-900/90 border border-zinc-200/80 dark:border-zinc-800/80 text-xs shadow-2xs">
           <div className="flex items-center gap-2 min-w-0">
@@ -541,6 +641,7 @@ export const DownloadTable: React.FC = () => {
         }
 
         const formattedEta = effectiveEta ? formatEta(effectiveEta) : null;
+        const resInfo = getResumeCapability(item);
 
         // Calculate queue position if in queue or if queues view
         let queueBadgeText = '';
@@ -557,7 +658,11 @@ export const DownloadTable: React.FC = () => {
         return (
           <div
             key={item.id}
-            className="p-3.5 rounded-xl bg-white dark:bg-zinc-900/60 border border-zinc-200/80 dark:border-zinc-800/60 shadow-xs hover:border-zinc-300 dark:hover:border-zinc-700 transition-all flex flex-col gap-2.5"
+            className={`p-3.5 rounded-xl transition-all flex flex-col gap-2.5 ${
+              isDownloading
+                ? 'bg-gradient-to-r from-emerald-500/[0.04] via-transparent to-transparent border border-emerald-500/40 dark:border-emerald-500/30 shadow-sm ring-1 ring-emerald-500/15'
+                : 'bg-white dark:bg-zinc-900/60 border border-zinc-200/80 dark:border-zinc-800/60 shadow-xs hover:border-zinc-300 dark:hover:border-zinc-700'
+            }`}
           >
             {/* Top row: Filename, Status Badge, Actions */}
             <div className="flex items-center justify-between gap-3">
@@ -623,7 +728,7 @@ export const DownloadTable: React.FC = () => {
                       ? 'bg-amber-500/10 text-amber-600 dark:text-amber-400 font-semibold'
                       : isPaused
                       ? 'bg-yellow-500/10 text-yellow-700 dark:text-yellow-400 font-semibold'
-                      : item.status === 'failed'
+                      : (item.status === 'failed' || item.status === 'error')
                       ? 'bg-rose-500/10 text-rose-600 dark:text-rose-400'
                       : 'bg-zinc-200/60 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400'
                   }`}
@@ -632,7 +737,7 @@ export const DownloadTable: React.FC = () => {
                 </span>
 
                 {/* Queue action if paused or failed */}
-                {(item.status === 'paused' || item.status === 'failed') && (
+                {(item.status === 'paused' || item.status === 'failed' || item.status === 'error') && (
                   <button
                     onClick={() => queueDownload(item.id)}
                     className="p-1.5 rounded-md hover:bg-zinc-100 dark:hover:bg-zinc-800 text-zinc-400 hover:text-amber-600 dark:hover:text-amber-400 transition-colors cursor-pointer"
@@ -642,27 +747,68 @@ export const DownloadTable: React.FC = () => {
                   </button>
                 )}
 
-                {item.status !== 'completed' && (
-                  <button
-                    onClick={() => togglePause(item.id)}
-                    className="p-1.5 rounded-md hover:bg-zinc-100 dark:hover:bg-zinc-800 text-zinc-600 dark:text-zinc-300 transition-colors cursor-pointer"
-                    title={isDownloading ? 'Pause' : isQueued ? 'Start Now (Bypass Queue Wait)' : 'Resume'}
-                  >
-                    {isDownloading ? (
-                      <Pause className="w-3.5 h-3.5 fill-current" />
-                    ) : (
-                      <Play className="w-3.5 h-3.5 fill-current" />
+                {isDownloading ? (
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => togglePause(item.id)}
+                      className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-amber-500/10 hover:bg-amber-500/20 text-amber-700 dark:text-amber-300 border border-amber-500/20 text-xs font-semibold transition-all cursor-pointer shadow-2xs"
+                      title={!resInfo.canResume ? "Pause (Warning: Server does not support resume - restarting will download from start)" : "Pause active download"}
+                    >
+                      <Pause className="w-3 h-3 fill-current" />
+                      <span>Pause</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setDeletingItem(item)}
+                      className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-rose-500/10 hover:bg-rose-500/20 text-rose-700 dark:text-rose-300 border border-rose-500/20 text-xs font-semibold transition-all cursor-pointer shadow-2xs"
+                      title="Stop and delete active download"
+                    >
+                      <Trash2 className="w-3 h-3" />
+                      <span>Delete</span>
+                    </button>
+                  </div>
+                ) : isPaused ? (
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => togglePause(item.id)}
+                      className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 border border-emerald-500/20 text-xs font-semibold transition-all cursor-pointer shadow-2xs"
+                      title={!resInfo.canResume ? "Restart download from beginning (Server does not support resume)" : "Resume download"}
+                    >
+                      <Play className="w-3 h-3 fill-current" />
+                      <span>{!resInfo.canResume ? 'Restart' : 'Resume'}</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setDeletingItem(item)}
+                      className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-rose-500/10 hover:bg-rose-500/20 text-rose-700 dark:text-rose-300 border border-rose-500/20 text-xs font-semibold transition-all cursor-pointer shadow-2xs"
+                      title="Delete download"
+                    >
+                      <Trash2 className="w-3 h-3" />
+                      <span>Delete</span>
+                    </button>
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-1">
+                    {item.status !== 'completed' && (
+                      <button
+                        onClick={() => togglePause(item.id)}
+                        className="p-1.5 rounded-md hover:bg-zinc-100 dark:hover:bg-zinc-800 text-zinc-600 dark:text-zinc-300 transition-colors cursor-pointer"
+                        title={isQueued ? 'Start Now (Bypass Queue Wait)' : 'Resume'}
+                      >
+                        <Play className="w-3.5 h-3.5 fill-current" />
+                      </button>
                     )}
-                  </button>
+                    <button
+                      onClick={() => setDeletingItem(item)}
+                      className="p-1.5 rounded-md hover:bg-rose-50 dark:hover:bg-rose-950/40 text-zinc-400 hover:text-rose-600 dark:hover:text-rose-400 transition-colors cursor-pointer"
+                      title="Delete download..."
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
                 )}
-
-                <button
-                  onClick={() => setDeletingItem(item)}
-                  className="p-1.5 rounded-md hover:bg-rose-50 dark:hover:bg-rose-950/40 text-zinc-400 hover:text-rose-600 dark:hover:text-rose-400 transition-colors cursor-pointer"
-                  title="Delete download..."
-                >
-                  <Trash2 className="w-3.5 h-3.5" />
-                </button>
               </div>
             </div>
 
@@ -726,6 +872,8 @@ export const DownloadTable: React.FC = () => {
                     ? 'Done'
                     : isQueued
                     ? 'In Queue'
+                    : (item.status === 'failed' || item.status === 'error')
+                    ? 'Failed'
                     : 'Pending'}
                 </span>
               </div>
@@ -743,7 +891,7 @@ export const DownloadTable: React.FC = () => {
                     ? 'bg-gradient-to-r from-emerald-600 via-emerald-500 to-teal-500 shadow-[0_0_12px_rgba(16,185,129,0.5)]'
                     : isPaused
                     ? 'bg-gradient-to-r from-amber-600 to-amber-500'
-                    : item.status === 'failed'
+                    : (item.status === 'failed' || item.status === 'error')
                     ? 'bg-gradient-to-r from-rose-600 to-rose-500'
                     : 'bg-zinc-400 dark:bg-zinc-600'
                 }`}
@@ -800,7 +948,7 @@ export const DownloadTable: React.FC = () => {
               </button>
 
               <div className="flex items-center gap-2 text-[10px] text-zinc-400 dark:text-zinc-500 font-mono">
-                {item.status === 'completed' && (
+                {item.status === 'completed' ? (
                   <div className="flex items-center gap-1 mr-1 text-zinc-600 dark:text-zinc-300">
                     <button
                       onClick={() => openFile(item.destination_path)}
@@ -834,11 +982,29 @@ export const DownloadTable: React.FC = () => {
                     </button>
                     <span className="text-zinc-300 dark:text-zinc-700 mx-0.5">•</span>
                   </div>
+                ) : (
+                  <div className="flex items-center gap-1 mr-1 text-zinc-600 dark:text-zinc-300">
+                    <button
+                      onClick={() => openFileFolder(item.destination_path)}
+                      className="px-2 py-0.5 rounded hover:bg-zinc-100 dark:hover:bg-zinc-800 text-zinc-600 dark:text-zinc-300 transition-colors cursor-pointer flex items-center gap-1 text-[11px] font-sans font-medium"
+                      title="Open destination folder"
+                    >
+                      <FolderOpen className="w-3 h-3" />
+                      <span>Destination folder</span>
+                    </button>
+                    <span className="text-zinc-300 dark:text-zinc-700 mx-0.5">•</span>
+                  </div>
                 )}
 
-                <span className="flex items-center gap-1">
-                  <ShieldCheck className="w-3 h-3 text-emerald-500" />
-                  Resume: {item.total_bytes ? 'Yes' : 'Unknown'}
+                <span className={`flex items-center gap-1 ${resInfo.colorClass}`} title={resInfo.description}>
+                  {resInfo.canResume ? (
+                    <ShieldCheck className="w-3 h-3 text-emerald-500 shrink-0" />
+                  ) : resInfo.label === 'No' ? (
+                    <AlertCircle className="w-3 h-3 text-amber-500 shrink-0" />
+                  ) : (
+                    <HelpCircle className="w-3 h-3 text-zinc-400 shrink-0" />
+                  )}
+                  <span>Resume: {resInfo.label}</span>
                 </span>
                 {item.segments && item.segments.length > 0 && (
                   <span>• {item.segments.length} Connection(s)</span>
@@ -849,6 +1015,14 @@ export const DownloadTable: React.FC = () => {
             {/* IDM-Style Expanded Details Drawer (Image 2 Tribute) */}
             {isExpanded && (
               <div className="mt-1 pt-2.5 border-t border-zinc-100 dark:border-zinc-800/80 space-y-2.5 animate-in fade-in duration-150">
+                {/* Single-stream / No-range notice banner */}
+                {!resInfo.canResume && (
+                  <div className="flex items-center gap-2 p-2.5 rounded-lg bg-amber-500/10 border border-amber-500/20 text-amber-700 dark:text-amber-300 text-xs">
+                    <AlertCircle className="w-4 h-4 shrink-0 text-amber-500" />
+                    <span>Single-stream download: The remote server does not support HTTP Range requests. Pausing or stopping will restart the transfer from 0%.</span>
+                  </div>
+                )}
+
                 {/* Start positions and download progress by connections visualizer */}
                 <div>
                   <div className="flex items-center justify-between text-[10px] font-semibold text-zinc-500 dark:text-zinc-400 uppercase tracking-wider mb-1.5">

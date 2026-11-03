@@ -192,6 +192,16 @@ impl DatabaseManager {
         Ok(())
     }
 
+    pub fn update_download_supports_ranges(&self, id: &str, supports_ranges: bool) -> Result<()> {
+        let conn = self.conn.lock();
+        let now = chrono::Utc::now().timestamp_millis();
+        conn.execute(
+            "UPDATE downloads SET supports_ranges = ?1, updated_at = ?2 WHERE id = ?3",
+            params![if supports_ranges { 1 } else { 0 }, now, id],
+        )?;
+        Ok(())
+    }
+
 pub fn update_download_status(&self, id: &str, status: &str, speed: u64, error: Option<&str>) -> Result<()> {
         let conn = self.conn.lock();
         let now = chrono::Utc::now().timestamp_millis();

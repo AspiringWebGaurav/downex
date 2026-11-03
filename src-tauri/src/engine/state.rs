@@ -45,6 +45,8 @@ pub struct DownloadProgressEvent {
     pub speed_bytes_sec: u64,
     pub eta_seconds: Option<u64>,
     pub segments: Vec<SegmentSnapshot>,
+    #[serde(default)]
+    pub supports_ranges: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

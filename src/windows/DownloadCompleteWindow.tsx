@@ -23,6 +23,7 @@ import {
   openFile, 
   openFileWith, 
   openFileFolder, 
+  getDefaultDownloadDir,
   onDownloadCompleted, 
   onOpenDownloadCompleteModal,
   restoreManagerWindow,
@@ -383,8 +384,11 @@ export const DownloadCompleteWindow: React.FC = () => {
                 onClick={async () => {
                   if (payload?.destination_path) {
                     await openFileFolder(payload.destination_path);
-                    handleClose();
+                  } else {
+                    const defaultDir = await getDefaultDownloadDir();
+                    if (defaultDir) await openFileFolder(defaultDir);
                   }
+                  handleClose();
                 }}
                 title="Show in File Explorer"
               >

@@ -311,6 +311,7 @@ impl QueueManager {
                 speed_bytes_sec: 0,
                 eta_seconds: None,
                 segments: Vec::new(),
+                supports_ranges: Some(record.supports_ranges),
             }).await;
 
             #[cfg(target_os = "windows")]
@@ -423,7 +424,17 @@ impl QueueManager {
         if let Ok(downloads) = self.db.get_all_downloads() {
             if let Some(record) = downloads.into_iter().find(|d| d.id == id) {
                 if delete_file {
-                    let _ = std::fs::remove_file(&record.destination_path);
+                    let path = record.destination_path.clone();
+                    // Robust background removal loop: handles cases where active download file handle
+                    // takes 20-100ms to close cleanly on Windows
+                    std::thread::spawn(move || {
+                        for _ in 0..12 {
+                            if !std::path::Path::new(&path).exists() || std::fs::remove_file(&path).is_ok() {
+                                break;
+                            }
+                            std::thread::sleep(std::time::Duration::from_millis(50));
+                        }
+                    });
                 }
             }
         }

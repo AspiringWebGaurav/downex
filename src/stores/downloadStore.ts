@@ -338,6 +338,7 @@ export const useDownloadStore = create<DownloadStore>((set, get) => ({
 
             return {
               ...item,
+              supports_ranges: event.supports_ranges !== undefined ? event.supports_ranges : item.supports_ranges,
               downloaded_bytes: isCompleted && total ? total : event.downloaded_bytes,
               total_bytes: total,
               speed_bytes_sec: effectiveSpeed,

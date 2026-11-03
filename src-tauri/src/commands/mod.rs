@@ -1302,6 +1302,38 @@ pub fn force_window_to_foreground<R: tauri::Runtime>(window: &tauri::WebviewWind
     }
 }
 
+/// Displays secondary notification windows (like download_complete) without stealing keyboard focus
+/// from active user applications (e.g. text inputs, browsers, word processors).
+#[cfg(target_os = "windows")]
+pub fn show_window_without_stealing_focus<R: tauri::Runtime>(window: &tauri::WebviewWindow<R>) {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        SetWindowPos, ShowWindow, HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+        SWP_SHOWWINDOW, SW_SHOWNOACTIVATE,
+    };
+    if let Ok(h) = window.hwnd() {
+        let hwnd_val = h.0 as _;
+        unsafe {
+            ShowWindow(hwnd_val, SW_SHOWNOACTIVATE);
+            SetWindowPos(
+                hwnd_val,
+                HWND_TOPMOST,
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW,
+            );
+        }
+    } else {
+        let _ = window.show();
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn show_window_without_stealing_focus<R: tauri::Runtime>(window: &tauri::WebviewWindow<R>) {
+    let _ = window.show();
+}
+
 #[tauri::command]
 pub fn cmd_get_download_dialog_payload() -> Option<serde_json::Value> {
     LAST_DOWNLOAD_DIALOG_PAYLOAD.lock().ok().and_then(|g| g.clone())
@@ -1417,12 +1449,36 @@ pub fn cmd_open_file_folder(path: String) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
         use std::os::windows::process::CommandExt;
-        let clean_path = path.replace('/', "\\");
-        std::process::Command::new("explorer.exe")
-            .arg(format!("/select,{}", clean_path))
-            .creation_flags(0x08000000) // CREATE_NO_WINDOW
-            .spawn()
-            .map_err(|e| e.to_string())?;
+        use std::path::Path;
+
+        let clean_path = path.trim().replace('/', "\\");
+        let path_obj = Path::new(&clean_path);
+
+        let mut cmd = std::process::Command::new("explorer.exe");
+        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+
+        if path_obj.is_file() {
+            // File physically exists on disk: highlight/select it inside its containing folder
+            cmd.raw_arg(format!("/select,\"{}\"", clean_path));
+        } else if path_obj.is_dir() {
+            // Path itself is an existing directory: open the exact folder directly
+            cmd.raw_arg(format!("\"{}\"", clean_path));
+        } else if let Some(parent) = path_obj.parent() {
+            // Target file may not exist yet or is still downloading; open its destination folder directly
+            let _ = std::fs::create_dir_all(parent);
+            let parent_str = parent.to_string_lossy().replace('/', "\\");
+            cmd.raw_arg(format!("\"{}\"", parent_str));
+        } else {
+            // Fallback: ensure directory exists and open it directly
+            let _ = std::fs::create_dir_all(&clean_path);
+            cmd.raw_arg(format!("\"{}\"", clean_path));
+        }
+
+        cmd.spawn().map_err(|e| e.to_string())?;
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = opener::open(&path);
     }
     Ok(())
 }
@@ -1449,10 +1505,8 @@ pub fn show_download_complete<R: tauri::Runtime>(app: &tauri::AppHandle<R>, payl
         let _ = window.emit("open-download-complete-modal", &valid_payload);
         let _ = app.emit("open-download-complete-modal", &valid_payload);
         let _ = window.set_always_on_top(true);
-        let _ = window.unminimize();
         let _ = window.center();
-        let _ = window.show();
-        let _ = window.set_focus();
+        show_window_without_stealing_focus(&window);
     } else {
         let builder = tauri::WebviewWindowBuilder::new(
             app,
@@ -1478,10 +1532,8 @@ pub fn show_download_complete<R: tauri::Runtime>(app: &tauri::AppHandle<R>, payl
             let _ = window.emit("open-download-complete-modal", &valid_payload);
             let _ = app.emit("open-download-complete-modal", &valid_payload);
             let _ = window.set_always_on_top(true);
-            let _ = window.unminimize();
             let _ = window.center();
-            let _ = window.show();
-            let _ = window.set_focus();
+            show_window_without_stealing_focus(&window);
         }
     }
 }

@@ -49,3 +49,73 @@ export function splitSpeed(bytesPerSec?: number | null): { value: number; unit: 
   }
   return { value: mb, unit: 'MB/s', decimals: 1 };
 }
+
+export interface ResumeCapabilityInfo {
+  canResume: boolean;
+  label: 'Yes' | 'No' | 'Unknown';
+  modalStatusText: string;
+  description: string;
+  colorClass: string;
+  iconColorClass: string;
+  badgeBgClass: string;
+}
+
+/**
+ * Centralized resume and byte-range capability resolver for Downex.
+ * Harmonizes download modal probe results, SQLite DB states, and table visualizers.
+ */
+export function getResumeCapability(
+  input?: { supports_ranges?: boolean | null; segments?: unknown[]; total_bytes?: number | null } | boolean | null
+): ResumeCapabilityInfo {
+  let supportsRanges: boolean | null | undefined;
+  let hasMultiSegments = false;
+
+  if (typeof input === 'boolean') {
+    supportsRanges = input;
+  } else if (input && typeof input === 'object') {
+    supportsRanges = input.supports_ranges;
+    if (Array.isArray(input.segments) && input.segments.length > 1) {
+      hasMultiSegments = true;
+    }
+  } else if (input === null) {
+    supportsRanges = false;
+  }
+
+  // 1. Explicitly false -> Server does not support HTTP byte ranges
+  if (supportsRanges === false) {
+    return {
+      canResume: false,
+      label: 'No',
+      modalStatusText: 'Cannot pause or resume',
+      description: 'Server does not support HTTP Range requests. Pausing or stopping will restart the download from 0%.',
+      colorClass: 'text-amber-600 dark:text-amber-400',
+      iconColorClass: 'text-amber-500',
+      badgeBgClass: 'bg-amber-50 dark:bg-amber-950/30 border-amber-200/60 dark:border-amber-800/40',
+    };
+  }
+
+  // 2. Explicitly true or active multi-segment transfer (multi-segmenting requires HTTP byte ranges)
+  if (supportsRanges === true || hasMultiSegments) {
+    return {
+      canResume: true,
+      label: 'Yes',
+      modalStatusText: 'Can pause and resume',
+      description: 'Server supports HTTP Range requests. Download can be paused and resumed seamlessly.',
+      colorClass: 'text-emerald-600 dark:text-emerald-400',
+      iconColorClass: 'text-emerald-500',
+      badgeBgClass: 'bg-emerald-50 dark:bg-emerald-950/30 border-emerald-200/60 dark:border-emerald-800/40',
+    };
+  }
+
+  // 3. Unknown (not yet probed or unverified)
+  return {
+    canResume: false,
+    label: 'Unknown',
+    modalStatusText: 'Resume status unknown',
+    description: 'Server byte range support has not been verified yet.',
+    colorClass: 'text-zinc-500 dark:text-zinc-400',
+    iconColorClass: 'text-zinc-400 dark:text-zinc-500',
+    badgeBgClass: 'bg-zinc-50 dark:bg-zinc-800/40 border-zinc-200/60 dark:border-zinc-700/40',
+  };
+}
+

@@ -64,6 +64,8 @@ export const DeleteConfirmModal: React.FC<DeleteConfirmModalProps> = ({
       ? Math.min(100, Math.round((item.downloaded_bytes / item.total_bytes) * 100))
       : 0;
 
+  const isDownloading = item.status === 'downloading' || item.status === 'probing';
+
   return (
     <div
       data-testid="delete-confirm-modal"
@@ -78,10 +80,10 @@ export const DeleteConfirmModal: React.FC<DeleteConfirmModalProps> = ({
         <div className="flex items-start justify-between px-6 pt-5 pb-4 border-b border-zinc-100 dark:border-zinc-800/80 bg-zinc-50/40 dark:bg-zinc-950/40">
           <div>
             <h3 className="text-[17px] font-bold text-zinc-900 dark:text-zinc-100 tracking-tight flex items-baseline gap-1">
-              <span>Delete.</span>
+              <span>{isDownloading ? 'Stop & Delete.' : 'Delete.'}</span>
             </h3>
             <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-0.5">
-              Remove download task from Downex.
+              {isDownloading ? 'Cancel active download transfer and remove from Downex.' : 'Remove download task from Downex.'}
             </p>
           </div>
 
@@ -90,7 +92,14 @@ export const DeleteConfirmModal: React.FC<DeleteConfirmModalProps> = ({
             <div className="hidden sm:flex items-center gap-1.5 text-[11px] font-mono font-medium text-zinc-600 dark:text-zinc-400 bg-zinc-100/80 dark:bg-zinc-800/80 px-2.5 py-1 rounded-md border border-zinc-200/60 dark:border-zinc-700/60">
               <span>{formatBytes(item.downloaded_bytes)}</span>
               <span className="text-zinc-300 dark:text-zinc-600">•</span>
-              <span className="text-emerald-600 dark:text-emerald-400 font-semibold">{percent}% Complete</span>
+              {isDownloading ? (
+                <span className="text-amber-600 dark:text-amber-400 font-semibold flex items-center gap-1.5">
+                  <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-ping" />
+                  {percent}% Downloading
+                </span>
+              ) : (
+                <span className="text-emerald-600 dark:text-emerald-400 font-semibold">{percent}% Complete</span>
+              )}
             </div>
 
             {/* Close Button */}
@@ -131,7 +140,9 @@ export const DeleteConfirmModal: React.FC<DeleteConfirmModalProps> = ({
           </div>
 
           <p className="text-xs text-zinc-600 dark:text-zinc-300">
-            Are you sure you want to remove this download from Downex?
+            {isDownloading
+              ? 'This download is currently active. Deleting will immediately stop and cancel the active transfer.'
+              : 'Are you sure you want to remove this download from Downex?'}
           </p>
 
           {/* Interactive Disk Deletion Toggle Card (Before & After select from disk) */}
@@ -165,7 +176,7 @@ export const DeleteConfirmModal: React.FC<DeleteConfirmModalProps> = ({
                   }`}
                 >
                   <HardDrive className={`w-3.5 h-3.5 ${deleteFromDisk ? 'text-rose-500' : 'text-zinc-400 dark:text-zinc-500'}`} />
-                  Also delete file from disk / device
+                  {isDownloading ? 'Also delete partial / downloaded file from disk' : 'Also delete file from disk / device'}
                 </span>
               </div>
 
@@ -188,7 +199,9 @@ export const DeleteConfirmModal: React.FC<DeleteConfirmModalProps> = ({
                 <div className="flex items-center gap-2">
                   <AlertTriangle className="w-3.5 h-3.5 text-rose-600 dark:text-rose-400 shrink-0" />
                   <span className="text-[11.5px] leading-tight font-medium">
-                    Permanent wipe: The downloaded file on your computer storage will be deleted.
+                    {isDownloading
+                      ? 'Permanent wipe: Download will stop immediately and the partial file on your computer will be deleted.'
+                      : 'Permanent wipe: The downloaded file on your computer storage will be deleted.'}
                   </span>
                 </div>
               </div>
@@ -227,7 +240,7 @@ export const DeleteConfirmModal: React.FC<DeleteConfirmModalProps> = ({
             }`}
           >
             <Trash2 className="w-3.5 h-3.5" />
-            <span>{deleteFromDisk ? 'Delete from Device' : 'Remove from List'}</span>
+            <span>{isDownloading ? (deleteFromDisk ? 'Stop & Delete File' : 'Stop & Remove') : (deleteFromDisk ? 'Delete from Device' : 'Remove from List')}</span>
           </button>
         </div>
       </div>

@@ -41,6 +41,7 @@ import {
   getCachedDiskFreeSpace, 
   setCachedDiskFreeSpace 
 } from '../services/modalPreload';
+import { getResumeCapability } from '../utils/format';
 
 function formatBytes(bytes?: number): string {
   if (!bytes || bytes === 0) return 'Unknown size';
@@ -541,10 +542,19 @@ export const DownloadDialogWindow: React.FC = () => {
             <div className="text-xl font-bold font-mono text-zinc-900 dark:text-zinc-100 tracking-tight">
               {formatBytes(totalBytes)}
             </div>
-            <span className="text-[11px] text-emerald-600 dark:text-emerald-400 font-medium flex items-center gap-1.5">
-              {supportsRanges ? <CheckCircle2 className="w-3.5 h-3.5 shrink-0" /> : <AlertCircle className="w-3.5 h-3.5 text-amber-500 shrink-0" />}
-              <span>{supportsRanges ? 'Can pause and resume' : 'Cannot pause or resume'}</span>
-            </span>
+            {(() => {
+              const resInfo = getResumeCapability(supportsRanges);
+              return (
+                <span className={`text-[11px] ${resInfo.colorClass} font-medium flex items-center gap-1.5`} title={resInfo.description}>
+                  {resInfo.canResume ? (
+                    <CheckCircle2 className="w-3.5 h-3.5 shrink-0 text-emerald-500" />
+                  ) : (
+                    <AlertCircle className="w-3.5 h-3.5 shrink-0 text-amber-500" />
+                  )}
+                  <span>{resInfo.modalStatusText}</span>
+                </span>
+              );
+            })()}
           </div>
 
           {/* Card 2: Download Parts */}

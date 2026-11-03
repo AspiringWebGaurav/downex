@@ -177,6 +177,8 @@ impl DownloadEnginePool {
         let p_complete = completion_token.clone();
         let p_db = self.db.clone();
         let p_limiter = limiter.clone();
+        let p_fallback = fallback_single_stream.clone();
+        let p_supports_ranges = supports_ranges;
         let t_progress_tx = progress_tx.clone();
 
         let initial_downloaded: u64 = {
@@ -315,6 +317,7 @@ impl DownloadEnginePool {
                             speed_bytes_sec: speed,
                             eta_seconds: persistent_eta,
                             segments: snapshots,
+                            supports_ranges: Some(p_supports_ranges && !p_fallback.load(Ordering::SeqCst)),
                         };
 
                         let _ = t_progress_tx.send(event).await;
@@ -341,11 +344,13 @@ impl DownloadEnginePool {
             let w_fallback = fallback_single_stream.clone();
             let w_limiter = limiter.clone();
             let w_total_bytes = total_bytes;
+            let w_db = self.db.clone();
 
             let handle = tauri::async_runtime::spawn(async move {
                 Self::worker_loop(
                     idx as u32,
                     w_task_id,
+                    w_db,
                     w_url,
                     w_client,
                     w_writer,
@@ -408,6 +413,7 @@ impl DownloadEnginePool {
                 speed_bytes_sec: 0,
                 eta_seconds: None,
                 segments: Vec::new(),
+                supports_ranges: None,
             }).await;
             return Ok(());
         }
@@ -432,6 +438,7 @@ impl DownloadEnginePool {
                     speed_bytes_sec: 0,
                     eta_seconds: None,
                     segments: Vec::new(),
+                supports_ranges: None,
                 }).await;
                 return Err("Download interrupted before receiving all expected bytes".into());
             }
@@ -456,6 +463,7 @@ impl DownloadEnginePool {
             speed_bytes_sec: 0,
             eta_seconds: None,
             segments: Vec::new(),
+            supports_ranges: None,
         }).await;
 
         eprintln!(
@@ -468,7 +476,8 @@ impl DownloadEnginePool {
 
     async fn worker_loop(
         mut segment_idx: u32,
-        _task_id: String,
+        task_id: String,
+        db: DatabaseManager,
         url: String,
         client: reqwest::Client,
         writer: Arc<PositionalWriter>,
@@ -568,6 +577,7 @@ impl DownloadEnginePool {
             // Handle HTTP 200 OK response on range-expected request (Single stream fallback)
             if status == reqwest::StatusCode::OK && supports_ranges {
                 fallback_single_stream.store(true, Ordering::SeqCst);
+                let _ = db.update_download_supports_ranges(&task_id, false);
                 if segment_idx == 0 {
                     eprintln!("[Downex Worker 0] Server returned HTTP 200 OK (Range ignored). Switching to single-stream mode.");
                     let total_end = total_bytes.map(|b| if b > 0 { b - 1 } else { 0 }).unwrap_or(0);

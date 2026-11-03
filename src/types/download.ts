@@ -42,6 +42,7 @@ export interface DownloadProgressEvent {
   speed_bytes_sec: number;
   eta_seconds?: number | null;
   segments: SegmentSnapshot[];
+  supports_ranges?: boolean;
 }
 
 export interface ReleaseManifest {

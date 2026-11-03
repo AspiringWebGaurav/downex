@@ -839,7 +839,7 @@ export const SettingsView: React.FC<SettingsViewProps> = () => {
 
           <button
             type="button"
-            onClick={() => openExternalUrl('https://download.gauravpatil.site#terms')}
+            onClick={() => openExternalUrl('https://downex.gauravpatil.site#terms')}
             className="hover:text-zinc-600 dark:hover:text-zinc-300 hover:underline cursor-pointer inline-flex items-center gap-1"
           >
             <span>Terms & Privacy Policy</span>
