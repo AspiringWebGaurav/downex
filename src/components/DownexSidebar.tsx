@@ -288,14 +288,9 @@ export const DownexSidebar: React.FC<DownexSidebarProps> = ({ darkMode, setDarkM
             )}
           </button>
         ) : status.state === 'up-to-date' ? (
-          <button
-            type="button"
-            onClick={async () => {
-              openModal();
-              await checkForUpdates(false);
-            }}
-            title={`Downex is up to date (${formattedVersion}). Click to check again.`}
-            className={`flex items-center rounded-lg text-xs text-emerald-600 dark:text-emerald-400 bg-emerald-50/50 dark:bg-emerald-950/20 border border-emerald-200/50 dark:border-emerald-800/40 hover:bg-emerald-100/60 dark:hover:bg-emerald-900/30 cursor-pointer transition-colors ${
+          <div
+            title={`Downex is up to date (${formattedVersion})`}
+            className={`flex items-center rounded-lg text-xs text-emerald-600 dark:text-emerald-400 bg-emerald-50/50 dark:bg-emerald-950/20 border border-emerald-200/50 dark:border-emerald-800/40 select-none animate-in fade-in duration-150 ${
               isCollapsed ? 'w-10 h-10 justify-center' : 'justify-between px-3 py-2'
             }`}
           >
@@ -308,12 +303,11 @@ export const DownexSidebar: React.FC<DownexSidebarProps> = ({ darkMode, setDarkM
                 {formattedVersion}
               </span>
             )}
-          </button>
+          </div>
         ) : (
           <button
             type="button"
             onClick={async () => {
-              openModal();
               await checkForUpdates(false);
             }}
             title={`Check for Updates (${formattedVersion})`}

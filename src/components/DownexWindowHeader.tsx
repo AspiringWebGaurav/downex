@@ -100,18 +100,21 @@ export const DownexWindowHeader: React.FC = () => {
         )}
       </div>
 
-      {/* Center Dynamic Status / Update Pill (GPN Pattern) */}
+      {/* Center Dynamic Status / Update Pill (GPN Pattern - Dynamic only, hidden on idle) */}
       <div
-        className="relative z-10 flex items-center justify-center pointer-events-auto"
+        className="absolute left-1/2 -translate-x-1/2 top-1/2 -translate-y-1/2 z-10 flex items-center justify-center pointer-events-auto"
       >
-        {status.state === 'checking' ? (
-          <div className="flex items-center gap-2 px-2.5 h-6 rounded bg-zinc-100 dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 text-[11px] font-mono text-zinc-600 dark:text-zinc-300">
-            <RefreshCw className="w-3 h-3 animate-spin text-zinc-500 shrink-0" />
+        {status.state === 'checking' && Boolean(status.isManualCheck) ? (
+          <div className="flex items-center gap-2 px-3 py-1 rounded-md bg-zinc-100 dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 text-[11px] font-mono text-zinc-600 dark:text-zinc-300 shadow-2xs select-none animate-in fade-in duration-150">
+            <RefreshCw className="w-3 h-3 animate-spin text-emerald-500 shrink-0" />
             <span>Checking updates...</span>
           </div>
-        ) : status.state === 'up-to-date' ? (
-          <div className="flex items-center gap-1.5 px-2.5 h-6 rounded bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-300/80 dark:border-emerald-800/80 text-[11px] font-mono text-emerald-700 dark:text-emerald-300">
-            <Check className="w-3 h-3 text-emerald-600 shrink-0 stroke-[2.5]" />
+        ) : status.state === 'up-to-date' && Boolean(status.isManualCheck) ? (
+          <div
+            title={`Downex is up to date (${formattedVersion})`}
+            className="flex items-center gap-1.5 px-3 py-1 rounded-md bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-300/80 dark:border-emerald-800/80 text-[11px] font-mono font-medium text-emerald-700 dark:text-emerald-300 shadow-2xs select-none animate-in fade-in duration-150"
+          >
+            <Check className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 shrink-0 stroke-[2.5]" />
             <span>Up to date • {formattedVersion}</span>
           </div>
         ) : status.state === 'available' && status.manifest && status.targetVersion && compareSemver(status.targetVersion, currentVersion) > 0 ? (
@@ -201,7 +204,7 @@ export const DownexWindowHeader: React.FC = () => {
             </button>
           </div>
         ) : status.state === 'error' && Boolean(status.isManualCheck) ? (
-          <div className="flex items-center gap-1.5 px-2.5 h-6 rounded bg-rose-50 dark:bg-rose-950/40 border border-rose-300 dark:border-rose-800 text-[11px] font-mono text-rose-700 dark:text-rose-300">
+          <div className="flex items-center gap-1.5 px-3 py-1 rounded-md bg-rose-50 dark:bg-rose-950/40 border border-rose-300 dark:border-rose-800 text-[11px] font-mono text-rose-700 dark:text-rose-300 shadow-2xs select-none animate-in fade-in duration-150">
             <AlertTriangle className="w-3 h-3 text-rose-600 shrink-0" />
             <span>Check failed</span>
           </div>

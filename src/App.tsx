@@ -136,7 +136,7 @@ export const App: React.FC = () => {
     });
 
     const unlistenCheckUpdates = onCheckUpdatesFromTray(async () => {
-      useAppVersionStore.getState().openModal();
+      restoreManagerWindow().catch(() => {});
       await useAppVersionStore.getState().checkForUpdates(false);
     });
 

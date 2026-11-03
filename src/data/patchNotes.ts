@@ -78,6 +78,17 @@ export function getLatestCodebaseVersion(): string {
 }
 
 export const BASELINE_PATCH_NOTES: Record<string, DynamicPatchNotes> = {
+  '0.0.37': {
+    version: '0.0.37',
+    releaseDate: 'November 3, 2026',
+    title: 'Dynamic GPN-style update status header & sidebar sync, modal elimination for up-to-date state',
+    highlights: [
+          "Dynamic GPN-style update status header",
+          "Sidebar sync",
+          "Modal elimination for up-to-date state"
+    ],
+    rawNotes: 'v0.0.37: Dynamic GPN-style update status header & sidebar sync, modal elimination for up-to-date state',
+  },
   '0.0.36': {
     version: '0.0.36',
     releaseDate: 'November 3, 2026',

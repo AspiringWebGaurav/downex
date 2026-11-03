@@ -37,10 +37,6 @@ export const UpdateModal: React.FC = () => {
   const [isLoading, setIsLoading] = useState(false);
   const [isCloseHovered, setIsCloseHovered] = useState(false);
 
-  // Keep modal open even during restarting state so user sees live handoff feedback!
-  if (!isModalOpen) return null;
-
-  const isChecking = status.state === 'checking';
   const isRestarting = status.state === 'restarting';
   const hasLegitUpdate =
     Boolean(status.manifest) &&
@@ -52,7 +48,14 @@ export const UpdateModal: React.FC = () => {
   const isReady = status.state === 'ready' && hasLegitUpdate;
   const isInstalling = status.state === 'installing';
   const isError = status.state === 'error' || Boolean(status.errorMessage);
-  const isUpToDate = !isChecking && !isRestarting && !isAvailable && !isDownloading && !isReady && !isInstalling && !isError;
+  const isChecking = false;
+  const isUpToDate = false;
+
+  // Eliminate the centered "Up to date" modal completely (as requested).
+  // Status is displayed seamlessly in the top-middle header pill and sidebar.
+  if (!isModalOpen || (!hasLegitUpdate && !isDownloading && !isRestarting && !isInstalling && !isError)) {
+    return null;
+  }
   const percent = status.progress?.percentage || 0;
 
   const targetVersion = status.targetVersion ? `v${status.targetVersion}` : formattedVersion;
