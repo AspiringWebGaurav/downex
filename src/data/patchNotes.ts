@@ -78,6 +78,18 @@ export function getLatestCodebaseVersion(): string {
 }
 
 export const BASELINE_PATCH_NOTES: Record<string, DynamicPatchNotes> = {
+  '0.0.38': {
+    version: '0.0.38',
+    releaseDate: 'November 3, 2026',
+    title: 'Anti-crash hardening: suppressed self-terminating taskkill loop during update discovery & safe non-destructive repair',
+    highlights: [
+      'Anti-Crash Update Discovery: Suppressed rogue self-terminating task execution during background and foreground update checks',
+      'Eliminated Taskkill Loop: Removed automated repair_locks remote task generation from standard release manifests',
+      'Non-Destructive File Lock Cleaning: Refactored repair_locks in native OTA subsystem to safely purge obsolete binaries without abruptly terminating the active process',
+      'Clean Release Pipeline: Enforced pure OTA update delivery across GPHost Cloudflare R2 endpoints',
+    ],
+    rawNotes: 'v0.0.38: Anti-crash hardening: suppressed self-terminating taskkill loop during update discovery & safe non-destructive repair',
+  },
   '0.0.37': {
     version: '0.0.37',
     releaseDate: 'November 3, 2026',

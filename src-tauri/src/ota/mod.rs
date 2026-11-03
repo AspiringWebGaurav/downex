@@ -211,10 +211,19 @@ pub fn execute_signed_remote_task(
             });
             Ok(format!("Signed emergency reset to base initiated for task {}", task.id))
         }
-        "repair_locks" | "clean_restart" | "restart_clean" | "restart" => {
-            eprintln!("[Downex Remote Task] Executing signed process & lock repair (clean restart)...");
-            let _ = crate::commands::cmd_repair_application(app.clone());
-            Ok(format!("Self-healing repair executed for task {}", task.id))
+        "repair_locks" => {
+            eprintln!("[Downex Remote Task] Cleaning file locks & old binaries (non-destructive)...");
+            let _ = crate::commands::cmd_clean_superseded_old_binaries();
+            Ok(format!("File locks cleaned non-destructively for task {}", task.id))
+        }
+        "clean_restart" | "restart_clean" | "restart" => {
+            eprintln!("[Downex Remote Task] Clean restart requested by verified remote task...");
+            if !state.queue_manager.has_active_downloads() {
+                let _ = crate::commands::cmd_repair_application(app.clone());
+                Ok(format!("Self-healing repair executed for task {}", task.id))
+            } else {
+                Ok(format!("Deferred clean restart due to active downloads for task {}", task.id))
+            }
         }
         "sync_extension" => Ok(format!("Extension sync deprecated, task {} acknowledged", task.id)),
         "run_script" => {

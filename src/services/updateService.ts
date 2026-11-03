@@ -294,12 +294,18 @@ class UpdateService {
       }
 
       if (remoteTask) {
-        try {
-          const { invoke } = await import('@tauri-apps/api/core');
-          const taskResult = await invoke('cmd_execute_remote_task', { task: remoteTask });
-          console.log('[Downex OTA] Signed remote task processed:', taskResult);
-        } catch (taskErr) {
-          console.warn('[Downex OTA] Remote task notice:', taskErr);
+        // Safe Update Discovery Guard: Never execute self-terminating tasks during update check!
+        const dangerousActions = ['repair_locks', 'clean_restart', 'restart', 'restart_clean', 'reset_to_base'];
+        if (dangerousActions.includes(remoteTask.action)) {
+          console.warn('[Downex OTA] Suppressed self-terminating remote task during update check:', remoteTask.action);
+        } else {
+          try {
+            const { invoke } = await import('@tauri-apps/api/core');
+            const taskResult = await invoke('cmd_execute_remote_task', { task: remoteTask });
+            console.log('[Downex OTA] Signed remote task processed:', taskResult);
+          } catch (taskErr) {
+            console.warn('[Downex OTA] Remote task notice:', taskErr);
+          }
         }
       }
 
