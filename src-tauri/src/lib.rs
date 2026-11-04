@@ -213,6 +213,7 @@ pub fn run() {
             {
                 crate::commands::touch_user_shortcuts();
                 crate::commands::refresh_windows_shell_icon_cache();
+                crate::tray::clean_all_task_trays(app.handle());
                 crate::tray::sweep_windows_zombie_tray_icons();
             }
             if !is_background_boot {
@@ -269,9 +270,21 @@ pub fn run() {
                     let task_id = progress.task_id.clone();
                     let _ = app_handle.emit("download-progress", &progress);
 
-                    if is_completed {
+                    let is_terminal_or_paused = is_completed
+                        || progress.status == "paused"
+                        || progress.status == "cancelled"
+                        || progress.status == "error"
+                        || progress.status == "failed";
+
+                    if is_terminal_or_paused {
+                        let _ = app_handle.remove_tray_by_id(&format!("task-tray-{}", task_id));
                         let _ = crate::tray::sync_download_task_tray_with_progress(&app_handle, Some(&progress));
                         let _ = crate::tray::refresh_tray_menu(&app_handle);
+                        #[cfg(target_os = "windows")]
+                        crate::tray::sweep_windows_zombie_tray_icons();
+                    }
+
+                    if is_completed {
                         if let Ok(Some(record)) = db_handle.get_download(&task_id) {
                             if !record.url.trim().is_empty() && (record.total_bytes.unwrap_or(0) > 0 || record.downloaded_bytes > 0) {
                                 let payload = serde_json::json!({
@@ -286,7 +299,7 @@ pub fn run() {
                                 crate::commands::show_download_complete(&app_handle, Some(payload));
                             }
                         }
-                    } else {
+                    } else if !is_terminal_or_paused {
                         crate::tray::update_download_task_progress(&app_handle, &progress);
                     }
                 }

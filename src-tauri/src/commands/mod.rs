@@ -50,6 +50,7 @@ pub async fn cmd_add_download(
 
 #[tauri::command]
 pub async fn cmd_pause_download(app: AppHandle, id: String, state: State<'_, AppState>) -> Result<bool, String> {
+    let _ = app.remove_tray_by_id(&format!("task-tray-{}", id));
     let res = state.queue_manager.pause_task(&id);
     let _ = crate::tray::sync_download_task_tray(&app);
     let _ = crate::tray::refresh_tray_menu(&app);
@@ -67,6 +68,7 @@ pub async fn cmd_start_queue(app: AppHandle, state: State<'_, AppState>) -> Resu
 #[tauri::command]
 pub fn cmd_pause_queue(app: AppHandle, state: State<'_, AppState>) -> Result<bool, String> {
     let res = state.queue_manager.pause_queue();
+    crate::tray::clean_all_task_trays(&app);
     let _ = crate::tray::sync_download_task_tray(&app);
     let _ = crate::tray::refresh_tray_menu(&app);
     Ok(res)
@@ -95,6 +97,7 @@ pub async fn cmd_resume_download(app: AppHandle, id: String, state: State<'_, Ap
 
 #[tauri::command]
 pub async fn cmd_cancel_download(app: AppHandle, id: String, delete_file: bool, state: State<'_, AppState>) -> Result<bool, String> {
+    let _ = app.remove_tray_by_id(&format!("task-tray-{}", id));
     let res = state.queue_manager.cancel_task(&id, delete_file);
     let _ = crate::tray::sync_download_task_tray(&app);
     let _ = crate::tray::refresh_tray_menu(&app);
@@ -1306,12 +1309,30 @@ pub fn show_download_dialog<R: tauri::Runtime>(app: &tauri::AppHandle<R>, payloa
 #[cfg(target_os = "windows")]
 pub fn force_window_to_foreground<R: tauri::Runtime>(window: &tauri::WebviewWindow<R>) {
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        BringWindowToTop, SetForegroundWindow, SetWindowPos, ShowWindow,
+        BringWindowToTop, GetForegroundWindow, GetWindowThreadProcessId, SetForegroundWindow, SetWindowPos, ShowWindow,
         HWND_NOTOPMOST, HWND_TOP, HWND_TOPMOST, SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW, SW_RESTORE, SW_SHOW,
     };
     if let Ok(h) = window.hwnd() {
         let hwnd_val = h.0 as _;
+        extern "system" {
+            fn AttachThreadInput(idAttach: u32, idAttachTo: u32, fAttach: i32) -> i32;
+        }
+
         unsafe {
+            let foreground_hwnd = GetForegroundWindow();
+            let current_thread_id = windows_sys::Win32::System::Threading::GetCurrentThreadId();
+            let foreground_thread_id = if !foreground_hwnd.is_null() {
+                GetWindowThreadProcessId(foreground_hwnd, std::ptr::null_mut())
+            } else {
+                0
+            };
+
+            let attached = if foreground_thread_id != 0 && foreground_thread_id != current_thread_id {
+                AttachThreadInput(foreground_thread_id, current_thread_id, 1) != 0
+            } else {
+                false
+            };
+
             ShowWindow(hwnd_val, SW_RESTORE);
             ShowWindow(hwnd_val, SW_SHOW);
             if window.label() == "main" || window.label() == "download_complete" {
@@ -1325,6 +1346,10 @@ pub fn force_window_to_foreground<R: tauri::Runtime>(window: &tauri::WebviewWind
             }
             BringWindowToTop(hwnd_val);
             SetForegroundWindow(hwnd_val);
+
+            if attached {
+                AttachThreadInput(foreground_thread_id, current_thread_id, 0);
+            }
         }
     }
 }
@@ -1339,6 +1364,7 @@ pub fn show_window_without_stealing_focus<R: tauri::Runtime>(window: &tauri::Web
     };
     if let Ok(h) = window.hwnd() {
         let hwnd_val = h.0 as _;
+
         unsafe {
             ShowWindow(hwnd_val, SW_SHOWNOACTIVATE);
             SetWindowPos(

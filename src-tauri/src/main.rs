@@ -174,9 +174,12 @@ fn main() {
                 || ping_resp.to_lowercase().contains("target\\debug")
                 || ping_resp.to_lowercase().contains("target/debug");
 
-            if !is_current_dev && is_running_dev {
-                // The user launched their INSTALLED production app, but an orphaned DEV instance is holding port 18888!
-                // Terminate the dev instance immediately so the installed app can take over and run cleanly.
+            let is_version_outdated = !ping_resp.contains("\"version\":\"0.0.39\"")
+                && (ping_resp.contains("\"version\":\"0.0.") || ping_resp.contains("\"version\":"));
+
+            if (!is_current_dev && is_running_dev) || is_version_outdated {
+                // If an orphaned dev instance or an outdated background instance is running,
+                // terminate it cleanly so this latest binary can take over and run authoritative!
                 if let Ok(mut stop_stream) = std::net::TcpStream::connect_timeout(
                     &std::net::SocketAddr::from(([127, 0, 0, 1], 18888)),
                     std::time::Duration::from_millis(500),
@@ -188,19 +191,20 @@ fn main() {
                 #[cfg(target_os = "windows")]
                 {
                     use std::os::windows::process::CommandExt;
+                    let cur_pid = std::process::id();
+                    let kill_cmd = format!(
+                        "Get-Process -Name Downex,downex -ErrorAction SilentlyContinue | Where-Object {{ $_.Id -ne {} }} | Stop-Process -Force",
+                        cur_pid
+                    );
                     let _ = std::process::Command::new("powershell.exe")
-                        .args([
-                            "-NoProfile",
-                            "-Command",
-                            "Get-Process -Name downex -ErrorAction SilentlyContinue | Where-Object { $_.Path -like '*target\\debug*' } | Stop-Process -Force",
-                        ])
+                        .args(["-NoProfile", "-Command", &kill_cmd])
                         .creation_flags(0x08000000)
                         .output();
                 }
 
                 std::thread::sleep(std::time::Duration::from_millis(300));
-                write_to_stdout("\r\n[Downex] Cleared stale development instance. Launching installed application...\r\n\r\n");
-                // Continue execution into downex_lib::run() as the installed app!
+                write_to_stdout("\r\n[Downex] Superseded outdated/stale background instance. Launching latest Downex application...\r\n\r\n");
+                // Continue execution into downex_lib::run() as the updated app!
             } else {
                 let req = "POST /api/bring_to_front HTTP/1.1\r\nHost: 127.0.0.1:18888\r\nConnection: close\r\nContent-Length: 0\r\n\r\n";
                 if let Ok(mut front_stream) = std::net::TcpStream::connect_timeout(

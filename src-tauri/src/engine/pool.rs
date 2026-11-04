@@ -424,7 +424,8 @@ impl DownloadEnginePool {
 
         if !is_done && total_bytes.is_some() {
             let expected = total_bytes.unwrap();
-            if verified_downloaded < expected {
+            let remaining = expected.saturating_sub(verified_downloaded);
+            if remaining > 4096 {
                 eprintln!(
                     "[Downex Completion] Incomplete download detected: {} / {} bytes. Marking paused for resume.",
                     verified_downloaded, expected

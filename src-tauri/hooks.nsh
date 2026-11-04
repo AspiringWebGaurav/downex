@@ -22,8 +22,22 @@
 !define MUI_FINISHPAGE_RUN_CHECKED
 !endif
 
+; 4. Pre-install hook: Aggressively terminate any existing or zombie Downex processes
+; so file locks are freed and no old processes or orphaned tray icons linger
+!macro NSIS_HOOK_PREINSTALL
+  nsExec::Exec 'taskkill /F /IM Downex.exe /T'
+  nsExec::Exec 'taskkill /F /IM downex.exe /T'
+  Sleep 600
+!macroend
 
-; 3. Post-install hook: Firewall exception & Desktop icon
+; 5. Pre-uninstall hook: Terminate running Downex before uninstallation
+!macro NSIS_HOOK_PREUNINSTALL
+  nsExec::Exec 'taskkill /F /IM Downex.exe /T'
+  nsExec::Exec 'taskkill /F /IM downex.exe /T'
+  Sleep 600
+!macroend
+
+; 6. Post-install hook: Firewall exception & Desktop icon
 !macro NSIS_HOOK_POSTINSTALL
   ; Create Desktop Shortcut for all users / current user
   CreateShortcut "$DESKTOP\Downex.lnk" "$INSTDIR\Downex.exe" "" "$INSTDIR\Downex.exe" 0 "" "" "Downex Download Manager"
@@ -36,7 +50,7 @@
   Delete "$INSTDIR\*.staged"
 !macroend
 
-; 4. Post-uninstall hook: Remove shortcuts and firewall rule
+; 7. Post-uninstall hook: Remove shortcuts and firewall rule
 !macro NSIS_HOOK_POSTUNINSTALL
   Delete "$DESKTOP\Downex.lnk"
   nsExec::ExecToLog 'netsh advfirewall firewall delete rule name="Downex Download Manager"'

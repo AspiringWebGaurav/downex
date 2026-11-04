@@ -78,6 +78,18 @@ export function getLatestCodebaseVersion(): string {
 }
 
 export const BASELINE_PATCH_NOTES: Record<string, DynamicPatchNotes> = {
+  '0.0.39': {
+    version: '0.0.39',
+    releaseDate: 'November 4, 2026',
+    title: 'Zero-lingering task tray icons, pre-install zombie process termination, and bulletproof Win32 foreground activation',
+    highlights: [
+      'Zero-Lingering Task Tray Icons: Immediately purges task tray icons upon completion, pause, cancellation, or deletion so finished downloads never leave stale tray ghosts',
+      'Pre-Install Zombie Purger: NSIS installer forcefully terminates existing/zombie Downex processes before file extraction to eliminate locked files and orphaned tray icons',
+      'Bulletproof Window Activation: Enhanced tray click and double-click handlers with AttachThreadInput Win32 foreground lock bypass to reliably bring Downex in front of all active windows',
+      'Seamless Instance Handover: Automatically supersedes older background instances on startup and sweeps stale notification area icons',
+    ],
+    rawNotes: 'v0.0.39: Zero-lingering task tray icons, pre-install zombie process termination, and bulletproof Win32 foreground activation',
+  },
   '0.0.38': {
     version: '0.0.38',
     releaseDate: 'November 3, 2026',

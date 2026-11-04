@@ -306,9 +306,9 @@ pub fn refresh_tray_menu<R: Runtime>(app: &AppHandle<R>) -> Result<(), Box<dyn s
 #[cfg(target_os = "windows")]
 pub fn sweep_windows_zombie_tray_icons() {
     unsafe {
-        use windows_sys::Win32::Foundation::RECT;
+        use windows_sys::Win32::Foundation::{BOOL, HWND, LPARAM, RECT};
         use windows_sys::Win32::UI::WindowsAndMessaging::{
-            FindWindowExW, FindWindowW, GetClientRect, SendMessageW, WM_MOUSEMOVE,
+            EnumChildWindows, FindWindowExW, FindWindowW, GetClassNameW, GetClientRect, SendMessageW, WM_MOUSEMOVE,
         };
 
         fn to_wide(s: &str) -> Vec<u16> {
@@ -349,9 +349,22 @@ pub fn sweep_windows_zombie_tray_icons() {
             }
         }
 
+        unsafe extern "system" fn enum_child_proc(hwnd: HWND, _: LPARAM) -> BOOL {
+            let mut class_name = [0u16; 64];
+            let len = GetClassNameW(hwnd, class_name.as_mut_ptr(), 64);
+            if len > 0 {
+                let name = String::from_utf16_lossy(&class_name[..len as usize]);
+                if name == "ToolbarWindow32" {
+                    sweep_toolbar(hwnd);
+                }
+            }
+            1
+        }
+
         // 1. Taskbar Tray Window
         let shell_tray = FindWindowW(to_wide("Shell_TrayWnd").as_ptr(), std::ptr::null());
         if !shell_tray.is_null() {
+            EnumChildWindows(shell_tray, Some(enum_child_proc), 0);
             let tray_notify = FindWindowExW(
                 shell_tray,
                 std::ptr::null_mut(),
@@ -385,6 +398,7 @@ pub fn sweep_windows_zombie_tray_icons() {
         // 2. Notification Overflow Window
         let overflow = FindWindowW(to_wide("NotifyIconOverflowWindow").as_ptr(), std::ptr::null());
         if !overflow.is_null() {
+            EnumChildWindows(overflow, Some(enum_child_proc), 0);
             let toolbar = FindWindowExW(
                 overflow,
                 std::ptr::null_mut(),
@@ -541,11 +555,26 @@ pub fn setup_system_tray<R: Runtime>(app: &AppHandle<R>) -> Result<TrayIcon<R>, 
                     button: MouseButton::Left,
                     button_state: MouseButtonState::Up,
                     ..
+                }
+                | TrayIconEvent::DoubleClick {
+                    button: MouseButton::Left,
+                    ..
                 } => {
-                    // Left click toggles window: If showing, minimize to tray with low RAM trimming. If hidden, show & focus.
+                    // Left click toggles window: If showing and active foreground, minimize to tray. If hidden/minimized/background, show, restore & force focus.
                     if let Some(window) = app.get_webview_window("main") {
-                        let is_showing = window.is_visible().unwrap_or(false) && !window.is_minimized().unwrap_or(false);
-                        if is_showing {
+                        let is_visible = window.is_visible().unwrap_or(false);
+                        let is_minimized = window.is_minimized().unwrap_or(false);
+
+                        #[cfg(target_os = "windows")]
+                        let is_foreground = if let Ok(h) = window.hwnd() {
+                            unsafe { windows_sys::Win32::UI::WindowsAndMessaging::GetForegroundWindow() == (h.0 as _) }
+                        } else {
+                            false
+                        };
+                        #[cfg(not(target_os = "windows"))]
+                        let is_foreground = is_visible && !is_minimized;
+
+                        if is_visible && !is_minimized && is_foreground {
                             let _ = window.hide();
                             #[cfg(target_os = "windows")]
                             {
@@ -559,6 +588,8 @@ pub fn setup_system_tray<R: Runtime>(app: &AppHandle<R>) -> Result<TrayIcon<R>, 
                             let _ = window.show();
                             let _ = window.unminimize();
                             let _ = window.set_focus();
+                            #[cfg(target_os = "windows")]
+                            crate::commands::force_window_to_foreground(&window);
                             clean_all_task_trays(app);
                             if let Some(manifest) = get_pending_update_manifest() {
                                 let _ = app.emit("downex-update-detected", &manifest);
@@ -632,6 +663,8 @@ pub fn clean_all_task_trays<R: Runtime>(app: &AppHandle<R>) {
         let _ = app.remove_tray_by_id(&tray_id);
     }
     let _ = app.remove_tray_by_id("download-task-tray");
+    #[cfg(target_os = "windows")]
+    sweep_windows_zombie_tray_icons();
 
     // Defensively ensure no task tray icons remain for tasks in the database
     if let Some(state) = app.try_state::<crate::AppState>() {
@@ -771,6 +804,8 @@ pub fn sync_download_task_trays_with_progress<R: Runtime>(
 
     // Clean up any legacy single-tray ID if it exists
     let _ = app.remove_tray_by_id("download-task-tray");
+    #[cfg(target_os = "windows")]
+    sweep_windows_zombie_tray_icons();
 
     let downloads = if let Some(state) = app.try_state::<crate::AppState>() {
         state.db.get_all_downloads().unwrap_or_default()
@@ -782,7 +817,7 @@ pub fn sync_download_task_trays_with_progress<R: Runtime>(
         .into_iter()
         .filter(|d| {
             if let Some(p) = latest_progress {
-                if p.task_id == d.id && p.status == "completed" {
+                if p.task_id == d.id && p.status != "downloading" && p.status != "probing" {
                     return false;
                 }
             }
@@ -804,6 +839,8 @@ pub fn sync_download_task_trays_with_progress<R: Runtime>(
         let tray_id = format!("task-tray-{}", task_id);
         let _ = app.remove_tray_by_id(&tray_id);
         guard.remove(&task_id);
+        #[cfg(target_os = "windows")]
+        sweep_windows_zombie_tray_icons();
     }
 
     if running_tasks.is_empty() {
@@ -864,6 +901,8 @@ pub fn sync_download_task_trays_with_progress<R: Runtime>(
                 let _ = tray.set_tooltip(Some(&tooltip));
             } else {
                 guard.remove(&task_id);
+        #[cfg(target_os = "windows")]
+        sweep_windows_zombie_tray_icons();
             }
         }
 
@@ -924,6 +963,10 @@ pub fn sync_download_task_trays_with_progress<R: Runtime>(
                             TrayIconEvent::Click {
                                 button: MouseButton::Left,
                                 button_state: MouseButtonState::Up,
+                                ..
+                            }
+                            | TrayIconEvent::DoubleClick {
+                                button: MouseButton::Left,
                                 ..
                             } => {
                                 let _ = create_or_show_main_window(app);
@@ -1147,5 +1190,57 @@ mod tests {
 
         // Must be zero, guaranteeing immediate tray dismissal upon download completion!
         assert_eq!(active_with_completion.len(), 0);
+    }
+
+    #[test]
+    fn test_active_download_filter_with_paused_or_cancelled_event() {
+        let dummy_record = crate::db::DownloadRecord {
+            id: "task-test-paused".to_string(),
+            url: "https://example.com/asset.iso".to_string(),
+            filename: "asset.iso".to_string(),
+            destination_path: "C:\\Downloads\\asset.iso".to_string(),
+            total_bytes: Some(1000),
+            downloaded_bytes: 990,
+            status: "downloading".to_string(),
+            etag: None,
+            last_modified: None,
+            headers_json: None,
+            queue_id: "default".to_string(),
+            speed_bytes_sec: 500,
+            error_message: None,
+            checksum: None,
+            media_type: None,
+            supports_ranges: true,
+            created_at: 0,
+            updated_at: 0,
+            speed_limit_mbps: None,
+        };
+
+        let downloads = vec![dummy_record];
+
+        // When a paused progress event is received for that task, it is immediately excluded from active running tasks
+        let paused_event = crate::engine::DownloadProgressEvent {
+            task_id: "task-test-paused".to_string(),
+            status: "paused".to_string(),
+            downloaded_bytes: 990,
+            total_bytes: Some(1000),
+            speed_bytes_sec: 0,
+            eta_seconds: None,
+            segments: vec![],
+            supports_ranges: Some(true),
+        };
+
+        let active_with_paused: Vec<_> = downloads
+            .iter()
+            .filter(|d| {
+                if paused_event.task_id == d.id && paused_event.status != "downloading" && paused_event.status != "probing" {
+                    return false;
+                }
+                d.status == "downloading" || d.status == "probing"
+            })
+            .collect();
+
+        // Must be zero, guaranteeing immediate tray dismissal upon pause/cancel/failure!
+        assert_eq!(active_with_paused.len(), 0);
     }
 }
