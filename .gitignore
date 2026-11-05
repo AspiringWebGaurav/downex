@@ -91,6 +91,7 @@ downex-browser-extension.zip
 # 8. Node Dependencies & Package Managers
 # ------------------------------------------------------------------------------
 node_modules/
+*.log
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
@@ -103,6 +104,9 @@ pnpm-debug.log*
 !.yarn/releases
 !.yarn/sdks
 !.yarn/versions
+temp-*/
+fresh-*/
+tmp/
 
 # ------------------------------------------------------------------------------
 # 9. Frontend Build Outputs & Caches
