@@ -36,23 +36,13 @@ git clone https://github.com/AspiringWebGaurav/downex.git
 cd downex
 ```
 
-### 2. Unpack the Project Vault
-Restore `.env.local`, OTA signing keys, and project assets from the encrypted container:
+### 2. 1-Click Automated Setup
+Run the automated setup script to install dependencies, unpack the encrypted project vault, and verify the workspace:
 
 ```bash
-npm run vault:unpack
+Setup.cmd
 ```
-*(Enter your master vault passphrase when prompted)*
-
-Or non-interactively via environment variable:
-```bash
-DOWNEX_VAULT_PASS="<your_master_passphrase>" npm run vault:unpack
-```
-
-### 3. Install Dependencies
-```bash
-npm install
-```
+*(Or manually via: `npm install && npm run vault:unpack`)*
 
 ### 4. Run Development Environment
 To launch the full Tauri 2 desktop application:
