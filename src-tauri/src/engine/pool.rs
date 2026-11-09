@@ -10,8 +10,8 @@ use std::time::{Duration, Instant};
 use tokio::sync::{mpsc, RwLock};
 use tokio_util::sync::CancellationToken;
 
-const MIN_SPLIT_THRESHOLD_BYTES: u64 = 10 * 1024 * 1024; // 10 MB minimum to split a chunk
-const MAX_CONCURRENT_SEGMENTS: usize = 32;
+const MIN_SPLIT_THRESHOLD_BYTES: u64 = 2 * 1024 * 1024; // 2 MB minimum to split a chunk
+const MAX_TOTAL_SEGMENTS: usize = 256; // Dynamic work-stealing segment lifecycle capacity
 
 #[derive(Debug, Clone)]
 pub struct ActiveSegment {
@@ -337,11 +337,22 @@ impl DownloadEnginePool {
             }
         });
 
-        // Spawn workers for each initial segment
+        // Fixed-size parallel worker pool: capped strictly to user's max_connections (up to 32)
         let initial_seg_count = segments.read().await.len();
+        let worker_count = if supports_ranges && (total_bytes.is_some() || is_resume) {
+            max_connections.clamp(1, 32) as usize
+        } else {
+            1
+        };
         let mut worker_handles = Vec::new();
 
-        for idx in 0..initial_seg_count {
+        for idx in 0..worker_count {
+            let initial_seg_idx = if idx < initial_seg_count {
+                idx as u32
+            } else {
+                u32::MAX
+            };
+
             let w_client = self.client.clone();
             let w_url = url.clone();
             let w_writer = writer.clone();
@@ -362,7 +373,7 @@ impl DownloadEnginePool {
                     tokio::time::sleep(Duration::from_millis((idx as u64) * 20)).await;
                 }
                 Self::worker_loop(
-                    idx as u32,
+                    initial_seg_idx,
                     w_task_id,
                     w_db,
                     w_url,
@@ -505,6 +516,32 @@ impl DownloadEnginePool {
         cancel_token: CancellationToken,
         completion_token: CancellationToken,
     ) {
+        // Unassigned worker entry: immediately seek work or steal from active segment
+        if segment_idx == u32::MAX {
+            if let Some(next_idx) = Self::find_next_work(&segments, supports_ranges, &fallback_single_stream).await {
+                segment_idx = next_idx;
+            } else {
+                let mut found = None;
+                for _ in 0..5 {
+                    tokio::select! {
+                        _ = cancel_token.cancelled() => return,
+                        _ = completion_token.cancelled() => return,
+                        _ = tokio::time::sleep(Duration::from_millis(200)) => {
+                            if let Some(next_idx) = Self::find_next_work(&segments, supports_ranges, &fallback_single_stream).await {
+                                found = Some(next_idx);
+                                break;
+                            }
+                        }
+                    }
+                }
+                if let Some(next_idx) = found {
+                    segment_idx = next_idx;
+                } else {
+                    return;
+                }
+            }
+        }
+
         loop {
             if cancel_token.is_cancelled() || completion_token.is_cancelled() {
                 break;
@@ -535,6 +572,35 @@ impl DownloadEnginePool {
 
                 // Look for another incomplete segment or steal work
                 if let Some(next_idx) = Self::find_next_work(&segments, supports_ranges, &fallback_single_stream).await {
+                    segment_idx = next_idx;
+                    continue;
+                }
+
+                // If no work immediately available, check if whole download is complete
+                {
+                    let segs = segments.read().await;
+                    let (_, is_done) = Self::evaluate_progress(&segs, total_bytes);
+                    if is_done {
+                        break;
+                    }
+                }
+
+                // Poll briefly (up to 5 attempts, 200ms each) in case another connection stalls or a split opens up
+                let mut found = None;
+                for _ in 0..5 {
+                    tokio::select! {
+                        _ = cancel_token.cancelled() => break,
+                        _ = completion_token.cancelled() => break,
+                        _ = tokio::time::sleep(Duration::from_millis(200)) => {
+                            if let Some(next_idx) = Self::find_next_work(&segments, supports_ranges, &fallback_single_stream).await {
+                                found = Some(next_idx);
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                if let Some(next_idx) = found {
                     segment_idx = next_idx;
                     continue;
                 }
@@ -622,8 +688,27 @@ impl DownloadEnginePool {
                     is_active_atomic.store(false, Ordering::SeqCst);
                     return;
                 }
+            } else if status == reqwest::StatusCode::RANGE_NOT_SATISFIABLE {
+                // HTTP 416: Requested range is at or past segment end. Mark this segment complete!
+                let expected = if end >= start { end - start + 1 } else { 0 };
+                downloaded_atomic.store(expected, Ordering::SeqCst);
+                is_active_atomic.store(false, Ordering::SeqCst);
+                if let Some(next_idx) = Self::find_next_work(&segments, supports_ranges, &fallback_single_stream).await {
+                    segment_idx = next_idx;
+                    continue;
+                }
+                break;
+            } else if status == reqwest::StatusCode::TOO_MANY_REQUESTS || status == reqwest::StatusCode::SERVICE_UNAVAILABLE {
+                eprintln!("[Downex Worker {}] Server rate limit / throttle (HTTP {}). Backing off for 2s...", segment_idx, status);
+                is_active_atomic.store(false, Ordering::SeqCst);
+                tokio::select! {
+                    _ = cancel_token.cancelled() => break,
+                    _ = completion_token.cancelled() => break,
+                    _ = tokio::time::sleep(Duration::from_millis(2000)) => {}
+                }
+                continue;
             } else if !status.is_success() && status != reqwest::StatusCode::PARTIAL_CONTENT {
-                eprintln!("[Downex Worker {}] Server HTTP {}: retrying...", segment_idx, status);
+                eprintln!("[Downex Worker {}] Server HTTP {}: retrying in 1s...", segment_idx, status);
                 is_active_atomic.store(false, Ordering::SeqCst);
                 tokio::select! {
                     _ = cancel_token.cancelled() => break,
@@ -640,11 +725,28 @@ impl DownloadEnginePool {
             };
             let mut stream = res.bytes_stream();
 
-            while let Some(chunk_res) = stream.next().await {
-                if cancel_token.is_cancelled() || completion_token.is_cancelled() {
-                    is_active_atomic.store(false, Ordering::SeqCst);
-                    return;
-                }
+            loop {
+                let chunk_res = tokio::select! {
+                    _ = cancel_token.cancelled() => {
+                        is_active_atomic.store(false, Ordering::SeqCst);
+                        return;
+                    }
+                    _ = completion_token.cancelled() => {
+                        is_active_atomic.store(false, Ordering::SeqCst);
+                        return;
+                    }
+                    opt = tokio::time::timeout(Duration::from_millis(4000), stream.next()) => {
+                        match opt {
+                            Ok(Some(item)) => item,
+                            Ok(None) => break, // Server closed stream (clean EOF)
+                            Err(_timeout) => {
+                                // Socket stalled for 4s with no incoming bytes (straggler / dead TCP route)
+                                eprintln!("[Downex Worker {}] Straggler detected (4s socket stall). Recycling connection...", segment_idx);
+                                break;
+                            }
+                        }
+                    }
+                };
 
                 if fallback_single_stream.load(Ordering::SeqCst) && segment_idx != 0 {
                     is_active_atomic.store(false, Ordering::SeqCst);
@@ -711,6 +813,37 @@ impl DownloadEnginePool {
                 continue;
             }
 
+            // Check if current segment still has bytes left to download (e.g. after a stalled socket recycle)
+            {
+                let current_d = downloaded_atomic.load(Ordering::SeqCst);
+                let current_end = end_atomic.load(Ordering::SeqCst);
+                let exp = if current_end >= start { current_end - start + 1 } else { 0 };
+                if exp > 0 && current_d < exp {
+                    // Reconnect this same segment from current offset with fresh TCP connection
+                    continue;
+                }
+            }
+
+            // If no work immediately available, poll briefly before terminating worker
+            let mut found = None;
+            for _ in 0..5 {
+                tokio::select! {
+                    _ = cancel_token.cancelled() => break,
+                    _ = completion_token.cancelled() => break,
+                    _ = tokio::time::sleep(Duration::from_millis(200)) => {
+                        if let Some(next_idx) = Self::find_next_work(&segments, supports_ranges, &fallback_single_stream).await {
+                            found = Some(next_idx);
+                            break;
+                        }
+                    }
+                }
+            }
+
+            if let Some(next_idx) = found {
+                segment_idx = next_idx;
+                continue;
+            }
+
             break;
         }
     }
@@ -748,7 +881,7 @@ impl DownloadEnginePool {
     /// atomically truncates its end boundary, and creates a new segment for the second half.
     async fn try_steal_work(segments: &Arc<RwLock<Vec<ActiveSegment>>>) -> Option<u32> {
         let mut segs = segments.write().await;
-        if segs.len() >= MAX_CONCURRENT_SEGMENTS {
+        if segs.len() >= MAX_TOTAL_SEGMENTS {
             return None;
         }
 
@@ -758,7 +891,7 @@ impl DownloadEnginePool {
         for (i, s) in segs.iter().enumerate() {
             if s.is_active.load(Ordering::SeqCst) {
                 let remaining = s.remaining_bytes();
-                if remaining > max_remaining && remaining >= MIN_SPLIT_THRESHOLD_BYTES {
+                if remaining > max_remaining && remaining >= (MIN_SPLIT_THRESHOLD_BYTES * 2) {
                     max_remaining = remaining;
                     target_seg_idx = Some(i);
                 }
@@ -771,7 +904,7 @@ impl DownloadEnginePool {
             let current_pos = target.range_start + current_downloaded;
             let target_end = target.range_end.load(Ordering::SeqCst);
 
-            if target_end <= current_pos + MIN_SPLIT_THRESHOLD_BYTES {
+            if target_end <= current_pos + (MIN_SPLIT_THRESHOLD_BYTES * 2) {
                 return None;
             }
 

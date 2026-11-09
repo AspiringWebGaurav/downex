@@ -78,6 +78,18 @@ export function getLatestCodebaseVersion(): string {
 }
 
 export const BASELINE_PATCH_NOTES: Record<string, DynamicPatchNotes> = {
+  '0.0.41': {
+    version: '0.0.41',
+    releaseDate: 'November 9, 2026',
+    title: 'Patent-Grade Dynamic Work-Stealing Pool, Tail-End 99% Saturation & Straggler Socket Eviction',
+    highlights: [
+      'Patent-Grade Dynamic Work-Stealing: Replaced static segment limitation with a dynamic chunk-stealing engine that partitions remaining bytes down to a 2 MB threshold, keeping all 32 connections saturated through 99.9%',
+      'Straggler & Stalled Socket Eviction: Integrated a 4-second chunk read timeout that detects choked TCP routes or zombie connections and automatically recycles sockets with fresh HTTP Range handshakes',
+      'Anti-Ban & CDN Rate-Limit Fallback: Automatic graceful backoff for HTTP 429 / 503 responses and clean HTTP 416 range completion handling to prevent IP bans or server throttling',
+      'Fixed-Size Parallel Worker Architecture: Dedicated 32-worker asynchronous pool that dynamically redistributes load across all available threads without exceeding socket boundaries',
+      'Zero False-Positive Footprint: Built entirely inside native asynchronous Rust tasks (tokio/hyper) without kernel hooks or memory modifications, ensuring 100% clean Defender telemetry',
+    ],
+  },
   '0.0.40': {
     version: '0.0.40',
     releaseDate: 'November 9, 2026',

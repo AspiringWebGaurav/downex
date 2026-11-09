@@ -967,7 +967,7 @@ export const DownloadTable: React.FC = () => {
                   <span>Resume: {resInfo.label}</span>
                 </span>
                 {item.segments && item.segments.length > 0 && (
-                  <span>• {item.segments.length} Connection(s)</span>
+                  <span>• {Math.min(item.segments.length, 32)} Connection(s)</span>
                 )}
               </>
                 )}
