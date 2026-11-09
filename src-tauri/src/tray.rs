@@ -305,10 +305,18 @@ pub fn refresh_tray_menu<R: Runtime>(app: &AppHandle<R>) -> Result<(), Box<dyn s
 
 #[cfg(target_os = "windows")]
 pub fn sweep_windows_zombie_tray_icons() {
+    static LAST_SWEEP_TIME: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let now = current_millis();
+    let last = LAST_SWEEP_TIME.load(Ordering::Relaxed);
+    if now.saturating_sub(last) < 4000 {
+        return;
+    }
+    LAST_SWEEP_TIME.store(now, Ordering::Relaxed);
+
     unsafe {
         use windows_sys::Win32::Foundation::{BOOL, HWND, LPARAM, RECT};
         use windows_sys::Win32::UI::WindowsAndMessaging::{
-            EnumChildWindows, FindWindowExW, FindWindowW, GetClassNameW, GetClientRect, SendMessageW, WM_MOUSEMOVE,
+            EnumChildWindows, FindWindowExW, FindWindowW, GetClassNameW, GetClientRect, PostMessageW, WM_MOUSEMOVE,
         };
 
         fn to_wide(s: &str) -> Vec<u16> {
@@ -334,18 +342,13 @@ pub fn sweep_windows_zombie_tray_icons() {
                 return;
             }
 
-            // Step across toolbar in small increments to trigger WM_MOUSEMOVE hit-testing
-            let step_x = 8;
-            let step_y = 8;
+            // Post lightweight non-blocking WM_MOUSEMOVE across toolbar center line
+            let center_y = (height / 2) as u32;
             let mut x = 0;
             while x < width {
-                let mut y = 0;
-                while y < height {
-                    let lparam = ((y as u32) << 16 | (x as u32 & 0xFFFF)) as isize;
-                    SendMessageW(hwnd, WM_MOUSEMOVE, 0, lparam);
-                    y += step_y;
-                }
-                x += step_x;
+                let lparam = ((center_y << 16) | (x as u32 & 0xFFFF)) as isize;
+                PostMessageW(hwnd, WM_MOUSEMOVE, 0, lparam);
+                x += 32;
             }
         }
 
@@ -657,23 +660,22 @@ fn format_tray_bytes(bytes: u64) -> String {
 }
 
 pub fn clean_all_task_trays<R: Runtime>(app: &AppHandle<R>) {
-    let mut guard = ACTIVE_TASK_TRAYS.lock();
-    for task_id in guard.drain() {
-        let tray_id = format!("task-tray-{}", task_id);
-        let _ = app.remove_tray_by_id(&tray_id);
-    }
-    let _ = app.remove_tray_by_id("download-task-tray");
-    #[cfg(target_os = "windows")]
-    sweep_windows_zombie_tray_icons();
-
-    // Defensively ensure no task tray icons remain for tasks in the database
-    if let Some(state) = app.try_state::<crate::AppState>() {
-        if let Ok(downloads) = state.db.get_all_downloads() {
-            for d in downloads {
-                let tray_id = format!("task-tray-{}", d.id);
+    let had_active = {
+        let mut guard = ACTIVE_TASK_TRAYS.lock();
+        if guard.is_empty() {
+            false
+        } else {
+            for task_id in guard.drain() {
+                let tray_id = format!("task-tray-{}", task_id);
                 let _ = app.remove_tray_by_id(&tray_id);
             }
+            true
         }
+    };
+    let _ = app.remove_tray_by_id("download-task-tray");
+    if had_active {
+        #[cfg(target_os = "windows")]
+        sweep_windows_zombie_tray_icons();
     }
 }
 
@@ -750,7 +752,13 @@ pub fn update_download_task_progress<R: Runtime>(
     };
 
     if is_showing {
-        clean_all_task_trays(app);
+        let needs_clean = {
+            let guard = ACTIVE_TASK_TRAYS.lock();
+            !guard.is_empty()
+        };
+        if needs_clean {
+            clean_all_task_trays(app);
+        }
         return;
     }
 
@@ -798,7 +806,13 @@ pub fn sync_download_task_trays_with_progress<R: Runtime>(
     };
 
     if is_showing {
-        clean_all_task_trays(app);
+        let needs_clean = {
+            let guard = ACTIVE_TASK_TRAYS.lock();
+            !guard.is_empty()
+        };
+        if needs_clean {
+            clean_all_task_trays(app);
+        }
         return;
     }
 

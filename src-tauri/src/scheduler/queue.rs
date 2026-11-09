@@ -428,8 +428,13 @@ impl QueueManager {
                     // Robust background removal loop: handles cases where active download file handle
                     // takes 20-100ms to close cleanly on Windows
                     std::thread::spawn(move || {
-                        for _ in 0..12 {
-                            if !std::path::Path::new(&path).exists() || std::fs::remove_file(&path).is_ok() {
+                        for attempt in 0..40 {
+                            if !std::path::Path::new(&path).exists() {
+                                eprintln!("[Downex Delete] File does not exist or already removed: {}", path);
+                                break;
+                            }
+                            if std::fs::remove_file(&path).is_ok() {
+                                eprintln!("[Downex Delete] Successfully deleted file from disk on attempt {}: {}", attempt + 1, path);
                                 break;
                             }
                             std::thread::sleep(std::time::Duration::from_millis(50));

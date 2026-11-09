@@ -46,7 +46,7 @@ test.describe('Downex Base Application — Download Table, Lifecycles & Controls
 
     // Verify item is displayed
     await expect(page.getByRole('heading', { name: 'large-dataset.tar.gz' })).toBeVisible();
-    await expect(page.getByText('Receiving data...').first()).toBeVisible();
+    await expect(page.getByText('DOWNLOADING').first()).toBeVisible();
 
     // 1. Inspect segment worker chunks
     const detailsBtn = page.locator('button:has-text("Show details")').first();
@@ -62,18 +62,18 @@ test.describe('Downex Base Application — Download Table, Lifecycles & Controls
     await expect(page.locator('text=Start positions and download progress by connections')).not.toBeVisible();
 
     // 2. Pause the download
-    const pauseBtn = page.locator('button[title="Pause"]').first();
+    const pauseBtn = page.locator('button[title*="Pause"]').first();
     await pauseBtn.click();
 
     // Status changes to paused
     await expect(page.getByText('Paused').first()).toBeVisible();
 
     // 3. Resume the download
-    const resumeBtn = page.locator('button[title="Resume"]').first();
+    const resumeBtn = page.locator('button[title*="Resume"]').first();
     await resumeBtn.click();
 
-    // Status returns to receiving data
-    await expect(page.getByText('Receiving data...').first()).toBeVisible();
+    // Status returns to downloading
+    await expect(page.getByText('DOWNLOADING').first()).toBeVisible();
 
     expect(errors).toEqual([]);
   });
@@ -216,22 +216,23 @@ test.describe('Downex Base Application — Download Table, Lifecycles & Controls
     await deleteBtn.click();
 
     // Modal appears
-    await expect(page.locator('text=Delete Download')).toBeVisible();
+    const modal = page.locator('[data-testid="delete-confirm-modal"]');
+    await expect(modal).toBeVisible();
     await expect(page.locator('text=to-delete.dmg').first()).toBeVisible();
 
-    // Test Delete File From Disk checkbox
-    const diskCheckbox = page.locator('input[type="checkbox"]').first();
-    await diskCheckbox.check();
-    expect(await diskCheckbox.isChecked()).toBe(true);
+    // Test Delete File From Disk toggle
+    const diskToggle = page.locator('[data-testid="delete-from-disk-toggle"]');
+    await diskToggle.click();
+    await expect(page.getByText('PERMANENT WIPE', { exact: true })).toBeVisible();
 
     // Cancel deletion first
     await page.click('button:has-text("Cancel")');
-    await expect(page.locator('text=Delete Download')).not.toBeVisible();
+    await expect(modal).not.toBeVisible();
     await expect(page.getByRole('heading', { name: 'to-delete.dmg' })).toBeVisible();
 
     // Open modal again and confirm delete
     await deleteBtn.click();
-    await expect(page.locator('text=Delete Download')).toBeVisible();
+    await expect(modal).toBeVisible();
     await page.locator('button:has-text("Delete from Device"), button:has-text("Remove from List")').click();
 
     // Item is deleted and table shows empty

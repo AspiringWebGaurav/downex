@@ -108,7 +108,14 @@ impl DownloadEnginePool {
         // Check if existing segment records exist in DB for resume
         let existing_segments = self.db.get_segments(&task_id).unwrap_or_default();
         let is_resume = !existing_segments.is_empty();
-        let writer = Arc::new(PositionalWriter::new(&destination_path, total_bytes, is_resume)?);
+        let dest_clone = destination_path.clone();
+        let writer_res = tauri::async_runtime::spawn_blocking(move || {
+            PositionalWriter::new(&dest_clone, total_bytes, is_resume)
+        })
+        .await
+        .map_err(|e| Box::new(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())) as Box<dyn std::error::Error + Send + Sync>)?
+        .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
+        let writer = Arc::new(writer_res);
 
         let segments: Arc<RwLock<Vec<ActiveSegment>>>;
 
@@ -222,7 +229,8 @@ impl DownloadEnginePool {
                         }
 
                         // Periodic 2-second SQLite checkpoint
-                        if last_checkpoint_time.elapsed() >= Duration::from_secs(2) {
+                        let should_checkpoint = last_checkpoint_time.elapsed() >= Duration::from_secs(2);
+                        if should_checkpoint {
                             last_checkpoint_time = Instant::now();
                             let mut records = Vec::new();
                             for s in segs.iter() {
@@ -280,6 +288,9 @@ impl DownloadEnginePool {
                         if active_limit > 0 && speed > active_limit {
                             speed = active_limit;
                         }
+                        if should_checkpoint {
+                            let _ = p_db.update_download_progress(&p_task_id, current_total, speed);
+                        }
                         last_bytes = current_total;
                         last_time = now;
 
@@ -321,7 +332,6 @@ impl DownloadEnginePool {
                         };
 
                         let _ = t_progress_tx.send(event).await;
-                        let _ = p_db.update_download_progress(&p_task_id, clamped_downloaded, speed);
                     }
                 }
             }
@@ -347,6 +357,10 @@ impl DownloadEnginePool {
             let w_db = self.db.clone();
 
             let handle = tauri::async_runtime::spawn(async move {
+                // Stagger initial connections (20ms per worker) to prevent network socket flood
+                if idx > 0 {
+                    tokio::time::sleep(Duration::from_millis((idx as u64) * 20)).await;
+                }
                 Self::worker_loop(
                     idx as u32,
                     w_task_id,
@@ -559,17 +573,27 @@ impl DownloadEnginePool {
                 req = req.header(RANGE, format!("bytes={}-{}", current_offset, end));
             }
 
-            let res = match req.send().await {
-                Ok(r) => r,
-                Err(e) => {
-                    eprintln!("[Downex Worker {}] Connect error: {}", segment_idx, e);
+            let res = tokio::select! {
+                _ = cancel_token.cancelled() => {
                     is_active_atomic.store(false, Ordering::SeqCst);
-                    tokio::select! {
-                        _ = cancel_token.cancelled() => break,
-                        _ = completion_token.cancelled() => break,
-                        _ = tokio::time::sleep(Duration::from_millis(1000)) => {}
+                    break;
+                }
+                _ = completion_token.cancelled() => {
+                    is_active_atomic.store(false, Ordering::SeqCst);
+                    break;
+                }
+                send_res = req.send() => match send_res {
+                    Ok(r) => r,
+                    Err(e) => {
+                        eprintln!("[Downex Worker {}] Connect error: {}", segment_idx, e);
+                        is_active_atomic.store(false, Ordering::SeqCst);
+                        tokio::select! {
+                            _ = cancel_token.cancelled() => break,
+                            _ = completion_token.cancelled() => break,
+                            _ = tokio::time::sleep(Duration::from_millis(1000)) => {}
+                        }
+                        continue;
                     }
-                    continue;
                 }
             };
 

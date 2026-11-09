@@ -257,8 +257,13 @@ export const useDownloadStore = create<DownloadStore>((set, get) => ({
   },
 
   removeDownload: async (id: string, deleteFile = false) => {
-    await cancelDownload(id, deleteFile);
+    // Instant optimistic removal from UI state - 0ms UI lag
     set((state) => ({ items: state.items.filter((i) => i.id !== id) }));
+    try {
+      await cancelDownload(id, deleteFile);
+    } catch (e) {
+      console.error('Failed to cancel download in backend:', e);
+    }
   },
 
   setSelectedView: (view: string) => {

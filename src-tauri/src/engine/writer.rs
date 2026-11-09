@@ -27,6 +27,41 @@ impl PositionalWriter {
         opts.share_mode(7); // FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE
         let file = opts.open(&path)?;
 
+        // Enable NTFS Sparse File allocation on Windows for instantaneous large file preallocation.
+        // Prevents multi-second synchronous disk locking and system freezes on 10GB-100GB+ downloads.
+        #[cfg(target_os = "windows")]
+        {
+            use std::os::windows::io::AsRawHandle;
+            const FSCTL_SET_SPARSE: u32 = 0x000900C4;
+            extern "system" {
+                fn DeviceIoControl(
+                    hDevice: *mut std::ffi::c_void,
+                    dwIoControlCode: u32,
+                    lpInBuffer: *mut std::ffi::c_void,
+                    nInBufferSize: u32,
+                    lpOutBuffer: *mut std::ffi::c_void,
+                    nOutBufferSize: u32,
+                    lpBytesReturned: *mut u32,
+                    lpOverlapped: *mut std::ffi::c_void,
+                ) -> i32;
+            }
+
+            let handle = file.as_raw_handle();
+            let mut bytes_returned: u32 = 0;
+            unsafe {
+                DeviceIoControl(
+                    handle,
+                    FSCTL_SET_SPARSE,
+                    std::ptr::null_mut(),
+                    0,
+                    std::ptr::null_mut(),
+                    0,
+                    &mut bytes_returned,
+                    std::ptr::null_mut(),
+                );
+            }
+        }
+
         if !is_resume {
             // Fresh download: Clean truncate any existing stale file / clusters to 0 bytes
             let _ = file.set_len(0);

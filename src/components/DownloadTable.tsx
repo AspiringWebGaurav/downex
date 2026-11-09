@@ -671,6 +671,8 @@ export const DownloadTable: React.FC = () => {
                   className={`text-[10px] font-mono px-2 py-0.5 rounded-full uppercase tracking-wider ${
                     item.status === 'completed'
                       ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 font-semibold'
+                      : isDownloading && effectiveSpeed === 0 && item.downloaded_bytes === 0
+                      ? 'bg-amber-500/10 text-amber-600 dark:text-amber-400 font-semibold animate-pulse'
                       : isDownloading
                       ? 'bg-blue-500/10 text-blue-600 dark:text-blue-400 animate-pulse font-semibold'
                       : isQueued
@@ -682,7 +684,7 @@ export const DownloadTable: React.FC = () => {
                       : 'bg-zinc-200/60 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400'
                   }`}
                 >
-                  {item.status}
+                  {isDownloading && effectiveSpeed === 0 && item.downloaded_bytes === 0 ? 'CONNECTING...' : item.status}
                 </span>
 
                 {/* Queue action if paused or failed */}
@@ -804,8 +806,14 @@ export const DownloadTable: React.FC = () => {
               {/* 3. Transfer rate (single line) */}
               <div className="flex items-center gap-1.5 overflow-hidden">
                 <span className="text-zinc-400 dark:text-zinc-500 shrink-0 font-medium text-[11px] whitespace-nowrap">Transfer rate</span>
-                <span className={`font-semibold text-[13px] truncate whitespace-nowrap tracking-tight ${item.status === 'completed' ? 'text-zinc-500 dark:text-zinc-400 font-normal' : isDownloading && effectiveSpeed > 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-zinc-500'}`}>
-                  {item.status === 'completed' ? '--' : isDownloading && effectiveSpeed > 0 ? formatSpeed(effectiveSpeed) : '0 B/s (0 Mbps)'}
+                <span className={`font-semibold text-[13px] truncate whitespace-nowrap tracking-tight ${item.status === 'completed' ? 'text-zinc-500 dark:text-zinc-400 font-normal' : isDownloading && effectiveSpeed > 0 ? 'text-emerald-600 dark:text-emerald-400' : isDownloading ? 'text-amber-600 dark:text-amber-400 font-medium' : 'text-zinc-500'}`}>
+                  {item.status === 'completed'
+                    ? '--'
+                    : isDownloading && effectiveSpeed > 0
+                    ? formatSpeed(effectiveSpeed)
+                    : isDownloading
+                    ? 'Connecting to server...'
+                    : '0 B/s (0 Mbps)'}
                 </span>
               </div>
 
@@ -814,7 +822,7 @@ export const DownloadTable: React.FC = () => {
                 <span className="text-zinc-400 dark:text-zinc-500 shrink-0 font-medium text-[11px] whitespace-nowrap">{item.status === 'completed' ? 'Time taken' : 'Time left'}</span>
                 <span className="text-zinc-900 dark:text-zinc-100 text-[13px] truncate font-semibold tracking-tight">
                   {isDownloading
-                    ? (formattedEta || 'Calculating...')
+                    ? (formattedEta || (effectiveSpeed === 0 ? 'Please wait, connecting with server...' : 'Calculating...'))
                     : isPaused
                     ? 'Paused'
                     : item.status === 'completed'

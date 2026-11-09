@@ -192,3 +192,15 @@ $RECYCLE.BIN/
 .vault_attempts
 test-vault-verification/
 vault/
+
+# ------------------------------------------------------------------------------
+# 16. Local Development Caches, AI Agent Temp & Backup Files
+# ------------------------------------------------------------------------------
+.gemini/
+.antigravity/
+*.tmp
+*.temp
+*.bak
+*.swp
+*.swo
+*.orig

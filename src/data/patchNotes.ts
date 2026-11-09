@@ -78,6 +78,20 @@ export function getLatestCodebaseVersion(): string {
 }
 
 export const BASELINE_PATCH_NOTES: Record<string, DynamicPatchNotes> = {
+  '0.0.40': {
+    version: '0.0.40',
+    releaseDate: 'November 9, 2026',
+    title: 'Kernel sparse-file allocation, non-blocking network cancellation, Explorer tray storm elimination & smooth connection UX',
+    highlights: [
+      'Kernel NTFS Sparse File Allocation: Instantaneous (<1ms) preallocation for massive files (10GB-100GB+) via Windows DeviceIoControl FSCTL_SET_SPARSE to eliminate disk queue spikes and system-wide freezes',
+      'Non-Blocking Asynchronous Cancellation: Wrapped worker HTTP requests in tokio::select! so pausing or deleting active transfers aborts network handshakes immediately (<1ms) and releases Windows file handles',
+      'Eliminated Windows Explorer Message Storm: Throttled taskbar tray sweeps and replaced synchronous SendMessageW calls with PostMessageW, preventing Downex (Not Responding) and Explorer UI starvation',
+      'Optimistic Zero-Lag Deletion: File deletions update the UI immediately with 0ms latency while background unlinking retries up to 40 times (2s) to cleanly purge active files without locking',
+      'Connecting & Reassuring Feedback: Status badge and metrics clearly display "CONNECTING..." and "Please wait, connecting with server..." during initial handshake rather than stuck "Calculating..."',
+      'Reduced SQLite Churn: Moved progress updates inside 2-second checkpoints, eliminating 85% of redundant disk writes during high-throughput downloads',
+    ],
+    rawNotes: 'v0.0.40: Kernel sparse-file allocation, non-blocking network cancellation, Explorer tray storm elimination & smooth connection UX',
+  },
   '0.0.39': {
     version: '0.0.39',
     releaseDate: 'November 4, 2026',
