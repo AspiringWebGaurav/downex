@@ -1192,7 +1192,7 @@ pub fn prewarm_secondary_dialogs<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
             tauri::WebviewUrl::default(),
         )
         .title("Download complete")
-        .inner_size(580.0, 380.0)
+        .inner_size(580.0, 310.0)
         .decorations(false)
         .transparent(false)
         .shadow(true)
@@ -1566,6 +1566,10 @@ pub fn show_download_complete<R: tauri::Runtime>(app: &tauri::AppHandle<R>, payl
         let _ = app.emit("open-download-complete-modal", &valid_payload);
         let _ = window.eval(&eval_script);
 
+        let _ = window.set_size(tauri::Size::Logical(tauri::LogicalSize {
+            width: 580.0,
+            height: 310.0,
+        }));
         let _ = window.unminimize();
         let _ = window.center();
         let _ = window.show();
@@ -1586,7 +1590,7 @@ pub fn show_download_complete<R: tauri::Runtime>(app: &tauri::AppHandle<R>, payl
             tauri::WebviewUrl::default(),
         )
         .title("Download complete")
-        .inner_size(580.0, 380.0)
+        .inner_size(580.0, 310.0)
         .decorations(false)
         .transparent(false)
         .shadow(true)
@@ -2029,4 +2033,38 @@ pub fn cmd_get_extension_info() -> ExtensionInfo {
 #[tauri::command]
 pub fn cmd_open_extension_folder() -> Result<String, String> {
     crate::extension::open_extension_folder()
+}
+
+#[tauri::command]
+pub fn cmd_toggle_task_shutdown(task_id: String, state: State<'_, AppState>) -> Result<bool, String> {
+    Ok(state.queue_manager.toggle_task_shutdown(&task_id))
+}
+
+#[tauri::command]
+pub fn cmd_get_task_shutdown_status(task_id: String, state: State<'_, AppState>) -> Result<bool, String> {
+    Ok(state.queue_manager.is_task_shutdown_armed(&task_id))
+}
+
+#[tauri::command]
+pub fn cmd_set_global_shutdown(enabled: bool, state: State<'_, AppState>) -> Result<bool, String> {
+    Ok(state.queue_manager.set_global_shutdown(enabled))
+}
+
+#[tauri::command]
+pub fn cmd_get_global_shutdown_status(state: State<'_, AppState>) -> Result<bool, String> {
+    Ok(state.queue_manager.is_global_shutdown_armed())
+}
+
+#[tauri::command]
+pub fn cmd_cancel_shutdown_countdown(state: State<'_, AppState>) -> Result<bool, String> {
+    Ok(state.queue_manager.cancel_shutdown_countdown())
+}
+
+#[tauri::command]
+pub fn cmd_trigger_immediate_shutdown(dry_run: Option<bool>, state: State<'_, AppState>) -> Result<(), String> {
+    let dry = dry_run.unwrap_or(false)
+        || cfg!(debug_assertions)
+        || std::env::var("DOWNEX_DRY_RUN_SHUTDOWN").is_ok()
+        || std::env::var("CI").is_ok();
+    state.queue_manager.trigger_immediate_shutdown(dry)
 }

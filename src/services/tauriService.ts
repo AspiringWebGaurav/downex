@@ -1288,3 +1288,155 @@ export async function openExtensionFolder(): Promise<string> {
   }
   return await invoke<string>('cmd_open_extension_folder');
 }
+
+// -----------------------------------------------------------------------------
+// Auto-Shutdown Services & Countdown Event Listeners
+// -----------------------------------------------------------------------------
+
+export interface ShutdownCountdownPayload {
+  seconds_left: number;
+  task_id?: string;
+  filename?: string;
+  total_bytes?: number;
+}
+
+export async function toggleTaskShutdown(taskId: string): Promise<boolean> {
+  if (!isTauri) {
+    const raw = sessionStorage.getItem('downex_mock_shutdown_tasks') || '{}';
+    const map = JSON.parse(raw);
+    map[taskId] = !map[taskId];
+    sessionStorage.setItem('downex_mock_shutdown_tasks', JSON.stringify(map));
+    return Boolean(map[taskId]);
+  }
+  return await invoke<boolean>('cmd_toggle_task_shutdown', { taskId });
+}
+
+export async function getTaskShutdownStatus(taskId: string): Promise<boolean> {
+  if (!isTauri) {
+    const raw = sessionStorage.getItem('downex_mock_shutdown_tasks') || '{}';
+    const map = JSON.parse(raw);
+    return Boolean(map[taskId]);
+  }
+  return await invoke<boolean>('cmd_get_task_shutdown_status', { taskId });
+}
+
+export async function setGlobalShutdown(enabled: boolean): Promise<boolean> {
+  if (!isTauri) {
+    sessionStorage.setItem('downex_mock_global_shutdown', String(enabled));
+    return enabled;
+  }
+  return await invoke<boolean>('cmd_set_global_shutdown', { enabled });
+}
+
+export async function getGlobalShutdownStatus(): Promise<boolean> {
+  if (!isTauri) {
+    return sessionStorage.getItem('downex_mock_global_shutdown') === 'true';
+  }
+  return await invoke<boolean>('cmd_get_global_shutdown_status');
+}
+
+export async function cancelShutdownCountdown(): Promise<boolean> {
+  if (!isTauri) {
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('downex-shutdown-cancelled'));
+    }
+    return true;
+  }
+  return await invoke<boolean>('cmd_cancel_shutdown_countdown');
+}
+
+export async function triggerImmediateShutdown(dryRun?: boolean): Promise<void> {
+  if (!isTauri) {
+    console.log('[Downex Mock] Immediate shutdown triggered (Dry Run).');
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('downex-shutdown-cancelled'));
+    }
+    return;
+  }
+  return await invoke<void>('cmd_trigger_immediate_shutdown', { dryRun });
+}
+
+export function onShutdownCountdown(callback: (payload: ShutdownCountdownPayload) => void): () => void {
+  if (!isTauri) {
+    const handler = (e: Event) => {
+      const custom = e as CustomEvent<ShutdownCountdownPayload>;
+      if (custom.detail) callback(custom.detail);
+    };
+    if (typeof window !== 'undefined') {
+      window.addEventListener('downex-shutdown-tick', handler);
+    }
+    return () => {
+      if (typeof window !== 'undefined') {
+        window.removeEventListener('downex-shutdown-tick', handler);
+      }
+    };
+  }
+
+  let isCancelled = false;
+  let unlistenFn: (() => void) | null = null;
+
+  listen<ShutdownCountdownPayload>('downex://shutdown-tick', (e) => {
+    if (!isCancelled && e.payload) {
+      callback(e.payload);
+    }
+  })
+    .then((fn) => {
+      if (isCancelled) {
+        fn();
+      } else {
+        unlistenFn = fn;
+      }
+    })
+    .catch((err) => {
+      console.error('[Downex] Error listening to downex://shutdown-tick:', err);
+    });
+
+  return () => {
+    isCancelled = true;
+    if (unlistenFn) {
+      unlistenFn();
+      unlistenFn = null;
+    }
+  };
+}
+
+export function onShutdownCancelled(callback: () => void): () => void {
+  if (!isTauri) {
+    const handler = () => callback();
+    if (typeof window !== 'undefined') {
+      window.addEventListener('downex-shutdown-cancelled', handler);
+    }
+    return () => {
+      if (typeof window !== 'undefined') {
+        window.removeEventListener('downex-shutdown-cancelled', handler);
+      }
+    };
+  }
+
+  let isCancelled = false;
+  let unlistenFn: (() => void) | null = null;
+
+  listen('downex://shutdown-cancelled', () => {
+    if (!isCancelled) {
+      callback();
+    }
+  })
+    .then((fn) => {
+      if (isCancelled) {
+        fn();
+      } else {
+        unlistenFn = fn;
+      }
+    })
+    .catch((err) => {
+      console.error('[Downex] Error listening to downex://shutdown-cancelled:', err);
+    });
+
+  return () => {
+    isCancelled = true;
+    if (unlistenFn) {
+      unlistenFn();
+      unlistenFn = null;
+    }
+  };
+}

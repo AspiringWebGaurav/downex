@@ -14,6 +14,7 @@ import { UpdateNotification } from './components/UpdateNotification';
 import { DevUpdateSimulator } from './components/DevUpdateSimulator';
 import { PatchNotesModal } from './components/PatchNotesModal';
 import { QueueGuideModal } from './components/Modals/QueueGuideModal';
+import { ShutdownCountdownModal } from './components/Modals/ShutdownCountdownModal';
 import { SettingsView } from './components/SettingsView';
 import { TelemetryView } from './components/TelemetryView';
 import { SpeedtestView } from './components/SpeedtestView';
@@ -236,6 +237,7 @@ export const App: React.FC = () => {
       <UpdateNotification />
       <PatchNotesModal />
       <QueueGuideModal />
+      <ShutdownCountdownModal />
       <DevUpdateSimulator />
     </div>
   );

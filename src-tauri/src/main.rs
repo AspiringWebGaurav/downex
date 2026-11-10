@@ -174,10 +174,10 @@ fn main() {
                 || ping_resp.to_lowercase().contains("target\\debug")
                 || ping_resp.to_lowercase().contains("target/debug");
 
-            let is_version_outdated = !ping_resp.contains("\"version\":\"0.0.39\"")
+            let is_version_outdated = !ping_resp.contains(&format!("\"version\":\"{}\"", env!("CARGO_PKG_VERSION")))
                 && (ping_resp.contains("\"version\":\"0.0.") || ping_resp.contains("\"version\":"));
 
-            if (!is_current_dev && is_running_dev) || is_version_outdated {
+            if is_current_dev || (!is_current_dev && is_running_dev) || is_version_outdated {
                 // If an orphaned dev instance or an outdated background instance is running,
                 // terminate it cleanly so this latest binary can take over and run authoritative!
                 if let Ok(mut stop_stream) = std::net::TcpStream::connect_timeout(

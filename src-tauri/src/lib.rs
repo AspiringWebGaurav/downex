@@ -399,6 +399,12 @@ pub fn run() {
             cmd_notify_downloads_completed,
             cmd_get_extension_info,
             cmd_open_extension_folder,
+            cmd_toggle_task_shutdown,
+            cmd_get_task_shutdown_status,
+            cmd_set_global_shutdown,
+            cmd_get_global_shutdown_status,
+            cmd_cancel_shutdown_countdown,
+            cmd_trigger_immediate_shutdown,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Downex application");

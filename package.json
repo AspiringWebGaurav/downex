@@ -6,8 +6,10 @@
   "description": "Downex - Independent High-Performance Windows Download Manager",
   "type": "module",
   "scripts": {
+    "predev": "node scripts/predev.mjs",
     "dev": "node scripts/dev.mjs",
     "kill:dev": "node scripts/predev.mjs",
+    "test:lifecycle": "node scripts/test-dev-lifecycle.mjs",
     "dev:frontend": "vite",
     "build": "tauri build",
     "build:frontend": "tsc && vite build",

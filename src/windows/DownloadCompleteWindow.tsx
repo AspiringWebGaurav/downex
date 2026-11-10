@@ -227,10 +227,12 @@ export const DownloadCompleteWindow: React.FC = () => {
   const displayPath = payload?.destination_path || '';
 
   const CompleteCard = (
-    <div className={`w-full flex-1 flex flex-col bg-white dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 font-sans select-none overflow-hidden transition-shadow ${
+    <div
+      data-testid="download-complete-card"
+      className={`w-full flex-1 flex flex-col bg-white dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 font-sans select-none overflow-hidden transition-shadow ${
       isTauri 
         ? 'h-full' 
-        : 'w-[580px] h-[380px] max-w-full border border-zinc-300/80 dark:border-zinc-800 shadow-2xl rounded-xl'
+        : 'w-[580px] h-[310px] max-w-full border border-zinc-300/80 dark:border-zinc-800 shadow-2xl rounded-xl'
     }`}>
       {/* Titlebar (Draggable with standard window buttons, dims slightly when blurred) */}
       <div
@@ -273,23 +275,23 @@ export const DownloadCompleteWindow: React.FC = () => {
         </div>
       </div>
 
-      {/* Main Body - Strictly One View without Vertical Scroll & ZERO BLANK STATE */}
-      <div className="flex-1 p-4.5 flex flex-col justify-between overflow-hidden gap-3 text-xs">
+      {/* Main Body - Balanced Desktop Flow with Natural Vertical Rhythm */}
+      <div className="flex-1 p-4 flex flex-col gap-3.5 overflow-hidden text-xs">
         {/* Top Header Tribute: Folder Check Icon + Filename + Complete Badge */}
         <div className="flex items-start gap-3.5">
-          <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center text-white shrink-0 shadow-md relative group">
-            <FolderCheck className="w-6 h-6 stroke-[2]" />
-            <span className="absolute -bottom-1 -right-1 w-4 h-4 rounded-full bg-emerald-400 border-2 border-white dark:border-zinc-950 flex items-center justify-center">
-              <FileCheck className="w-2.5 h-2.5 text-emerald-950 stroke-[3]" />
+          <div className="w-11 h-11 rounded-xl bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center text-white shrink-0 shadow-sm relative group">
+            <FolderCheck className="w-5 h-5 stroke-[2]" />
+            <span className="absolute -bottom-1 -right-1 w-3.5 h-3.5 rounded-full bg-emerald-400 border-2 border-white dark:border-zinc-950 flex items-center justify-center">
+              <FileCheck className="w-2 h-2 text-emerald-950 stroke-[3]" />
             </span>
           </div>
 
           <div className="min-w-0 flex-1 space-y-1">
-            <div className="flex items-center justify-between gap-3">
+            <div className="flex items-center justify-between gap-2">
               <h2 className="font-bold text-sm tracking-tight text-zinc-900 dark:text-zinc-100 truncate" title={displayFilename}>
                 {displayFilename}
               </h2>
-              <span className="text-[10px] font-mono px-2.5 py-0.5 rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 font-semibold border border-emerald-500/20 shrink-0">
+              <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 font-semibold border border-emerald-500/20 shrink-0">
                 100% Complete
               </span>
             </div>
@@ -317,7 +319,7 @@ export const DownloadCompleteWindow: React.FC = () => {
               </button>
             ) : null}
           </div>
-          <div className="w-full text-xs font-mono bg-zinc-50 dark:bg-zinc-900/90 border border-zinc-200 dark:border-zinc-800 rounded-lg px-3 py-2 flex items-center overflow-hidden">
+          <div className="w-full text-xs font-mono bg-zinc-50 dark:bg-zinc-900/90 border border-zinc-200 dark:border-zinc-800 rounded-lg px-2.5 py-1.5 flex items-center overflow-hidden">
             <AutoScrollText
               text={displayUrl}
               className="text-xs font-mono text-zinc-800 dark:text-zinc-200"
@@ -342,7 +344,7 @@ export const DownloadCompleteWindow: React.FC = () => {
               </button>
             ) : null}
           </div>
-          <div className="w-full text-xs font-mono bg-zinc-50 dark:bg-zinc-900/90 border border-zinc-200 dark:border-zinc-800 rounded-lg px-3 py-2 flex items-center overflow-hidden">
+          <div className="w-full text-xs font-mono bg-zinc-50 dark:bg-zinc-900/90 border border-zinc-200 dark:border-zinc-800 rounded-lg px-2.5 py-1.5 flex items-center overflow-hidden">
             <AutoScrollText
               text={displayPath}
               className="text-xs font-mono text-zinc-800 dark:text-zinc-200"
@@ -352,7 +354,7 @@ export const DownloadCompleteWindow: React.FC = () => {
         </div>
 
         {/* Action Buttons Row (Open, Open with..., Open folder, Close) */}
-        <div className="grid grid-cols-4 gap-2 pt-0.5">
+        <div className="grid grid-cols-4 gap-2 pt-1">
           <Button
             variant="primary-emerald"
             size="md"
@@ -475,7 +477,7 @@ export const DownloadCompleteWindow: React.FC = () => {
       </div>
 
       <div className="w-[580px] max-w-full mt-2.5 px-2 flex items-center justify-between text-[11px] text-zinc-500 font-mono">
-        <span>Native Dialog Size: 580 × 380 px</span>
+        <span>Native Dialog Size: 580 × 310 px</span>
         <span>One-View Mode (No Vertical Scroll)</span>
       </div>
     </div>

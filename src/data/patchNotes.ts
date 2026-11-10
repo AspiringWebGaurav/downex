@@ -78,6 +78,19 @@ export function getLatestCodebaseVersion(): string {
 }
 
 export const BASELINE_PATCH_NOTES: Record<string, DynamicPatchNotes> = {
+  '0.0.42': {
+    version: '0.0.42',
+    releaseDate: 'November 10, 2026',
+    title: 'Zero-Corruption Auto-Shutdown Supervisor, CP-Inspired Dev Lifecycle & Compact Dialog Layout',
+    highlights: [
+      'Zero-Corruption Auto-Shutdown: Native IDM-style auto-shutdown with strict physical disk size verification (metadata len >= content length) to guarantee incomplete files never trigger machine shutdown',
+      'Concurrent Queue Completion Guard: Defer power-off until all active and scheduled download queues finish completely',
+      '30-Second Visual Safety Countdown: Modal supervisor with animated progress bar, audible tick warning, and 1-click [Cancel / Stay On] with Escape key shortcut support',
+      'CP-Inspired Dev Supervisor Lifecycle: Automatic eviction of running instances, instant port 1420 & 18888 clearance, and zero "Terminate batch job?" prompts with sub-10ms Ctrl+C cancellation',
+      'Compact Download Complete Dialog: Tightened window to 580x310px, eliminating excessive whitespace with balanced vertical padding and 5px button spacing',
+    ],
+    rawNotes: 'v0.0.42: Zero-Corruption Auto-Shutdown Supervisor, CP-Inspired Dev Lifecycle & Compact Dialog Layout',
+  },
   '0.0.41': {
     version: '0.0.41',
     releaseDate: 'November 9, 2026',

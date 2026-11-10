@@ -1,10 +1,11 @@
 use crate::db::{DatabaseManager, DownloadRecord};
 use crate::engine::{probe_url, DownloadEnginePool, DownloadProgressEvent};
 use parking_lot::RwLock;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use tauri::Emitter;
 use tokio::sync::{mpsc, Semaphore};
 use tokio_util::sync::CancellationToken;
 
@@ -19,6 +20,9 @@ pub struct QueueManager {
     progress_tx: mpsc::Sender<DownloadProgressEvent>,
     queue_running: Arc<AtomicBool>,
     app_handle: Arc<RwLock<Option<tauri::AppHandle>>>,
+    armed_shutdown_tasks: Arc<RwLock<HashSet<String>>>,
+    global_shutdown_armed: Arc<AtomicBool>,
+    active_shutdown_cancel: Arc<RwLock<Option<CancellationToken>>>,
 }
 
 impl QueueManager {
@@ -41,6 +45,9 @@ impl QueueManager {
             progress_tx,
             queue_running: Arc::new(AtomicBool::new(false)),
             app_handle: Arc::new(RwLock::new(None)),
+            armed_shutdown_tasks: Arc::new(RwLock::new(HashSet::new())),
+            global_shutdown_armed: Arc::new(AtomicBool::new(false)),
+            active_shutdown_cancel: Arc::new(RwLock::new(None)),
         }
     }
 
@@ -325,6 +332,9 @@ impl QueueManager {
                 .unwrap_or(32); // Max throughput saturation for 200Mbps+ plans
 
             let supports_ranges = record.supports_ranges && record.total_bytes.is_some();
+            let dest_path_clone = record.destination_path.clone();
+            let filename_clone = record.filename.clone();
+            let total_bytes_clone = record.total_bytes;
 
             let res = pool
                 .execute_download(
@@ -341,7 +351,8 @@ impl QueueManager {
                 )
                 .await;
 
-            if let Err(e) = res {
+            let is_success = res.is_ok();
+            if let Err(ref e) = res {
                 eprintln!("[Downex Queue] Download failed: {}", e);
                 let _ = db.update_download_status(&task_id, "failed", 0, Some(&e.to_string()));
             }
@@ -356,6 +367,15 @@ impl QueueManager {
                 let qm = qm_clone.clone();
                 tauri::async_runtime::spawn(async move {
                     qm.process_next_in_queue().await;
+                });
+            }
+
+            // Zero-Corruption Auto-Shutdown Evaluation (runs only after physical file flush)
+            if is_success {
+                let qm = qm_clone.clone();
+                let t_id = task_id.clone();
+                tauri::async_runtime::spawn(async move {
+                    qm.check_and_trigger_shutdown_if_armed(&t_id, &dest_path_clone, &filename_clone, total_bytes_clone).await;
                 });
             }
         });
@@ -533,6 +553,190 @@ impl QueueManager {
 
         eprintln!("[Downex Settings] Default download directory updated to: {}", canonical_str);
         Ok(canonical_str)
+    }
+
+    pub fn toggle_task_shutdown(&self, task_id: &str) -> bool {
+        let mut set = self.armed_shutdown_tasks.write();
+        if set.contains(task_id) {
+            set.remove(task_id);
+            false
+        } else {
+            set.insert(task_id.to_string());
+            true
+        }
+    }
+
+    pub fn is_task_shutdown_armed(&self, task_id: &str) -> bool {
+        self.armed_shutdown_tasks.read().contains(task_id)
+    }
+
+    pub fn set_global_shutdown(&self, enabled: bool) -> bool {
+        self.global_shutdown_armed.store(enabled, Ordering::SeqCst);
+        enabled
+    }
+
+    pub fn is_global_shutdown_armed(&self) -> bool {
+        self.global_shutdown_armed.load(Ordering::SeqCst)
+    }
+
+    pub fn cancel_shutdown_countdown(&self) -> bool {
+        let mut guard = self.active_shutdown_cancel.write();
+        if let Some(token) = guard.take() {
+            token.cancel();
+            if let Some(app) = self.get_app_handle() {
+                let _ = app.emit("downex://shutdown-cancelled", serde_json::json!({ "reason": "user_cancelled" }));
+            }
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn trigger_immediate_shutdown(&self, dry_run: bool) -> Result<(), String> {
+        self.cancel_shutdown_countdown();
+        self.execute_os_shutdown(dry_run);
+        Ok(())
+    }
+
+    pub async fn check_and_trigger_shutdown_if_armed(
+        &self,
+        task_id: &str,
+        destination_path: &str,
+        filename: &str,
+        total_bytes: Option<u64>,
+    ) {
+        let is_task_armed = self.is_task_shutdown_armed(task_id);
+        let is_global_armed = self.is_global_shutdown_armed();
+
+        if !is_task_armed && !is_global_armed {
+            return;
+        }
+
+        // 1. Zero-Corruption Physical Disk Integrity Check:
+        // Ensure physical file on disk exists and matches expected length!
+        if let Some(expected) = total_bytes {
+            if expected > 0 {
+                match std::fs::metadata(destination_path) {
+                    Ok(meta) => {
+                        if meta.len() < expected {
+                            eprintln!(
+                                "[Downex Shutdown] ABORTING: Physical file size ({} bytes) is less than expected ({} bytes). File may still be uncommitted or corrupt!",
+                                meta.len(), expected
+                            );
+                            return;
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("[Downex Shutdown] ABORTING: Cannot read file metadata at {}: {}", destination_path, e);
+                        return;
+                    }
+                }
+            }
+        }
+
+        // 2. Multi-Download Protection:
+        // If there are other active downloads, do not shut down yet!
+        if self.has_active_downloads() {
+            eprintln!("[Downex Shutdown] Other downloads are still running. Postponing shutdown until all active downloads complete.");
+            return;
+        }
+
+        // 3. Initiate the 30-Second Safety Countdown
+        self.spawn_shutdown_countdown(30, task_id.to_string(), filename.to_string(), total_bytes).await;
+    }
+
+    pub async fn spawn_shutdown_countdown(
+        &self,
+        duration_secs: u32,
+        triggering_task_id: String,
+        filename: String,
+        total_bytes: Option<u64>,
+    ) {
+        let cancel_token = CancellationToken::new();
+        {
+            let mut guard = self.active_shutdown_cancel.write();
+            if let Some(old) = guard.take() {
+                old.cancel();
+            }
+            *guard = Some(cancel_token.clone());
+        }
+
+        let app_opt = self.get_app_handle();
+        let qm_clone = self.clone();
+
+        tauri::async_runtime::spawn(async move {
+            let mut remaining = duration_secs;
+            eprintln!("[Downex Shutdown] Safety countdown started: {} seconds remaining...", remaining);
+
+            while remaining > 0 {
+                if cancel_token.is_cancelled() {
+                    eprintln!("[Downex Shutdown] Safety countdown cancelled by user.");
+                    if let Some(ref app) = app_opt {
+                        let _ = app.emit("downex://shutdown-cancelled", serde_json::json!({
+                            "reason": "user_cancelled"
+                        }));
+                    }
+                    return;
+                }
+
+                if let Some(ref app) = app_opt {
+                    let _ = app.emit("downex://shutdown-tick", serde_json::json!({
+                        "seconds_left": remaining,
+                        "task_id": triggering_task_id,
+                        "filename": filename,
+                        "total_bytes": total_bytes,
+                    }));
+                }
+
+                tokio::select! {
+                    _ = cancel_token.cancelled() => {
+                        eprintln!("[Downex Shutdown] Safety countdown cancelled during sleep.");
+                        if let Some(ref app) = app_opt {
+                            let _ = app.emit("downex://shutdown-cancelled", serde_json::json!({
+                                "reason": "user_cancelled"
+                            }));
+                        }
+                        return;
+                    }
+                    _ = tokio::time::sleep(std::time::Duration::from_secs(1)) => {
+                        remaining -= 1;
+                    }
+                }
+            }
+
+            if cancel_token.is_cancelled() {
+                return;
+            }
+
+            eprintln!("[Downex Shutdown] Safety countdown reached 0. Initiating clean Windows shutdown...");
+            if let Some(ref app) = app_opt {
+                let _ = app.emit("downex://shutdown-executing", serde_json::json!({
+                    "task_id": triggering_task_id,
+                    "filename": filename,
+                }));
+            }
+
+            // SAFETY GUARD: Check if running in test / dry-run mode
+            let is_dry_run = cfg!(debug_assertions)
+                || std::env::var("DOWNEX_DRY_RUN_SHUTDOWN").is_ok()
+                || std::env::var("CI").is_ok();
+
+            qm_clone.execute_os_shutdown(is_dry_run);
+        });
+    }
+
+    pub fn execute_os_shutdown(&self, dry_run: bool) {
+        if dry_run {
+            eprintln!("[Downex Shutdown] DRY RUN ACTIVE: Simulated Windows shutdown (shutdown.exe /s /t 0). System remains running.");
+            return;
+        }
+
+        #[cfg(target_os = "windows")]
+        {
+            let _ = std::process::Command::new("shutdown")
+                .args(["/s", "/t", "0", "/c", "Downex: Download completed clean shutdown"])
+                .spawn();
+        }
     }
 }
 
