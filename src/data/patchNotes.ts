@@ -78,18 +78,29 @@ export function getLatestCodebaseVersion(): string {
 }
 
 export const BASELINE_PATCH_NOTES: Record<string, DynamicPatchNotes> = {
+  '0.0.44': {
+    version: '0.0.44',
+    releaseDate: 'November 16, 2026',
+    title: 'Dynamic Stream-Safe Delete Button, Interactive Guidance Micro-Feedback & IDM Integrity',
+    highlights: [
+      'Dynamic Stream-Safe Delete Lock: Dynamically locks deletion while transfers are actively streaming chunks to prevent disk/socket race conditions and partial file corruption',
+      'Interactive Guidance Micro-Feedback: Clicking Delete during download triggers an animated "Pause first to delete" hint and pulses the Pause button to guide user action',
+      'Zero-Latency Reactivation: Pausing immediately unlocks the vibrant Delete button in 0ms, opening the full IDM deletion confirmation modal',
+      'Unified Completion Actions: Completed downloads now feature the polished uniform [Delete] button for instant list cleanup or disk wiping',
+    ],
+    rawNotes: 'v0.0.44: Dynamic Stream-Safe Delete Button, Interactive Guidance Micro-Feedback & IDM Integrity',
+  },
   '0.0.43': {
     version: '0.0.43',
     releaseDate: 'November 12, 2026',
-    title: 'Unconfirmed Staging Lifecycle (.downex), Atomic Promotion Fallbacks, Dynamic Delete Safety & Polished Complete Dialog',
+    title: 'Unconfirmed Staging Lifecycle (.downex), Atomic Promotion Fallbacks & Polished Complete Dialog',
     highlights: [
       'Unconfirmed Staging Lifecycle: Active, paused, and queued downloads stage safely as unconfirmed.{name}.downex on disk until 100% verified, preventing premature playback or file corruption',
       'Multi-Tier Atomic Promotion: Closes all OS file handles and verifies exact byte length before promoting back to original filename via Win32 MoveFileExW lock retry, fs::rename, and copy-sync fallback',
-      'Dynamic Delete Stream Safety: Dynamically locks deletion during active streaming to prevent race conditions; features an intuitive "Pause first to delete" guidance hint and instant reactivation on pause or complete',
       'Open Guardrails & Crash-Safe Resume: Blocks opening unconfirmed/incomplete downloads, preserves staging_path in SQLite v6 across pauses and restarts, and resets cleanly if staging files are deleted externally',
       'Polished Download Complete Modal: Tightened native window to 580x249px with symmetric 16px padding, unified Address & Saved to details card, and smart middle-truncation preventing clipped text',
     ],
-    rawNotes: 'v0.0.43: Unconfirmed Staging Lifecycle (.downex), Atomic Promotion Fallbacks, Dynamic Delete Safety & Polished Complete Dialog',
+    rawNotes: 'v0.0.43: Unconfirmed Staging Lifecycle (.downex), Atomic Promotion Fallbacks & Polished Complete Dialog',
   },
   '0.0.42': {
     version: '0.0.42',
