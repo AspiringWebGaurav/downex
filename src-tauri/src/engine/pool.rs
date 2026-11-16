@@ -1,9 +1,14 @@
+use super::staging::{
+    prepare_staging_for_download, promote_unconfirmed_to_final, resolve_unconfirmed_staging_path,
+    verify_staged_file_integrity, StagingClaimGuard, TargetClaimGuard,
+};
 use super::state::{DownloadProgressEvent, SegmentSnapshot};
 use super::writer::PositionalWriter;
 use crate::db::{DatabaseManager, SegmentRecord};
 use futures_util::StreamExt;
 use reqwest::header::{HeaderMap, HeaderValue, RANGE};
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -97,6 +102,7 @@ impl DownloadEnginePool {
         task_id: String,
         url: String,
         destination_path: String,
+        staging_path: String,
         total_bytes: Option<u64>,
         supports_ranges: bool,
         custom_headers: Option<HashMap<String, String>>,
@@ -105,12 +111,41 @@ impl DownloadEnginePool {
         progress_tx: mpsc::Sender<DownloadProgressEvent>,
         cancel_token: CancellationToken,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let target_path_buf = PathBuf::from(&destination_path);
+        let staging_path_buf = if staging_path.trim().is_empty() {
+            let resolved = resolve_unconfirmed_staging_path(&target_path_buf, Some(&task_id), None);
+            let _ = self
+                .db
+                .update_download_staging_path(&task_id, Some(&resolved.to_string_lossy()));
+            resolved
+        } else {
+            PathBuf::from(&staging_path)
+        };
+
+        // Hold RAII claims for both final target and unconfirmed staging path for the duration of execution
+        let _target_claim = TargetClaimGuard::new(target_path_buf.clone());
+        let _staging_claim = StagingClaimGuard::new(staging_path_buf.clone());
+
         // Check if existing segment records exist in DB for resume
         let existing_segments = self.db.get_segments(&task_id).unwrap_or_default();
-        let is_resume = !existing_segments.is_empty();
-        let dest_clone = destination_path.clone();
+        let requested_resume = !existing_segments.is_empty();
+
+        let staging_prep_src = staging_path_buf.clone();
+        let target_prep_src = target_path_buf.clone();
+        let effective_is_resume = tauri::async_runtime::spawn_blocking(move || {
+            prepare_staging_for_download(&staging_prep_src, &target_prep_src, requested_resume)
+        })
+        .await
+        .unwrap_or(false);
+
+        if requested_resume && !effective_is_resume {
+            let _ = self.db.update_download_progress(&task_id, 0, 0);
+        }
+
+        let writer_path = staging_path_buf.clone();
+        let writer_resume = effective_is_resume && supports_ranges;
         let writer_res = tauri::async_runtime::spawn_blocking(move || {
-            PositionalWriter::new(&dest_clone, total_bytes, is_resume)
+            PositionalWriter::new(&writer_path, total_bytes, writer_resume)
         })
         .await
         .map_err(|e| Box::new(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())) as Box<dyn std::error::Error + Send + Sync>)?
@@ -119,7 +154,7 @@ impl DownloadEnginePool {
 
         let segments: Arc<RwLock<Vec<ActiveSegment>>>;
 
-        if !existing_segments.is_empty() && supports_ranges {
+        if effective_is_resume && !existing_segments.is_empty() && supports_ranges {
             // Restore from DB
             let mut list = Vec::new();
             for s in existing_segments {
@@ -337,9 +372,18 @@ impl DownloadEnginePool {
             }
         });
 
+        // Fast-path: if resuming an already-complete staging file (e.g. retrying final rename after lock), skip network workers
+        let already_complete = {
+            let segs = segments.read().await;
+            effective_is_resume && total_bytes.is_some() && Self::evaluate_progress(&segs, total_bytes).1
+        };
+
         // Fixed-size parallel worker pool: capped strictly to user's max_connections (up to 32)
         let initial_seg_count = segments.read().await.len();
-        let worker_count = if supports_ranges && (total_bytes.is_some() || is_resume) {
+        let worker_count = if already_complete {
+            completion_token.cancel();
+            0
+        } else if supports_ranges && (total_bytes.is_some() || effective_is_resume) {
             max_connections.clamp(1, 32) as usize
         } else {
             1
@@ -444,16 +488,18 @@ impl DownloadEnginePool {
         }
 
         // Complete Verification Phase (REA / IDM Specification)
-        let segs = segments.read().await;
-        let (verified_downloaded, is_done) = Self::evaluate_progress(&segs, total_bytes);
+        let (verified_downloaded, is_done) = {
+            let segs = segments.read().await;
+            Self::evaluate_progress(&segs, total_bytes)
+        };
 
         if !is_done && total_bytes.is_some() {
             let expected = total_bytes.unwrap();
             let remaining = expected.saturating_sub(verified_downloaded);
             if remaining > 4096 {
                 eprintln!(
-                    "[Downex Completion] Incomplete download detected: {} / {} bytes. Marking paused for resume.",
-                    verified_downloaded, expected
+                    "[Downex Completion] Incomplete download detected: {} / {} bytes. Preserving '{}' and marking paused for resume.",
+                    verified_downloaded, expected, staging_path_buf.display()
                 );
                 let _ = self.db.update_download_status(&task_id, "paused", 0, None);
                 let _ = progress_tx.send(DownloadProgressEvent {
@@ -464,7 +510,7 @@ impl DownloadEnginePool {
                     speed_bytes_sec: 0,
                     eta_seconds: None,
                     segments: Vec::new(),
-                supports_ranges: None,
+                    supports_ranges: None,
                 }).await;
                 return Err("Download interrupted before receiving all expected bytes".into());
             }
@@ -476,6 +522,42 @@ impl DownloadEnginePool {
             let _ = writer.set_len(final_size);
         }
         writer.sync()?;
+
+        // CRITICAL: Close all open Windows file handles to `unconfirmed.*.downex` BEFORE verification and promotion
+        drop(writer);
+
+        // Verify staging file integrity and atomically promote `unconfirmed.{og_name}.downex` -> `{og_name}`
+        let promote_staging = staging_path_buf.clone();
+        let promote_target = target_path_buf.clone();
+        let finalized_path = tauri::async_runtime::spawn_blocking(move || -> Result<PathBuf, String> {
+            let verified_len = verify_staged_file_integrity(
+                &promote_staging,
+                total_bytes,
+                verified_downloaded,
+            )?;
+            let promote_expected = if final_size > 0 { final_size } else { verified_len };
+            promote_unconfirmed_to_final(&promote_staging, &promote_target, promote_expected)
+        })
+        .await
+        .map_err(|e| Box::new(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())) as Box<dyn std::error::Error + Send + Sync>)?
+        .map_err(|e| Box::new(std::io::Error::new(std::io::ErrorKind::Other, e)) as Box<dyn std::error::Error + Send + Sync>)?;
+
+        let finalized_str = finalized_path.to_string_lossy().to_string();
+        let finalized_name = finalized_path
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| {
+                Path::new(&destination_path)
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_else(|| "download".to_string())
+            });
+
+        // Clear staging_path and commit finalized path BEFORE emitting completed status/dialog
+        let _ = self
+            .db
+            .update_download_finalized_target(&task_id, &finalized_str, &finalized_name);
 
         // Mark completed in database and publish terminal completed event
         let _ = self.db.update_download_progress(&task_id, final_size, 0);
@@ -493,8 +575,8 @@ impl DownloadEnginePool {
         }).await;
 
         eprintln!(
-            "[Downex Completion] Successfully finalized download '{}': {} bytes verified on disk.",
-            task_id, final_size
+            "[Downex Completion] Successfully finalized '{}' -> '{}': {} bytes verified on disk.",
+            staging_path_buf.display(), finalized_str, final_size
         );
 
         Ok(())
@@ -951,5 +1033,339 @@ impl DownloadEnginePool {
             });
         }
         let _ = self.db.save_segments(task_id, &records);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::commands::ensure_file_ready_to_open;
+    use crate::db::DownloadRecord;
+    use crate::engine::staging::{derive_primary_unconfirmed_path, robust_delete_path};
+    use std::fs;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+    use uuid::Uuid;
+
+    async fn spawn_test_http_server(
+        payload: Arc<Vec<u8>>,
+        force_200: bool,
+        drip_delay_ms: u64,
+    ) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tauri::async_runtime::spawn(async move {
+            loop {
+                let Ok((mut socket, _)) = listener.accept().await else {
+                    break;
+                };
+                let data = payload.clone();
+                tauri::async_runtime::spawn(async move {
+                    let mut req_buf = [0u8; 4096];
+                    let n = match socket.read(&mut req_buf).await {
+                        Ok(n) if n > 0 => n,
+                        _ => return,
+                    };
+                    let req_str = String::from_utf8_lossy(&req_buf[..n]);
+                    let mut range: Option<(usize, usize)> = None;
+                    if !force_200 {
+                        for line in req_str.lines() {
+                            if let Some(rest) = line.strip_prefix("Range: bytes=").or_else(|| line.strip_prefix("range: bytes=")) {
+                                if let Some((s, e)) = rest.trim().split_once('-') {
+                                    if let (Ok(start), Ok(end)) = (s.parse::<usize>(), e.parse::<usize>()) {
+                                        if start <= end && end < data.len() {
+                                            range = Some((start, end));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    let (status_line, slice, range_hdr) = if let Some((start, end)) = range {
+                        (
+                            "HTTP/1.1 206 Partial Content",
+                            &data[start..=end],
+                            format!("Content-Range: bytes {}-{}/{}\r\n", start, end, data.len()),
+                        )
+                    } else {
+                        ("HTTP/1.1 200 OK", &data[..], String::new())
+                    };
+
+                    let headers = format!(
+                        "{}\r\nContent-Length: {}\r\nAccept-Ranges: bytes\r\n{}Connection: close\r\n\r\n",
+                        status_line,
+                        slice.len(),
+                        range_hdr
+                    );
+                    if socket.write_all(headers.as_bytes()).await.is_err() {
+                        return;
+                    }
+
+                    if drip_delay_ms == 0 {
+                        let _ = socket.write_all(slice).await;
+                    } else {
+                        for chunk in slice.chunks(4096) {
+                            if socket.write_all(chunk).await.is_err() {
+                                return;
+                            }
+                            tokio::time::sleep(Duration::from_millis(drip_delay_ms)).await;
+                        }
+                    }
+                    let _ = socket.shutdown().await;
+                });
+            }
+        });
+        format!("http://{}/test-asset.bin", addr)
+    }
+
+    fn seed_test_record(
+        db: &DatabaseManager,
+        id: &str,
+        url: &str,
+        filename: &str,
+        dest_path: &Path,
+        staging_path: &Path,
+        total_bytes: u64,
+        supports_ranges: bool,
+    ) {
+        let now = chrono::Utc::now().timestamp_millis();
+        db.insert_download(&DownloadRecord {
+            id: id.to_string(),
+            url: url.to_string(),
+            filename: filename.to_string(),
+            destination_path: dest_path.to_string_lossy().to_string(),
+            total_bytes: Some(total_bytes),
+            downloaded_bytes: 0,
+            status: "downloading".to_string(),
+            etag: None,
+            last_modified: None,
+            headers_json: None,
+            queue_id: "default".to_string(),
+            speed_bytes_sec: 0,
+            error_message: None,
+            checksum: None,
+            media_type: None,
+            supports_ranges,
+            created_at: now,
+            updated_at: now,
+            speed_limit_mbps: None,
+            staging_path: Some(staging_path.to_string_lossy().to_string()),
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn test_e2e_unconfirmed_staging_pause_resume_open_guard_and_promotion() {
+        tauri::async_runtime::block_on(async {
+            let root = std::env::temp_dir().join(format!("downex_e2e_staging_{}", Uuid::new_v4()));
+            fs::create_dir_all(&root).unwrap();
+            let db = DatabaseManager::new(root.join("test.db")).unwrap();
+            let client = reqwest::Client::builder().no_proxy().build().unwrap();
+            let pool = DownloadEnginePool::new(client, db.clone());
+
+            // Deterministic 256 KB payload
+            let payload: Vec<u8> = (0..262144u32).map(|i| ((i * 31 + 7) % 251) as u8).collect();
+            let payload_arc = Arc::new(payload.clone());
+            let url = spawn_test_http_server(payload_arc, false, 10).await;
+
+            let final_dst = root.join("Jailer-2.mkv");
+            let staging_dst = derive_primary_unconfirmed_path(&final_dst);
+            assert_eq!(
+                staging_dst.file_name().unwrap().to_string_lossy(),
+                "unconfirmed.Jailer-2.mkv.downex"
+            );
+
+            let task_id = format!("task-{}", Uuid::new_v4());
+            seed_test_record(
+                &db,
+                &task_id,
+                &url,
+                "Jailer-2.mkv",
+                &final_dst,
+                &staging_dst,
+                payload.len() as u64,
+                true,
+            );
+
+            // 1. Start multi-segment download and pause mid-transfer
+            let (tx, _rx) = mpsc::channel(64);
+            let cancel = CancellationToken::new();
+            let cancel_trigger = cancel.clone();
+            let staging_watch = staging_dst.clone();
+            let final_watch = final_dst.clone();
+
+            tauri::async_runtime::spawn(async move {
+                for _ in 0..40 {
+                    if staging_watch.exists() {
+                        assert!(
+                            !final_watch.exists(),
+                            "Final filename MUST NOT exist while downloading!"
+                        );
+                        tokio::time::sleep(Duration::from_millis(25)).await;
+                        cancel_trigger.cancel();
+                        return;
+                    }
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+                cancel_trigger.cancel();
+            });
+
+            let limiter = Arc::new(crate::engine::TaskSpeedLimiter::new(0));
+            pool.execute_download(
+                task_id.clone(),
+                url.clone(),
+                final_dst.to_string_lossy().to_string(),
+                staging_dst.to_string_lossy().to_string(),
+                Some(payload.len() as u64),
+                true,
+                None,
+                4,
+                limiter.clone(),
+                tx,
+                cancel,
+            )
+            .await
+            .unwrap();
+
+            // Verify paused state: unconfirmed file stays on disk, final does NOT, opening is blocked!
+            assert!(staging_dst.exists(), "Paused unconfirmed.*.downex must remain on disk for resume");
+            assert!(!final_dst.exists(), "Original file must NOT appear on disk while paused");
+            assert!(
+                ensure_file_ready_to_open(&staging_dst.to_string_lossy(), &db).is_err(),
+                "Opening unconfirmed.*.downex must be blocked"
+            );
+            assert!(
+                ensure_file_ready_to_open(&final_dst.to_string_lossy(), &db).is_err(),
+                "Opening incomplete destination path must be blocked"
+            );
+
+            // 2. Resume to 100% completion -> must promote unconfirmed.Jailer-2.mkv.downex -> Jailer-2.mkv
+            let (tx2, _rx2) = mpsc::channel(64);
+            let cancel2 = CancellationToken::new();
+            pool.execute_download(
+                task_id.clone(),
+                url,
+                final_dst.to_string_lossy().to_string(),
+                staging_dst.to_string_lossy().to_string(),
+                Some(payload.len() as u64),
+                true,
+                None,
+                4,
+                limiter,
+                tx2,
+                cancel2,
+            )
+            .await
+            .unwrap();
+
+            assert!(final_dst.exists(), "Final original file must exist after completion");
+            assert!(!staging_dst.exists(), "Unconfirmed staging file must be promoted & removed");
+            assert_eq!(fs::read(&final_dst).unwrap(), payload, "Final file must be bit-for-bit identical");
+
+            let rec = db.get_download(&task_id).unwrap().unwrap();
+            assert_eq!(rec.status, "completed");
+            assert!(rec.staging_path.is_none());
+            assert!(
+                ensure_file_ready_to_open(&final_dst.to_string_lossy(), &db).is_ok(),
+                "Completed original file must be openable"
+            );
+
+            robust_delete_path(&root);
+        });
+    }
+
+    #[test]
+    fn test_e2e_deleted_staging_fallback_and_single_stream_promotion() {
+        tauri::async_runtime::block_on(async {
+            let root = std::env::temp_dir().join(format!("downex_e2e_fallback_{}", Uuid::new_v4()));
+            fs::create_dir_all(&root).unwrap();
+            let db = DatabaseManager::new(root.join("test.db")).unwrap();
+            let client = reqwest::Client::builder().no_proxy().build().unwrap();
+            let pool = DownloadEnginePool::new(client, db.clone());
+
+            let payload: Vec<u8> = (0..131072u32).map(|i| ((i * 17 + 3) % 251) as u8).collect();
+            let payload_arc = Arc::new(payload.clone());
+            // Force HTTP 200 OK (non-range single-stream server)
+            let url = spawn_test_http_server(payload_arc, true, 0).await;
+
+            let final_dst = root.join("installer.exe");
+            let staging_dst = derive_primary_unconfirmed_path(&final_dst);
+            let task_id = format!("task-ss-{}", Uuid::new_v4());
+            seed_test_record(
+                &db,
+                &task_id,
+                &url,
+                "installer.exe",
+                &final_dst,
+                &staging_dst,
+                payload.len() as u64,
+                false,
+            );
+
+            // Seed stale DB segments pretending half was downloaded, while staging file does NOT exist on disk
+            db.save_segments(
+                &task_id,
+                &[SegmentRecord {
+                    id: None,
+                    download_id: task_id.clone(),
+                    segment_index: 0,
+                    range_start: 0,
+                    range_end: (payload.len() - 1) as u64,
+                    downloaded: 65536,
+                    status: "paused".to_string(),
+                }],
+            )
+            .unwrap();
+            assert!(!staging_dst.exists());
+
+            // Resume fallback must detect missing unconfirmed file, reset from byte 0, and promote exact payload
+            let (tx, _rx) = mpsc::channel(64);
+            let cancel = CancellationToken::new();
+            let limiter = Arc::new(crate::engine::TaskSpeedLimiter::new(0));
+            pool.execute_download(
+                task_id.clone(),
+                url,
+                final_dst.to_string_lossy().to_string(),
+                staging_dst.to_string_lossy().to_string(),
+                Some(payload.len() as u64),
+                false,
+                None,
+                4,
+                limiter,
+                tx,
+                cancel,
+            )
+            .await
+            .unwrap();
+
+            assert!(final_dst.exists());
+            assert!(!staging_dst.exists());
+            assert_eq!(fs::read(&final_dst).unwrap(), payload);
+
+            // Startup crash reconciliation check: simulate a task left "downloading" on crash -> becomes "paused" keeping staging_path
+            let crash_id = format!("crash-{}", Uuid::new_v4());
+            let crash_final = root.join("crashed.zip");
+            let crash_staging = derive_primary_unconfirmed_path(&crash_final);
+            seed_test_record(
+                &db,
+                &crash_id,
+                "http://127.0.0.1/crashed.zip",
+                "crashed.zip",
+                &crash_final,
+                &crash_staging,
+                1024,
+                true,
+            );
+            db.recover_interrupted_tasks().unwrap();
+            let recovered = db.get_download(&crash_id).unwrap().unwrap();
+            assert_eq!(recovered.status, "paused");
+            assert_eq!(
+                recovered.staging_path.as_deref(),
+                Some(crash_staging.to_string_lossy().as_ref())
+            );
+
+            robust_delete_path(&root);
+        });
     }
 }

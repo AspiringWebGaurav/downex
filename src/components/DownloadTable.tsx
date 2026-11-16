@@ -29,7 +29,7 @@ import { openFolderPicker, openFile, openFileFolder, showDownloadCompleteDialog,
 import { DeleteConfirmModal } from './DeleteConfirmModal';
 import { InlineSpeedLimiter } from './InlineSpeedLimiter';
 import { DownloadItem } from '../types/download';
-import { getResumeCapability, formatTimeTaken } from '../utils/format';
+import { getResumeCapability, formatTimeTaken, getActiveDownloadDiskPath } from '../utils/format';
 
 export const DownloadTable: React.FC = () => {
   const items = useDownloadStore((state) => state.items);
@@ -51,6 +51,20 @@ export const DownloadTable: React.FC = () => {
   const [showAllSegmentsMap, setShowAllSegmentsMap] = useState<Record<string, boolean>>({});
   const [deletingItem, setDeletingItem] = useState<DownloadItem | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [pauseHintTaskId, setPauseHintTaskId] = useState<string | null>(null);
+
+  const handleAttemptDeleteWhileDownloading = (taskId: string) => {
+    setPauseHintTaskId(taskId);
+    setTimeout(() => {
+      setPauseHintTaskId((current) => (current === taskId ? null : current));
+    }, 2800);
+  };
+
+  const handleTogglePause = (id: string) => {
+    setPauseHintTaskId(null);
+    togglePause(id);
+  };
+
   const [shutdownArmedMap, setShutdownArmedMap] = useState<Record<string, boolean>>(() => {
     if (typeof window !== 'undefined') {
       try {
@@ -610,6 +624,7 @@ export const DownloadTable: React.FC = () => {
         }
         const formattedTimeTaken = formatTimeTaken(timeTakenSeconds);
         const resInfo = getResumeCapability(item);
+        const displayedDiskPath = getActiveDownloadDiskPath(item);
 
         // Calculate queue position if in queue or if queues view
         let queueBadgeText = '';
@@ -653,13 +668,17 @@ export const DownloadTable: React.FC = () => {
                   <div className="flex items-center gap-1.5 mt-1 max-w-full">
                     <button
                       type="button"
-                      onClick={() => openFileFolder(item.destination_path)}
+                      onClick={() => openFileFolder(displayedDiskPath)}
                       className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-zinc-100/90 dark:bg-zinc-800/90 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 border border-zinc-200/90 dark:border-zinc-700/80 hover:border-emerald-300 dark:hover:border-emerald-800 text-zinc-700 hover:text-emerald-700 dark:text-zinc-200 dark:hover:text-emerald-300 text-[11px] font-mono font-medium transition-all cursor-pointer group shadow-2xs min-w-0 max-w-fit"
-                      title="Click to open destination folder in Windows Explorer"
+                      title={
+                        item.status === 'completed'
+                          ? 'Click to open destination folder in Windows Explorer'
+                          : 'Unconfirmed staging file on disk (finalizes to original name on completion)'
+                      }
                     >
                       <Menu className="w-3 h-3 text-zinc-500 dark:text-zinc-400 group-hover:text-emerald-600 dark:group-hover:text-emerald-400 shrink-0 stroke-[2.2]" />
                       <span className="truncate">
-                        {item.destination_path}
+                        {displayedDiskPath}
                       </span>
                     </button>
 
@@ -667,12 +686,12 @@ export const DownloadTable: React.FC = () => {
                       type="button"
                       onClick={(e) => {
                         e.stopPropagation();
-                        navigator.clipboard.writeText(item.destination_path);
+                        navigator.clipboard.writeText(displayedDiskPath);
                         setCopiedId(item.id);
                         setTimeout(() => setCopiedId(null), 2000);
                       }}
                       className="p-1 rounded-md hover:bg-zinc-100 dark:hover:bg-zinc-800 text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200 transition-colors cursor-pointer shrink-0"
-                      title="Copy destination path"
+                      title="Copy active file path"
                     >
                       {copiedId === item.id ? (
                         <Check className="w-3 h-3 text-emerald-600 dark:text-emerald-400 stroke-[2.5]" />
@@ -719,10 +738,23 @@ export const DownloadTable: React.FC = () => {
 
                 {isDownloading ? (
                   <div className="flex items-center gap-1.5">
+                    {pauseHintTaskId === item.id && (
+                      <span
+                        data-testid="pause-first-hint"
+                        className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10.5px] font-medium bg-amber-500/15 dark:bg-amber-500/20 text-amber-800 dark:text-amber-200 border border-amber-500/30 animate-in fade-in zoom-in-95 duration-150 shadow-2xs"
+                      >
+                        <AlertCircle className="w-3 h-3 text-amber-500 shrink-0" />
+                        <span>Pause first to delete</span>
+                      </span>
+                    )}
                     <button
                       type="button"
-                      onClick={() => togglePause(item.id)}
-                      className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-amber-500/10 hover:bg-amber-500/20 text-amber-700 dark:text-amber-300 border border-amber-500/20 text-xs font-semibold transition-all cursor-pointer shadow-2xs"
+                      onClick={() => handleTogglePause(item.id)}
+                      className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-semibold transition-all cursor-pointer shadow-2xs ${
+                        pauseHintTaskId === item.id
+                          ? 'bg-amber-500/25 hover:bg-amber-500/35 text-amber-900 dark:text-amber-100 border border-amber-500 ring-2 ring-amber-500/60 scale-[1.03] animate-pulse'
+                          : 'bg-amber-500/10 hover:bg-amber-500/20 text-amber-700 dark:text-amber-300 border border-amber-500/20'
+                      }`}
                       title={!resInfo.canResume ? "Pause (Warning: Server does not support resume - restarting will download from start)" : "Pause active download"}
                     >
                       <Pause className="w-3 h-3 fill-current" />
@@ -730,11 +762,14 @@ export const DownloadTable: React.FC = () => {
                     </button>
                     <button
                       type="button"
-                      onClick={() => setDeletingItem(item)}
-                      className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-rose-500/10 hover:bg-rose-500/20 text-rose-700 dark:text-rose-300 border border-rose-500/20 text-xs font-semibold transition-all cursor-pointer shadow-2xs"
-                      title="Stop and delete active download"
+                      disabled={true}
+                      aria-disabled="true"
+                      data-testid={`delete-btn-${item.id}`}
+                      onClick={() => handleAttemptDeleteWhileDownloading(item.id)}
+                      className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-rose-500/5 dark:bg-rose-950/20 text-rose-700/40 dark:text-rose-400/30 border border-rose-500/10 dark:border-rose-900/20 text-xs font-semibold select-none cursor-not-allowed opacity-45 shadow-none transition-all"
+                      title="Cannot delete while downloading. Pause the download first to delete."
                     >
-                      <Trash2 className="w-3 h-3" />
+                      <Trash2 className="w-3 h-3 opacity-60" />
                       <span>Delete</span>
                     </button>
                   </div>
@@ -742,8 +777,8 @@ export const DownloadTable: React.FC = () => {
                   <div className="flex items-center gap-1.5">
                     <button
                       type="button"
-                      onClick={() => togglePause(item.id)}
-                      className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 border border-emerald-500/20 text-xs font-semibold transition-all cursor-pointer shadow-2xs"
+                      onClick={() => handleTogglePause(item.id)}
+                      className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 border border-emerald-500/20 text-xs font-semibold transition-all cursor-pointer shadow-2xs hover:scale-[1.02] active:scale-[0.98]"
                       title={!resInfo.canResume ? "Restart download from beginning (Server does not support resume)" : "Resume download"}
                     >
                       <Play className="w-3 h-3 fill-current" />
@@ -752,7 +787,8 @@ export const DownloadTable: React.FC = () => {
                     <button
                       type="button"
                       onClick={() => setDeletingItem(item)}
-                      className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-rose-500/10 hover:bg-rose-500/20 text-rose-700 dark:text-rose-300 border border-rose-500/20 text-xs font-semibold transition-all cursor-pointer shadow-2xs"
+                      data-testid={`delete-btn-${item.id}`}
+                      className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-rose-500/10 hover:bg-rose-500/20 text-rose-700 dark:text-rose-300 border border-rose-500/20 text-xs font-semibold transition-all cursor-pointer shadow-2xs hover:scale-[1.02] active:scale-[0.98]"
                       title="Delete download"
                     >
                       <Trash2 className="w-3 h-3" />
@@ -760,22 +796,28 @@ export const DownloadTable: React.FC = () => {
                     </button>
                   </div>
                 ) : (
-                  <div className="flex items-center gap-1">
+                  <div className="flex items-center gap-1.5">
                     {item.status !== 'completed' && (
                       <button
-                        onClick={() => togglePause(item.id)}
-                        className="p-1.5 rounded-md hover:bg-zinc-100 dark:hover:bg-zinc-800 text-zinc-600 dark:text-zinc-300 transition-colors cursor-pointer"
-                        title={isQueued ? 'Start Now (Bypass Queue Wait)' : 'Resume'}
+                        type="button"
+                        onClick={() => handleTogglePause(item.id)}
+                        className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 border border-emerald-500/20 text-xs font-semibold transition-all cursor-pointer shadow-2xs hover:scale-[1.02] active:scale-[0.98]"
+                        title={isQueued ? 'Start Now (Bypass Queue Wait)' : (item.status === 'failed' || item.status === 'error') ? 'Retry download' : 'Resume'}
                       >
-                        <Play className="w-3.5 h-3.5 fill-current" />
+                        <Play className="w-3 h-3 fill-current" />
+                        <span>{isQueued ? 'Start' : (item.status === 'failed' || item.status === 'error') ? 'Retry' : 'Resume'}</span>
                       </button>
                     )}
                     <button
+                      type="button"
                       onClick={() => setDeletingItem(item)}
-                      className="p-1.5 rounded-md hover:bg-rose-50 dark:hover:bg-rose-950/40 text-zinc-400 hover:text-rose-600 dark:hover:text-rose-400 transition-colors cursor-pointer"
-                      title="Delete download..."
+                      data-testid={`delete-btn-${item.id}`}
+                      aria-label="Delete download..."
+                      className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-rose-500/10 hover:bg-rose-500/20 text-rose-700 dark:text-rose-300 border border-rose-500/20 text-xs font-semibold transition-all cursor-pointer shadow-2xs hover:scale-[1.02] active:scale-[0.98]"
+                      title={item.status === 'completed' ? 'Delete download...' : 'Delete download'}
                     >
-                      <Trash2 className="w-3.5 h-3.5" />
+                      <Trash2 className="w-3 h-3" />
+                      <span>Delete</span>
                     </button>
                   </div>
                 )}

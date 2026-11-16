@@ -99,4 +99,11 @@ pub const MIGRATIONS: &[Migration] = &[
         ALTER TABLE downloads ADD COLUMN speed_limit_mbps REAL;
         "#,
     },
+    Migration {
+        version: 6,
+        description: "Add staging_path column to track unconfirmed.{name}.downex staging artifacts across pause/resume",
+        sql: r#"
+        ALTER TABLE downloads ADD COLUMN staging_path TEXT;
+        "#,
+    },
 ];

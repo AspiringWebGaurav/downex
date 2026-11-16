@@ -1,6 +1,7 @@
 import { invoke, isTauri as coreIsTauri } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { DownloadItem, DownloadProgressEvent, ReleaseManifest } from '../types/download';
+import { deriveUnconfirmedStagingPath, isUnconfirmedStagingPath } from '../utils/format';
 import { cleanVersion, compareSemver } from '../utils/version';
 import { getLatestCodebaseVersion } from '../data/patchNotes';
 
@@ -98,6 +99,7 @@ export async function addDownload(
       url,
       filename: name,
       destination_path: dest,
+      staging_path: deriveUnconfirmedStagingPath(dest),
       total_bytes: 104857600,
       downloaded_bytes: startImmediately ? 26214400 : 0,
       status: startImmediately ? 'downloading' : 'queued',
@@ -960,6 +962,9 @@ export interface DownloadCompletePayload {
 }
 
 export async function openFile(path: string): Promise<void> {
+  if (isUnconfirmedStagingPath(path)) {
+    throw new Error('Cannot open unconfirmed (.downex) download file while transfer is incomplete.');
+  }
   if (!isTauri) {
     alert(`[Preview Mode] Open file: ${path}`);
     return;
@@ -968,6 +973,9 @@ export async function openFile(path: string): Promise<void> {
 }
 
 export async function openFileWith(path: string): Promise<void> {
+  if (isUnconfirmedStagingPath(path)) {
+    throw new Error('Cannot open unconfirmed (.downex) download file while transfer is incomplete.');
+  }
   if (!isTauri) {
     alert(`[Preview Mode] Open with...: ${path}`);
     return;

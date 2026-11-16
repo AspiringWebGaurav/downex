@@ -1,6 +1,7 @@
 pub mod limiter;
 pub mod pool;
 pub mod probe;
+pub mod staging;
 pub mod state;
 pub mod writer;
 

@@ -140,4 +140,68 @@ test.describe('Downex Download Completion & Integrity Verification (REA)', () =>
 
     expect(errors).toEqual([]);
   });
+
+  test('Unconfirmed Staging Lifecycle UI: Shows unconfirmed.{name}.downex while downloading/paused and restores original name on completion', async ({ page }) => {
+    const errors = captureConsoleErrors(page);
+
+    await page.evaluate(() => {
+      const mockItems = [
+        {
+          id: 'staging-lifecycle-1',
+          url: 'https://cdn.example.org/movies/Movie.2026.mkv',
+          filename: 'Movie.2026.mkv',
+          destination_path: 'C:\\Downloads\\Movie.2026.mkv',
+          staging_path: 'C:\\Downloads\\unconfirmed.Movie.2026.mkv.downex',
+          total_bytes: 52428800,
+          downloaded_bytes: 26214400,
+          status: 'downloading',
+          queue_id: 'default',
+          speed_bytes_sec: 10485760,
+          eta_seconds: 3,
+          created_at: Date.now() - 5000,
+          updated_at: Date.now(),
+          supports_ranges: true,
+        },
+      ];
+      sessionStorage.setItem('downex_mock_downloads', JSON.stringify(mockItems));
+    });
+
+    await page.reload();
+
+    // While downloading: displays unconfirmed.*.downex path and hides Open with / Details
+    await expect(page.getByText('C:\\Downloads\\unconfirmed.Movie.2026.mkv.downex')).toBeVisible();
+    await expect(page.locator('button:has-text("Open with")')).not.toBeVisible();
+
+    // Transition to completed -> displays original destination path and unlocks Open with / Details
+    await page.evaluate(() => {
+      const updated = [
+        {
+          id: 'staging-lifecycle-1',
+          url: 'https://cdn.example.org/movies/Movie.2026.mkv',
+          filename: 'Movie.2026.mkv',
+          destination_path: 'C:\\Downloads\\Movie.2026.mkv',
+          staging_path: null,
+          total_bytes: 52428800,
+          downloaded_bytes: 52428800,
+          status: 'completed',
+          queue_id: 'default',
+          speed_bytes_sec: 0,
+          eta_seconds: 0,
+          created_at: Date.now() - 5000,
+          updated_at: Date.now(),
+          supports_ranges: true,
+        },
+      ];
+      sessionStorage.setItem('downex_mock_downloads', JSON.stringify(updated));
+    });
+
+    await page.reload();
+
+    await expect(page.getByText('C:\\Downloads\\Movie.2026.mkv')).toBeVisible();
+    await expect(page.getByText('C:\\Downloads\\unconfirmed.Movie.2026.mkv.downex')).not.toBeVisible();
+    await expect(page.getByRole('button', { name: 'Open with' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Details', exact: true })).toBeVisible();
+
+    expect(errors).toEqual([]);
+  });
 });

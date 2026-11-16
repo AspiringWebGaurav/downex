@@ -31,6 +31,42 @@ pub struct DownloadRecord {
     pub updated_at: i64,
     #[serde(default)]
     pub speed_limit_mbps: Option<f64>,
+    #[serde(default)]
+    pub staging_path: Option<String>,
+}
+
+const DOWNLOAD_SELECT_COLUMNS: &str = "id, url, filename, destination_path, total_bytes, downloaded_bytes,
+                    status, etag, last_modified, headers_json, queue_id, speed_bytes_sec,
+                    error_message, checksum, media_type, supports_ranges, created_at, updated_at,
+                    speed_limit_mbps, staging_path";
+
+fn map_download_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<DownloadRecord> {
+    let total_bytes: Option<i64> = row.get(4)?;
+    let downloaded_bytes: i64 = row.get(5)?;
+    let speed: i64 = row.get(11)?;
+    let supports_ranges: i64 = row.get(15).unwrap_or(1);
+    Ok(DownloadRecord {
+        id: row.get(0)?,
+        url: row.get(1)?,
+        filename: row.get(2)?,
+        destination_path: row.get(3)?,
+        total_bytes: total_bytes.map(|v| v as u64),
+        downloaded_bytes: downloaded_bytes as u64,
+        status: row.get(6)?,
+        etag: row.get(7)?,
+        last_modified: row.get(8)?,
+        headers_json: row.get(9)?,
+        queue_id: row.get(10)?,
+        speed_bytes_sec: speed as u64,
+        error_message: row.get(12)?,
+        checksum: row.get(13)?,
+        media_type: row.get(14)?,
+        supports_ranges: supports_ranges != 0,
+        created_at: row.get(16)?,
+        updated_at: row.get(17)?,
+        speed_limit_mbps: row.get(18).ok().flatten(),
+        staging_path: row.get(19).ok().flatten(),
+    })
 }
 
 fn default_supports_ranges() -> bool {
@@ -142,6 +178,10 @@ impl DatabaseManager {
                     if !Self::has_column(&tx, "downloads", "speed_limit_mbps") {
                         let _ = tx.execute("ALTER TABLE downloads ADD COLUMN speed_limit_mbps REAL;", []);
                     }
+                } else if migration.version == 6 {
+                    if !Self::has_column(&tx, "downloads", "staging_path") {
+                        let _ = tx.execute("ALTER TABLE downloads ADD COLUMN staging_path TEXT;", []);
+                    }
                 } else {
                     tx.execute_batch(migration.sql)?;
                 }
@@ -160,8 +200,9 @@ impl DatabaseManager {
             "INSERT INTO downloads (
                 id, url, filename, destination_path, total_bytes, downloaded_bytes,
                 status, etag, last_modified, headers_json, queue_id, speed_bytes_sec,
-                error_message, checksum, media_type, supports_ranges, created_at, updated_at, speed_limit_mbps
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)",
+                error_message, checksum, media_type, supports_ranges, created_at, updated_at,
+                speed_limit_mbps, staging_path
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)",
             params![
                 record.id,
                 record.url,
@@ -182,6 +223,7 @@ impl DatabaseManager {
                 record.created_at,
                 record.updated_at,
                 record.speed_limit_mbps,
+                record.staging_path,
             ],
         )?;
         Ok(())
@@ -228,40 +270,9 @@ pub fn update_download_status(&self, id: &str, status: &str, speed: u64, error: 
 
     pub fn get_all_downloads(&self) -> Result<Vec<DownloadRecord>> {
         let conn = self.conn.lock();
-        let mut stmt = conn.prepare(
-            "SELECT id, url, filename, destination_path, total_bytes, downloaded_bytes,
-                    status, etag, last_modified, headers_json, queue_id, speed_bytes_sec,
-                    error_message, checksum, media_type, supports_ranges, created_at, updated_at
-             FROM downloads ORDER BY created_at DESC",
-        )?;
-
-        let rows = stmt.query_map([], |row| {
-            let total_bytes: Option<i64> = row.get(4)?;
-            let downloaded_bytes: i64 = row.get(5)?;
-            let speed: i64 = row.get(11)?;
-            let supports_ranges: i64 = row.get(15).unwrap_or(1);
-            Ok(DownloadRecord {
-                id: row.get(0)?,
-                url: row.get(1)?,
-                filename: row.get(2)?,
-                destination_path: row.get(3)?,
-                total_bytes: total_bytes.map(|v| v as u64),
-                downloaded_bytes: downloaded_bytes as u64,
-                status: row.get(6)?,
-                etag: row.get(7)?,
-                last_modified: row.get(8)?,
-                headers_json: row.get(9)?,
-                queue_id: row.get(10)?,
-                speed_bytes_sec: speed as u64,
-                error_message: row.get(12)?,
-                checksum: row.get(13)?,
-                media_type: row.get(14)?,
-                supports_ranges: supports_ranges != 0,
-                created_at: row.get(16)?,
-                updated_at: row.get(17)?,
-                speed_limit_mbps: None,
-            })
-        })?;
+        let sql = format!("SELECT {} FROM downloads ORDER BY created_at DESC", DOWNLOAD_SELECT_COLUMNS);
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map([], map_download_row)?;
 
         let mut list = Vec::new();
         for r in rows {
@@ -272,40 +283,9 @@ pub fn update_download_status(&self, id: &str, status: &str, speed: u64, error: 
 
     pub fn get_queued_downloads(&self) -> Result<Vec<DownloadRecord>> {
         let conn = self.conn.lock();
-        let mut stmt = conn.prepare(
-            "SELECT id, url, filename, destination_path, total_bytes, downloaded_bytes,
-                    status, etag, last_modified, headers_json, queue_id, speed_bytes_sec,
-                    error_message, checksum, media_type, supports_ranges, created_at, updated_at
-             FROM downloads WHERE status = 'queued' ORDER BY created_at ASC",
-        )?;
-
-        let rows = stmt.query_map([], |row| {
-            let total_bytes: Option<i64> = row.get(4)?;
-            let downloaded_bytes: i64 = row.get(5)?;
-            let speed: i64 = row.get(11)?;
-            let supports_ranges: i64 = row.get(15).unwrap_or(1);
-            Ok(DownloadRecord {
-                id: row.get(0)?,
-                url: row.get(1)?,
-                filename: row.get(2)?,
-                destination_path: row.get(3)?,
-                total_bytes: total_bytes.map(|v| v as u64),
-                downloaded_bytes: downloaded_bytes as u64,
-                status: row.get(6)?,
-                etag: row.get(7)?,
-                last_modified: row.get(8)?,
-                headers_json: row.get(9)?,
-                queue_id: row.get(10)?,
-                speed_bytes_sec: speed as u64,
-                error_message: row.get(12)?,
-                checksum: row.get(13)?,
-                media_type: row.get(14)?,
-                supports_ranges: supports_ranges != 0,
-                created_at: row.get(16)?,
-                updated_at: row.get(17)?,
-                speed_limit_mbps: None,
-            })
-        })?;
+        let sql = format!("SELECT {} FROM downloads WHERE status = 'queued' ORDER BY created_at ASC", DOWNLOAD_SELECT_COLUMNS);
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map([], map_download_row)?;
 
         let mut list = Vec::new();
         for r in rows {
@@ -316,44 +296,55 @@ pub fn update_download_status(&self, id: &str, status: &str, speed: u64, error: 
 
     pub fn get_download(&self, id: &str) -> Result<Option<DownloadRecord>> {
         let conn = self.conn.lock();
-        let mut stmt = conn.prepare(
-            "SELECT id, url, filename, destination_path, total_bytes, downloaded_bytes,
-                    status, etag, last_modified, headers_json, queue_id, speed_bytes_sec,
-                    error_message, checksum, media_type, supports_ranges, created_at, updated_at
-             FROM downloads WHERE id = ?1",
-        )?;
-
-        let mut rows = stmt.query_map(params![id], |row| {
-            let speed: i64 = row.get(11)?;
-            let supports_ranges: i64 = row.get(15).unwrap_or(1);
-            Ok(DownloadRecord {
-                id: row.get(0)?,
-                url: row.get(1)?,
-                filename: row.get(2)?,
-                destination_path: row.get(3)?,
-                total_bytes: row.get(4)?,
-                downloaded_bytes: row.get(5)?,
-                status: row.get(6)?,
-                etag: row.get(7)?,
-                last_modified: row.get(8)?,
-                headers_json: row.get(9)?,
-                queue_id: row.get(10)?,
-                speed_bytes_sec: speed as u64,
-                error_message: row.get(12)?,
-                checksum: row.get(13)?,
-                media_type: row.get(14)?,
-                supports_ranges: supports_ranges != 0,
-                created_at: row.get(16)?,
-                updated_at: row.get(17)?,
-                speed_limit_mbps: None,
-            })
-        })?;
+        let sql = format!("SELECT {} FROM downloads WHERE id = ?1", DOWNLOAD_SELECT_COLUMNS);
+        let mut stmt = conn.prepare(&sql)?;
+        let mut rows = stmt.query_map(params![id], map_download_row)?;
 
         if let Some(first) = rows.next() {
             Ok(Some(first?))
         } else {
             Ok(None)
         }
+    }
+
+    pub fn update_download_staging_path(&self, id: &str, staging_path: Option<&str>) -> Result<()> {
+        let conn = self.conn.lock();
+        let now = chrono::Utc::now().timestamp_millis();
+        conn.execute(
+            "UPDATE downloads SET staging_path = ?1, updated_at = ?2 WHERE id = ?3",
+            params![staging_path, now, id],
+        )?;
+        Ok(())
+    }
+
+    pub fn update_download_finalized_target(
+        &self,
+        id: &str,
+        final_dest_path: &str,
+        final_filename: &str,
+    ) -> Result<()> {
+        let conn = self.conn.lock();
+        let now = chrono::Utc::now().timestamp_millis();
+        conn.execute(
+            "UPDATE downloads SET destination_path = ?1, filename = ?2, staging_path = NULL, updated_at = ?3 WHERE id = ?4",
+            params![final_dest_path, final_filename, now, id],
+        )?;
+        Ok(())
+    }
+
+    pub fn update_download_destination_and_staging(
+        &self,
+        id: &str,
+        new_dest_path: &str,
+        new_staging_path: Option<&str>,
+    ) -> Result<()> {
+        let conn = self.conn.lock();
+        let now = chrono::Utc::now().timestamp_millis();
+        conn.execute(
+            "UPDATE downloads SET destination_path = ?1, staging_path = ?2, status = 'queued', error_message = NULL, updated_at = ?3 WHERE id = ?4",
+            params![new_dest_path, new_staging_path, now, id],
+        )?;
+        Ok(())
     }
 
     pub fn update_download_destination(&self, id: &str, new_dest_path: &str) -> Result<()> {

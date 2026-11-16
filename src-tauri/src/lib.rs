@@ -152,9 +152,41 @@ pub fn run() {
             // Dev Terminal Watchdog: In development mode, monitor Vite dev server at 127.0.0.1:1420
             // If the dev terminal running `npm run dev` / `vite` is closed, 127.0.0.1:1420 terminates.
             // The dev app exits automatically (<1s) so it never lingers as an orphaned process
-            // blocking the user's installed application or holding port 18888.
+            // blocking the user's installed application or holding port 18888, and triggers detached
+            // restoration of any suspended installed Downex background service.
             #[cfg(debug_assertions)]
             {
+                fn spawn_dev_restore_installed_service() {
+                    if std::env::var("DOWNEX_SKIP_INSTALLED_RESTORE").ok().as_deref() == Some("1") {
+                        return;
+                    }
+                    let Some(repo_root) = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent() else {
+                        return;
+                    };
+                    let restore_script = repo_root.join("scripts").join("restore-installed.mjs");
+                    if !restore_script.exists() {
+                        return;
+                    }
+
+                    let mut cmd = std::process::Command::new("node");
+                    cmd.arg(&restore_script)
+                        .arg("--wait-pid")
+                        .arg(std::process::id().to_string())
+                        .stdin(std::process::Stdio::null())
+                        .stdout(std::process::Stdio::null())
+                        .stderr(std::process::Stdio::null());
+
+                    #[cfg(target_os = "windows")]
+                    {
+                        use std::os::windows::process::CommandExt;
+                        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+                        const DETACHED_PROCESS: u32 = 0x0000_0008;
+                        cmd.creation_flags(CREATE_NO_WINDOW | DETACHED_PROCESS);
+                    }
+
+                    let _ = cmd.spawn();
+                }
+
                 let app_handle = app.handle().clone();
                 std::thread::spawn(move || {
                     let mut consecutive_failures = 0;
@@ -173,6 +205,7 @@ pub fn run() {
                             consecutive_failures += 1;
                             if consecutive_failures >= 2 {
                                 eprintln!("[Downex Dev Watchdog] Dev server (127.0.0.1:1420) closed. Terminal closed. Exiting dev instance now.");
+                                spawn_dev_restore_installed_service();
                                 app_handle.exit(0);
                                 std::process::exit(0);
                             }

@@ -78,6 +78,19 @@ export function getLatestCodebaseVersion(): string {
 }
 
 export const BASELINE_PATCH_NOTES: Record<string, DynamicPatchNotes> = {
+  '0.0.43': {
+    version: '0.0.43',
+    releaseDate: 'November 12, 2026',
+    title: 'Unconfirmed Staging Lifecycle (.downex), Atomic Promotion Fallbacks, Dynamic Delete Safety & Polished Complete Dialog',
+    highlights: [
+      'Unconfirmed Staging Lifecycle: Active, paused, and queued downloads stage safely as unconfirmed.{name}.downex on disk until 100% verified, preventing premature playback or file corruption',
+      'Multi-Tier Atomic Promotion: Closes all OS file handles and verifies exact byte length before promoting back to original filename via Win32 MoveFileExW lock retry, fs::rename, and copy-sync fallback',
+      'Dynamic Delete Stream Safety: Dynamically locks deletion during active streaming to prevent race conditions; features an intuitive "Pause first to delete" guidance hint and instant reactivation on pause or complete',
+      'Open Guardrails & Crash-Safe Resume: Blocks opening unconfirmed/incomplete downloads, preserves staging_path in SQLite v6 across pauses and restarts, and resets cleanly if staging files are deleted externally',
+      'Polished Download Complete Modal: Tightened native window to 580x249px with symmetric 16px padding, unified Address & Saved to details card, and smart middle-truncation preventing clipped text',
+    ],
+    rawNotes: 'v0.0.43: Unconfirmed Staging Lifecycle (.downex), Atomic Promotion Fallbacks, Dynamic Delete Safety & Polished Complete Dialog',
+  },
   '0.0.42': {
     version: '0.0.42',
     releaseDate: 'November 10, 2026',

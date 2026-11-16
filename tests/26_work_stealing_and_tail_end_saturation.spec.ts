@@ -149,8 +149,15 @@ test.describe('Downex — Tail-End 99% Saturation, Dynamic Work-Stealing & Strag
     const card = page.locator('div.rounded-xl', { hasText: 'LargeVideo.mkv' });
     await expect(card).toBeVisible();
 
-    // Click Delete button
+    // Verify Delete is disabled while downloading
     const deleteBtn = card.locator('button', { hasText: 'Delete' });
+    await expect(deleteBtn).toBeDisabled();
+
+    // Pause first to allow deletion
+    await card.locator('button', { hasText: 'Pause' }).click();
+    await expect(deleteBtn).toBeEnabled();
+
+    // Click Delete button
     await deleteBtn.click();
 
     const modal = page.locator('[data-testid="delete-confirm-modal"]');

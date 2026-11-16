@@ -1088,6 +1088,7 @@ mod tests {
             created_at: 0,
             updated_at: 0,
             speed_limit_mbps: None,
+            staging_path: None,
         };
 
         let task2 = crate::db::DownloadRecord {
@@ -1110,6 +1111,7 @@ mod tests {
             created_at: 0,
             updated_at: 0,
             speed_limit_mbps: None,
+            staging_path: None,
         };
 
         let downloads = vec![task1, task2];
@@ -1169,6 +1171,7 @@ mod tests {
             created_at: 0,
             updated_at: 0,
             speed_limit_mbps: None,
+            staging_path: None,
         };
 
         let downloads = vec![dummy_record];
@@ -1228,6 +1231,7 @@ mod tests {
             created_at: 0,
             updated_at: 0,
             speed_limit_mbps: None,
+            staging_path: None,
         };
 
         let downloads = vec![dummy_record];

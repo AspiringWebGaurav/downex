@@ -131,7 +131,14 @@ impl QueueManager {
         };
 
         let _ = std::fs::create_dir_all(&save_dir_buf);
-        let dest_path = get_non_colliding_path(&save_dir_buf, &chosen_filename);
+        let dest_path = self.resolve_unique_destination(&save_dir_buf, &chosen_filename, None);
+        let resolved_staging = crate::engine::staging::resolve_unconfirmed_staging_path(
+            Path::new(&dest_path),
+            Some(&id),
+            None,
+        );
+        crate::engine::staging::release_staging_path(&resolved_staging);
+        let staging_path_str = resolved_staging.to_string_lossy().to_string();
 
         let now = chrono::Utc::now().timestamp_millis();
         let headers_json = custom_headers.as_ref().map(|h| serde_json::to_string(h).unwrap_or_default());
@@ -157,6 +164,7 @@ impl QueueManager {
             created_at: now,
             updated_at: now,
             speed_limit_mbps: None,
+            staging_path: Some(staging_path_str),
         };
 
         self.db.insert_download(&record)?;
@@ -336,11 +344,31 @@ impl QueueManager {
             let filename_clone = record.filename.clone();
             let total_bytes_clone = record.total_bytes;
 
+            let staging_path = match record
+                .staging_path
+                .as_deref()
+                .filter(|s| !s.trim().is_empty())
+            {
+                Some(s) => s.to_string(),
+                None => {
+                    let resolved = crate::engine::staging::resolve_unconfirmed_staging_path(
+                        Path::new(&record.destination_path),
+                        Some(&record.id),
+                        None,
+                    );
+                    crate::engine::staging::release_staging_path(&resolved);
+                    let s = resolved.to_string_lossy().to_string();
+                    let _ = db.update_download_staging_path(&record.id, Some(&s));
+                    s
+                }
+            };
+
             let res = pool
                 .execute_download(
                     task_id.clone(),
                     record.url,
                     record.destination_path,
+                    staging_path,
                     record.total_bytes,
                     supports_ranges,
                     headers,
@@ -370,12 +398,16 @@ impl QueueManager {
                 });
             }
 
-            // Zero-Corruption Auto-Shutdown Evaluation (runs only after physical file flush)
+            // Zero-Corruption Auto-Shutdown Evaluation (runs only after physical promotion & flush)
             if is_success {
                 let qm = qm_clone.clone();
                 let t_id = task_id.clone();
+                let (final_dest, final_name) = match db.get_download(&t_id) {
+                    Ok(Some(updated)) => (updated.destination_path, updated.filename),
+                    _ => (dest_path_clone, filename_clone),
+                };
                 tauri::async_runtime::spawn(async move {
-                    qm.check_and_trigger_shutdown_if_armed(&t_id, &dest_path_clone, &filename_clone, total_bytes_clone).await;
+                    qm.check_and_trigger_shutdown_if_armed(&t_id, &final_dest, &final_name, total_bytes_clone).await;
                 });
             }
         });
@@ -444,20 +476,21 @@ impl QueueManager {
         if let Ok(downloads) = self.db.get_all_downloads() {
             if let Some(record) = downloads.into_iter().find(|d| d.id == id) {
                 if delete_file {
-                    let path = record.destination_path.clone();
+                    let final_path = PathBuf::from(&record.destination_path);
+                    let staging_opt = record.staging_path.clone().map(PathBuf::from);
+                    let primary_unconfirmed =
+                        crate::engine::staging::derive_primary_unconfirmed_path(&final_path);
                     // Robust background removal loop: handles cases where active download file handle
-                    // takes 20-100ms to close cleanly on Windows
+                    // takes 20-100ms to close cleanly on Windows, deleting staging & target artifacts.
                     std::thread::spawn(move || {
-                        for attempt in 0..40 {
-                            if !std::path::Path::new(&path).exists() {
-                                eprintln!("[Downex Delete] File does not exist or already removed: {}", path);
-                                break;
-                            }
-                            if std::fs::remove_file(&path).is_ok() {
-                                eprintln!("[Downex Delete] Successfully deleted file from disk on attempt {}: {}", attempt + 1, path);
-                                break;
-                            }
-                            std::thread::sleep(std::time::Duration::from_millis(50));
+                        if let Some(ref staging_p) = staging_opt {
+                            crate::engine::staging::robust_delete_path(staging_p);
+                        }
+                        if primary_unconfirmed.exists() {
+                            crate::engine::staging::robust_delete_path(&primary_unconfirmed);
+                        }
+                        if final_path.exists() {
+                            crate::engine::staging::robust_delete_path(&final_path);
                         }
                     });
                 }
@@ -479,16 +512,53 @@ impl QueueManager {
 
         let new_folder_path = PathBuf::from(new_folder.trim());
         let _ = std::fs::create_dir_all(&new_folder_path);
-        let new_dest = get_non_colliding_path(&new_folder_path, &record.filename);
+        let new_dest = self.resolve_unique_destination(&new_folder_path, &record.filename, Some(task_id));
+        let new_staging_buf = crate::engine::staging::resolve_unconfirmed_staging_path(
+            Path::new(&new_dest),
+            Some(task_id),
+            None,
+        );
+        crate::engine::staging::release_staging_path(&new_staging_buf);
+        let new_staging = new_staging_buf.to_string_lossy().to_string();
 
-        self.db.update_download_destination(task_id, &new_dest)?;
+        // Carry over existing partial staging bytes if moving cleanly across same folder/volume
+        if let Some(ref old_staging) = record.staging_path {
+            let old_io = crate::engine::staging::to_win_io_path(Path::new(old_staging));
+            let new_io = crate::engine::staging::to_win_io_path(&new_staging_buf);
+            if old_io.exists() && old_io != new_io {
+                if std::fs::rename(&old_io, &new_io).is_err() {
+                    crate::engine::staging::robust_delete_path(Path::new(old_staging));
+                }
+            }
+        }
+
+        self.db
+            .update_download_destination_and_staging(task_id, &new_dest, Some(&new_staging))?;
         let mut updated_record = record;
         updated_record.destination_path = new_dest;
+        updated_record.staging_path = Some(new_staging);
         updated_record.status = "queued".to_string();
         updated_record.error_message = None;
 
         self.start_task(updated_record);
         Ok(true)
+    }
+
+    fn resolve_unique_destination(
+        &self,
+        dir: &Path,
+        filename: &str,
+        exclude_task_id: Option<&str>,
+    ) -> String {
+        let existing_destinations: HashSet<String> = self
+            .db
+            .get_all_downloads()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|d| exclude_task_id.map_or(true, |ex| d.id != ex))
+            .map(|d| d.destination_path.replace('/', "\\").to_lowercase())
+            .collect();
+        get_non_colliding_path_excluding(dir, filename, &existing_destinations)
     }
 
     pub fn get_default_download_directory(&self) -> String {
@@ -768,9 +838,32 @@ pub fn resolve_default_download_directory() -> PathBuf {
     local
 }
 
-pub fn get_non_colliding_path(dir: &Path, filename: &str) -> String {
+fn is_path_available_for_target(candidate: &Path, existing_destinations: &HashSet<String>) -> bool {
+    let key = candidate.to_string_lossy().replace('/', "\\").to_lowercase();
+    if existing_destinations.contains(&key) {
+        return false;
+    }
+    if crate::engine::staging::to_win_io_path(candidate).exists()
+        || crate::engine::staging::is_target_path_claimed(candidate)
+    {
+        return false;
+    }
+    let unconfirmed = crate::engine::staging::derive_primary_unconfirmed_path(candidate);
+    if crate::engine::staging::to_win_io_path(&unconfirmed).exists()
+        || crate::engine::staging::is_staging_path_claimed(&unconfirmed)
+    {
+        return false;
+    }
+    true
+}
+
+pub fn get_non_colliding_path_excluding(
+    dir: &Path,
+    filename: &str,
+    existing_destinations: &HashSet<String>,
+) -> String {
     let candidate = dir.join(filename);
-    if !candidate.exists() {
+    if is_path_available_for_target(&candidate, existing_destinations) {
         return candidate.to_string_lossy().to_string();
     }
 
@@ -785,11 +878,15 @@ pub fn get_non_colliding_path(dir: &Path, filename: &str) -> String {
             None => format!("{} ({})", stem, counter),
         };
         let new_candidate = dir.join(&new_name);
-        if !new_candidate.exists() {
+        if is_path_available_for_target(&new_candidate, existing_destinations) {
             return new_candidate.to_string_lossy().to_string();
         }
         counter += 1;
     }
+}
+
+pub fn get_non_colliding_path(dir: &Path, filename: &str) -> String {
+    get_non_colliding_path_excluding(dir, filename, &HashSet::new())
 }
 
 #[cfg(target_os = "windows")]

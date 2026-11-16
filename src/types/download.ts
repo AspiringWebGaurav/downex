@@ -14,6 +14,7 @@ export interface DownloadItem {
   url: string;
   filename: string;
   destination_path: string;
+  staging_path?: string | null;
   total_bytes: number | null;
   downloaded_bytes: number;
   status: 'queued' | 'probing' | 'downloading' | 'paused' | 'completed' | 'failed' | 'cancelled' | 'error';

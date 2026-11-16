@@ -270,6 +270,22 @@ test.describe('Downex Base Application — Download Table, Lifecycles & Controls
     await expect(page.locator('text=Don\'t show this dialog again')).not.toBeVisible();
     await expect(page.locator('text=Show Downex')).not.toBeVisible();
 
+    // Verify zero extra bottom space while keeping symmetric 16px padding below action buttons
+    const card = page.getByTestId('download-complete-card');
+    const openBtn = page.getByRole('button', { name: 'Open', exact: true });
+    const cardBox = await card.boundingBox();
+    const btnBox = await openBtn.boundingBox();
+    expect(cardBox).not.toBeNull();
+    expect(btnBox).not.toBeNull();
+    const bottomSpace = (cardBox!.y + cardBox!.height) - (btnBox!.y + btnBox!.height);
+    console.log(`[Layout] DownloadCompleteWindow card=${cardBox!.width}x${cardBox!.height}, bottomSpace=${bottomSpace}px`);
+    expect(bottomSpace).toBeGreaterThanOrEqual(15.5);
+    expect(bottomSpace).toBeLessThanOrEqual(16.5);
+    expect(cardBox!.height).toBeLessThan(295);
+
+    const hasVerticalOverflow = await card.evaluate((el) => el.scrollHeight > el.clientHeight);
+    expect(hasVerticalOverflow).toBe(false);
+
     // Test Esc closes dialog
     await page.keyboard.press('Escape');
 

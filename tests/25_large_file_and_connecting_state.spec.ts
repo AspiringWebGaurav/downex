@@ -123,8 +123,16 @@ test.describe('Downex — Large File Transfer, Connecting State & Smooth Deletio
     const heading = page.getByRole('heading', { name: 'Tulsa King S01' });
     await expect(heading).toBeVisible();
 
-    // Click Delete
+    // Verify Delete is disabled while downloading
     const deleteBtn = page.getByRole('button', { name: 'Delete', exact: true }).first();
+    await expect(deleteBtn).toBeDisabled();
+
+    // Pause first to allow deletion (IDM safety requirement)
+    const pauseBtn = page.getByRole('button', { name: 'Pause', exact: true }).first();
+    await pauseBtn.click();
+    await expect(deleteBtn).toBeEnabled();
+
+    // Click Delete
     await deleteBtn.click();
 
     // Modal appears

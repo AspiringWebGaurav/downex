@@ -1192,7 +1192,7 @@ pub fn prewarm_secondary_dialogs<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
             tauri::WebviewUrl::default(),
         )
         .title("Download complete")
-        .inner_size(580.0, 310.0)
+        .inner_size(580.0, 249.0)
         .decorations(false)
         .transparent(false)
         .shadow(true)
@@ -1464,12 +1464,46 @@ pub fn cmd_hide_main_window(app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+pub(crate) fn ensure_file_ready_to_open(path: &str, db: &crate::db::DatabaseManager) -> Result<String, String> {
+    use std::path::Path;
+    let clean_path = path.trim().replace('/', "\\");
+    let target_path = Path::new(&clean_path);
+
+    if crate::engine::staging::is_unconfirmed_staging_path(target_path) {
+        return Err("Download is still unconfirmed (.downex). Wait until it completes before opening.".to_string());
+    }
+
+    let normalized_req = clean_path.to_lowercase();
+    if let Ok(downloads) = db.get_all_downloads() {
+        if let Some(rec) = downloads.into_iter().find(|d| {
+            d.destination_path.trim().replace('/', "\\").to_lowercase() == normalized_req
+                || d.staging_path
+                    .as_deref()
+                    .map(|s| s.trim().replace('/', "\\").to_lowercase() == normalized_req)
+                    .unwrap_or(false)
+        }) {
+            if rec.status != "completed" {
+                return Err(format!(
+                    "Download '{}' is still {} (unconfirmed). Wait for completion before opening.",
+                    rec.filename, rec.status
+                ));
+            }
+        }
+    }
+
+    if !crate::engine::staging::to_win_io_path(target_path).is_file() {
+        return Err(format!("Downloaded file is not available on disk yet: {}", clean_path));
+    }
+
+    Ok(clean_path)
+}
+
 #[tauri::command]
-pub fn cmd_open_file(path: String) -> Result<(), String> {
+pub fn cmd_open_file(path: String, state: State<'_, AppState>) -> Result<(), String> {
+    let clean_path = ensure_file_ready_to_open(&path, &state.db)?;
     #[cfg(target_os = "windows")]
     {
         use std::os::windows::process::CommandExt;
-        let clean_path = path.replace('/', "\\");
         std::process::Command::new("cmd")
             .args(["/C", "start", "", &clean_path])
             .creation_flags(0x08000000) // CREATE_NO_WINDOW
@@ -1478,17 +1512,17 @@ pub fn cmd_open_file(path: String) -> Result<(), String> {
     }
     #[cfg(not(target_os = "windows"))]
     {
-        let _ = opener::open(&path);
+        let _ = opener::open(&clean_path);
     }
     Ok(())
 }
 
 #[tauri::command]
-pub fn cmd_open_file_with(path: String) -> Result<(), String> {
+pub fn cmd_open_file_with(path: String, state: State<'_, AppState>) -> Result<(), String> {
+    let clean_path = ensure_file_ready_to_open(&path, &state.db)?;
     #[cfg(target_os = "windows")]
     {
         use std::os::windows::process::CommandExt;
-        let clean_path = path.replace('/', "\\");
         std::process::Command::new("rundll32.exe")
             .args(["shell32.dll,OpenAs_RunDLL", &clean_path])
             .creation_flags(0x08000000) // CREATE_NO_WINDOW
@@ -1499,7 +1533,7 @@ pub fn cmd_open_file_with(path: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn cmd_open_file_folder(path: String) -> Result<(), String> {
+pub fn cmd_open_file_folder(path: String, state: State<'_, AppState>) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
         use std::os::windows::process::CommandExt;
@@ -1511,28 +1545,55 @@ pub fn cmd_open_file_folder(path: String) -> Result<(), String> {
         let mut cmd = std::process::Command::new("explorer.exe");
         cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
 
-        if path_obj.is_file() {
+        if crate::engine::staging::to_win_io_path(path_obj).is_file() {
             // File physically exists on disk: highlight/select it inside its containing folder
             cmd.raw_arg(format!("/select,\"{}\"", clean_path));
-        } else if path_obj.is_dir() {
-            // Path itself is an existing directory: open the exact folder directly
-            cmd.raw_arg(format!("\"{}\"", clean_path));
-        } else if let Some(parent) = path_obj.parent() {
-            // Target file may not exist yet or is still downloading; open its destination folder directly
-            let _ = std::fs::create_dir_all(parent);
-            let parent_str = parent.to_string_lossy().replace('/', "\\");
-            cmd.raw_arg(format!("\"{}\"", parent_str));
         } else {
-            // Fallback: ensure directory exists and open it directly
-            let _ = std::fs::create_dir_all(&clean_path);
-            cmd.raw_arg(format!("\"{}\"", clean_path));
+            // Check whether an unconfirmed staging file (`unconfirmed.*.downex`) exists on disk
+            let normalized_req = clean_path.to_lowercase();
+            let db_staging = state
+                .db
+                .get_all_downloads()
+                .ok()
+                .and_then(|list| {
+                    list.into_iter().find(|d| {
+                        d.destination_path.trim().replace('/', "\\").to_lowercase() == normalized_req
+                    })
+                })
+                .and_then(|d| d.staging_path);
+
+            let active_staging = db_staging
+                .map(std::path::PathBuf::from)
+                .filter(|p| crate::engine::staging::to_win_io_path(p).is_file())
+                .or_else(|| {
+                    let derived = crate::engine::staging::derive_primary_unconfirmed_path(path_obj);
+                    if crate::engine::staging::to_win_io_path(&derived).is_file() {
+                        Some(derived)
+                    } else {
+                        None
+                    }
+                });
+
+            if let Some(staging_file) = active_staging {
+                let staging_str = staging_file.to_string_lossy().replace('/', "\\");
+                cmd.raw_arg(format!("/select,\"{}\"", staging_str));
+            } else if path_obj.is_dir() {
+                cmd.raw_arg(format!("\"{}\"", clean_path));
+            } else if let Some(parent) = path_obj.parent() {
+                let _ = std::fs::create_dir_all(parent);
+                let parent_str = parent.to_string_lossy().replace('/', "\\");
+                cmd.raw_arg(format!("\"{}\"", parent_str));
+            } else {
+                let _ = std::fs::create_dir_all(&clean_path);
+                cmd.raw_arg(format!("\"{}\"", clean_path));
+            }
         }
 
         cmd.spawn().map_err(|e| e.to_string())?;
     }
     #[cfg(not(target_os = "windows"))]
     {
-        let _ = opener::open(&path);
+        let _ = (state, opener::open(&path));
     }
     Ok(())
 }
@@ -1568,7 +1629,7 @@ pub fn show_download_complete<R: tauri::Runtime>(app: &tauri::AppHandle<R>, payl
 
         let _ = window.set_size(tauri::Size::Logical(tauri::LogicalSize {
             width: 580.0,
-            height: 310.0,
+            height: 249.0,
         }));
         let _ = window.unminimize();
         let _ = window.center();
@@ -1590,7 +1651,7 @@ pub fn show_download_complete<R: tauri::Runtime>(app: &tauri::AppHandle<R>, payl
             tauri::WebviewUrl::default(),
         )
         .title("Download complete")
-        .inner_size(580.0, 310.0)
+        .inner_size(580.0, 249.0)
         .decorations(false)
         .transparent(false)
         .shadow(true)

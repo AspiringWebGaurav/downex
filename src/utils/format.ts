@@ -144,3 +144,40 @@ export function getResumeCapability(
   };
 }
 
+/**
+ * Derives the `unconfirmed.{name}.downex` staging path used on disk while a download is incomplete.
+ */
+export function deriveUnconfirmedStagingPath(destPath: string): string {
+  if (!destPath) return '';
+  const sepIdx = Math.max(destPath.lastIndexOf('\\'), destPath.lastIndexOf('/'));
+  const dir = sepIdx >= 0 ? destPath.slice(0, sepIdx + 1) : '';
+  const name = sepIdx >= 0 ? destPath.slice(sepIdx + 1) : destPath;
+  if (!name) return destPath;
+  const lower = name.toLowerCase();
+  if (lower.startsWith('unconfirmed.') && lower.endsWith('.downex')) {
+    return destPath;
+  }
+  return `${dir}unconfirmed.${name}.downex`;
+}
+
+export function isUnconfirmedStagingPath(path: string): boolean {
+  if (!path) return false;
+  const sepIdx = Math.max(path.lastIndexOf('\\'), path.lastIndexOf('/'));
+  const name = (sepIdx >= 0 ? path.slice(sepIdx + 1) : path).toLowerCase();
+  return name.startsWith('unconfirmed.') && name.endsWith('.downex');
+}
+
+export function getActiveDownloadDiskPath(item: {
+  status: string;
+  destination_path: string;
+  staging_path?: string | null;
+}): string {
+  if (item.status === 'completed') {
+    return item.destination_path;
+  }
+  if (item.staging_path && item.staging_path.trim().length > 0) {
+    return item.staging_path;
+  }
+  return deriveUnconfirmedStagingPath(item.destination_path);
+}
+

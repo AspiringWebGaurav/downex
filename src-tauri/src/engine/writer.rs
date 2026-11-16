@@ -14,7 +14,8 @@ impl PositionalWriter {
         is_resume: bool,
     ) -> Result<Self, std::io::Error> {
         let path = path.as_ref().to_path_buf();
-        if let Some(parent) = path.parent() {
+        let io_path = super::staging::to_win_io_path(&path);
+        if let Some(parent) = io_path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
 
@@ -25,7 +26,7 @@ impl PositionalWriter {
         opts.read(true).write(true).create(true);
         #[cfg(target_os = "windows")]
         opts.share_mode(7); // FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE
-        let file = opts.open(&path)?;
+        let file = opts.open(&io_path)?;
 
         // Enable NTFS Sparse File allocation on Windows for instantaneous large file preallocation.
         // Prevents multi-second synchronous disk locking and system freezes on 10GB-100GB+ downloads.
