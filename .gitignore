@@ -198,6 +198,8 @@ vault/
 # ------------------------------------------------------------------------------
 .gemini/
 .antigravity/
+all-base-app/
+*-immutable-base/
 *.tmp
 *.temp
 *.bak
