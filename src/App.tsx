@@ -10,7 +10,7 @@ import { NewDownloadModal } from './components/NewDownloadModal';
 import { useDownloadStore } from './stores/downloadStore';
 import { useAppVersionStore } from './stores/appVersionStore';
 import { UpdateModal } from './components/UpdateModal';
-import { UpdateNotification } from './components/UpdateNotification';
+// import { UpdateNotification } from './components/UpdateNotification';
 import { DevUpdateSimulator } from './components/DevUpdateSimulator';
 import { PatchNotesModal } from './components/PatchNotesModal';
 import { QueueGuideModal } from './components/Modals/QueueGuideModal';
@@ -231,10 +231,10 @@ export const App: React.FC = () => {
         )}
       </div>
 
-      {/* Modals & Floating Notifications */}
+      {/* Modals & Floating Notifications (Update UX unified into 1:1 CP Header Version Lockup) */}
       <NewDownloadModal />
       <UpdateModal />
-      <UpdateNotification />
+      {/* <UpdateNotification /> */}
       <PatchNotesModal />
       <QueueGuideModal />
       <ShutdownCountdownModal />

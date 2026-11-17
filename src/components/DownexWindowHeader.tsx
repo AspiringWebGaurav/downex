@@ -1,15 +1,14 @@
-import React, { useState, useEffect } from 'react';
-import { X, Check, RefreshCw, Download, AlertTriangle, Minus } from 'lucide-react';
+import React, { useState, useEffect, useRef } from 'react';
+import { X, Minus } from 'lucide-react';
 import { minimizeToBackground } from '../services/tauriService';
 import { useAppVersionStore } from '../stores/appVersionStore';
 import { useDownloadStore } from '../stores/downloadStore';
 import { compareSemver } from '../utils/version';
 
 export const DownexWindowHeader: React.FC = () => {
-  const formattedVersion = useAppVersionStore((state) => state.formattedVersion);
   const currentVersion = useAppVersionStore((state) => state.currentVersion);
   const status = useAppVersionStore((state) => state.status);
-  const openModal = useAppVersionStore((state) => state.openModal);
+  const checkForUpdates = useAppVersionStore((state) => state.checkForUpdates);
   const [isCloseHovered, setIsCloseHovered] = useState(false);
   const [isMinimizeHovered, setIsMinimizeHovered] = useState(false);
 
@@ -18,10 +17,7 @@ export const DownexWindowHeader: React.FC = () => {
     state.items.some((i) => i.status === 'downloading' || i.status === 'probing')
   );
 
-  const hasUpdate = Boolean(status.manifest?.version) && (status.state === 'available' || status.state === 'ready') && compareSemver(status.manifest!.version, currentVersion) > 0;
-
   // Cleanly reset hover state on window blur, focus, or visibility changes
-  // to prevent stuck hover/highlight states when the UI or modal appears
   useEffect(() => {
     const clearHover = () => {
       setIsCloseHovered(false);
@@ -79,6 +75,122 @@ export const DownexWindowHeader: React.FC = () => {
     }
   };
 
+  // CP 1:1 Parity Dynamic Version UI State Machine
+  const isUpdating =
+    status.state === 'downloading' ||
+    status.state === 'verifying' ||
+    status.state === 'ready' ||
+    status.state === 'restarting';
+
+  const hasUpdate =
+    Boolean(status.targetVersion) &&
+    (status.state === 'available' || isUpdating) &&
+    compareSemver(status.targetVersion!, currentVersion) > 0;
+
+  const isChecking = status.state === 'checking';
+  const targetVersion = status.targetVersion;
+  const updateProgressPct = status.progress?.percentage || 0;
+  const isVerifying = status.state === 'verifying';
+  const isInstalling = status.state === 'ready' || status.state === 'restarting';
+  const pct = Math.min(100, Math.max(8, Math.round(updateProgressPct || 0)));
+
+  const wasManualClickRef = useRef(false);
+  const [showResultStage, setShowResultStage] = useState(false);
+  const resultTimerRef = useRef<number | null>(null);
+
+  const handleButtonClick = () => {
+    wasManualClickRef.current = true;
+    checkForUpdates(false);
+  };
+
+  const prevCheckingRef = useRef(isChecking);
+  useEffect(() => {
+    if (prevCheckingRef.current && !isChecking && !isUpdating && !hasUpdate) {
+      if (wasManualClickRef.current) {
+        setShowResultStage(true);
+        if (resultTimerRef.current !== null) {
+          window.clearTimeout(resultTimerRef.current);
+        }
+        resultTimerRef.current = window.setTimeout(() => {
+          setShowResultStage(false);
+          wasManualClickRef.current = false;
+          resultTimerRef.current = null;
+        }, 1800);
+      }
+    }
+    prevCheckingRef.current = isChecking;
+  }, [isChecking, isUpdating, hasUpdate]);
+
+  const otaStageText = (() => {
+    if (isChecking) {
+      return 'CHECKING';
+    }
+    if (showResultStage) {
+      return 'UP TO DATE';
+    }
+    return '';
+  })();
+
+  const otaStageTone = (() => {
+    if (isChecking) {
+      return 'text-zinc-600 dark:text-zinc-300 font-semibold animate-pulse';
+    }
+    return 'text-zinc-700 dark:text-zinc-200 font-semibold';
+  })();
+
+  const stagePhaseKey = otaStageText ? (isChecking ? 'checking' : 'up_to_date') : '';
+
+  const [displayedStage, setDisplayedStage] = useState(otaStageText);
+  const [displayedTone, setDisplayedTone] = useState(otaStageTone);
+  const [displayedPhaseKey, setDisplayedPhaseKey] = useState(stagePhaseKey);
+  const [stageVisible, setStageVisible] = useState(Boolean(otaStageText));
+  const hideTimerRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (hideTimerRef.current !== null) {
+      window.clearTimeout(hideTimerRef.current);
+      hideTimerRef.current = null;
+    }
+
+    if (otaStageText) {
+      setDisplayedStage(otaStageText);
+      setDisplayedTone(otaStageTone);
+      setDisplayedPhaseKey(stagePhaseKey);
+      let raf2 = 0;
+      const raf1 = window.requestAnimationFrame(() => {
+        raf2 = window.requestAnimationFrame(() => {
+          setStageVisible(true);
+        });
+      });
+      return () => {
+        window.cancelAnimationFrame(raf1);
+        window.cancelAnimationFrame(raf2);
+      };
+    }
+
+    setStageVisible(false);
+    hideTimerRef.current = window.setTimeout(() => {
+      setDisplayedStage('');
+      setDisplayedPhaseKey('');
+      hideTimerRef.current = null;
+    }, 520);
+
+    return () => {
+      if (hideTimerRef.current !== null) {
+        window.clearTimeout(hideTimerRef.current);
+        hideTimerRef.current = null;
+      }
+    };
+  }, [otaStageText, otaStageTone, stagePhaseKey]);
+
+  const rowWashClass = !otaStageText
+    ? 'opacity-0'
+    : isChecking
+    ? 'opacity-100 bg-zinc-200/40 dark:bg-zinc-800/40'
+    : 'opacity-100 bg-zinc-100/60 dark:bg-zinc-800/60';
+
+  const showShimmer = isChecking && stageVisible;
+
   return (
     <div
       className="relative h-[48px] w-full flex items-center justify-between px-3 select-none bg-white dark:bg-zinc-950 z-20 shrink-0 border-b border-zinc-200/80 dark:border-zinc-800/60"
@@ -87,164 +199,137 @@ export const DownexWindowHeader: React.FC = () => {
       <div data-tauri-drag-region className="absolute inset-0 z-0 pointer-events-auto" />
 
       {/* Left Branding: Clean Pure Logo & Wordmark */}
-      <div className="relative z-10 flex items-center gap-2 select-none mb-1.5">
+      <div className="relative z-10 flex items-center gap-2 select-none">
         <img src="/icon-arrow.png" alt="Downex" className="w-5 h-5 object-contain shrink-0" />
         <span className="font-brand text-[21px] text-zinc-900 dark:text-zinc-100 tracking-wide leading-none">
           downex
         </span>
-        {hasUpdate && (
-          <span className="relative flex h-2 w-2 shrink-0 ml-0.5" title={`Update v${status.manifest?.version || ''} Available`}>
-            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
-            <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" />
-          </span>
-        )}
       </div>
 
-      {/* Center Dynamic Status / Update Pill (GPN Pattern - Dynamic only, hidden on idle) */}
-      <div
-        className="absolute left-1/2 -translate-x-1/2 top-1/2 -translate-y-1/2 z-10 flex items-center justify-center pointer-events-auto"
-      >
-        {status.state === 'checking' && Boolean(status.isManualCheck) ? (
-          <div className="flex items-center gap-2 px-3 py-1 rounded-md bg-zinc-100 dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 text-[11px] font-mono text-zinc-600 dark:text-zinc-300 shadow-2xs select-none animate-in fade-in duration-150">
-            <RefreshCw className="w-3 h-3 animate-spin text-emerald-500 shrink-0" />
-            <span>Checking updates...</span>
-          </div>
-        ) : status.state === 'up-to-date' && Boolean(status.isManualCheck) ? (
-          <div
-            title={`Downex is up to date (${formattedVersion})`}
-            className="flex items-center gap-1.5 px-3 py-1 rounded-md bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-300/80 dark:border-emerald-800/80 text-[11px] font-mono font-medium text-emerald-700 dark:text-emerald-300 shadow-2xs select-none animate-in fade-in duration-150"
-          >
-            <Check className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 shrink-0 stroke-[2.5]" />
-            <span>Up to date • {formattedVersion}</span>
-          </div>
-        ) : status.state === 'available' && status.manifest && status.targetVersion && compareSemver(status.targetVersion, currentVersion) > 0 ? (
-          <div
-            onClick={openModal}
-            className="group relative flex items-center gap-2 pl-2.5 pr-1.5 h-7 rounded-full bg-gradient-to-r from-violet-50 via-purple-50/70 to-indigo-50 dark:from-violet-950/50 dark:via-zinc-900 dark:to-indigo-950/40 border border-violet-200/90 dark:border-violet-800/60 shadow-xs hover:border-violet-300 dark:hover:border-violet-700 transition-all cursor-pointer overflow-hidden select-none"
-            title={`Downex ${status.manifest.version} Available - Click to Review & Install`}
-          >
-            {/* Ambient Dynamic Shimmer Sweep */}
-            <div className="animate-badge-shimmer" />
+      {/* Right Controls Lockup: 1:1 CP Borderless Blended Dynamic Version UI & Window Controls */}
+      <div className="relative z-10 flex items-center gap-3 pointer-events-auto">
+        <div className="flex items-center" data-testid="header-version-lockup">
+          {isUpdating || hasUpdate ? (
+            <div
+              title={`Automated background update to v${targetVersion?.replace(/^v/, '') || ''} • ${Math.round(updateProgressPct || 0)}%`}
+              className="group relative overflow-hidden inline-flex items-center gap-1.5 px-1.5 py-1 rounded-md text-zinc-600 dark:text-zinc-300 text-[11px] font-mono font-medium leading-none select-none transition-colors duration-200"
+            >
+              {/* Hairline Bottom Progress Bar (Neutral Zinc Track & Fill, Zero Green) */}
+              <div
+                aria-hidden="true"
+                className="absolute inset-x-1 bottom-0 h-[1.5px] pointer-events-none overflow-hidden rounded-full bg-zinc-200 dark:bg-zinc-800"
+              >
+                <div
+                  className="h-full bg-zinc-600 dark:bg-zinc-300 transition-[width] duration-300 ease-out"
+                  style={{ width: `${isInstalling || isVerifying ? 100 : pct}%` }}
+                />
+              </div>
 
-            {/* Glowing Pulse Dot */}
-            <span className="relative flex h-2 w-2 shrink-0">
-              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-violet-400 opacity-75" />
-              <span className="relative inline-flex rounded-full h-2 w-2 bg-violet-600 dark:bg-violet-400" />
-            </span>
-
-            {/* Text & Version */}
-            <div className="relative z-10 flex items-center gap-1.5 text-[11px] font-medium text-violet-900 dark:text-violet-200 tracking-tight">
-              <span>Update Available</span>
-              <span className="px-1.5 py-0.5 rounded-md font-mono text-[10px] font-bold bg-violet-200/70 dark:bg-violet-900/60 text-violet-800 dark:text-violet-200 border border-violet-300/60 dark:border-violet-700/60">
-                v{status.manifest.version}
+              {/* Symmetrically Aligned Single-Line Lockup (Pure Monospace Symmetry, Zero Spinner, Zero Ellipsis) */}
+              <span className="relative z-10 inline-flex items-center leading-none whitespace-nowrap">
+                <span className="font-semibold text-zinc-700 dark:text-zinc-200 tracking-wide uppercase">
+                  {status.state === 'restarting'
+                    ? 'RESTARTING'
+                    : status.state === 'verifying'
+                    ? `VERIFYING V${targetVersion?.replace(/^v/i, '') || ''}`
+                    : isInstalling
+                    ? `INSTALLING V${targetVersion?.replace(/^v/i, '') || ''}`
+                    : targetVersion
+                    ? `UPDATING TO V${targetVersion.replace(/^v/i, '')}${updateProgressPct > 0 ? ` ${Math.round(updateProgressPct)}%` : ''}`
+                    : 'UPDATING'}
+                </span>
               </span>
             </div>
-
-            {/* Micro Action Button */}
+          ) : (
             <button
+              data-testid="header-version-btn"
               type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                openModal();
-              }}
-              className="relative z-10 flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-violet-600 hover:bg-violet-700 active:scale-95 text-white text-[10px] font-semibold shadow-2xs group-hover:shadow-xs transition-all cursor-pointer overflow-hidden shrink-0"
+              onClick={handleButtonClick}
+              disabled={isChecking}
+              title={
+                isChecking
+                  ? 'Checking GPHost Cloudflare R2 for latest release...'
+                  : 'GPHost release verified • Click to re-check'
+              }
+              className="group relative overflow-hidden inline-flex items-center px-1.5 py-1 rounded-md text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100 hover:bg-zinc-100/70 dark:hover:bg-zinc-800/70 transition-colors duration-200 cursor-pointer select-none font-mono text-[11px] font-medium leading-none"
             >
-              <div className="animate-btn-shimmer" />
-              <Download className="w-2.5 h-2.5 stroke-[2.5]" />
-              <span>Update</span>
-            </button>
-          </div>
-        ) : status.state === 'downloading' || status.state === 'verifying' ? (
-          <div
-            onClick={openModal}
-            className="group relative flex items-center gap-2 px-3 h-7 rounded-full bg-zinc-100/90 dark:bg-zinc-900 border border-zinc-200/80 dark:border-zinc-800 text-[11px] font-mono text-zinc-700 dark:text-zinc-300 shadow-xs cursor-pointer select-none overflow-hidden"
-            title="Click to view update progress"
-          >
-            <div className="animate-badge-shimmer" />
-            <RefreshCw className="w-3 h-3 animate-spin text-emerald-500 shrink-0" />
-            <span className="relative z-10 font-sans font-medium text-xs">
-              {status.state === 'verifying' ? 'Verifying...' : `Downloading ${status.progress?.percentage || 0}%`}
-            </span>
-          </div>
-        ) : status.state === 'ready' && status.targetVersion && compareSemver(status.targetVersion, currentVersion) > 0 ? (
-          <div
-            onClick={openModal}
-            className="group relative flex items-center gap-2 pl-2.5 pr-1.5 h-7 rounded-full bg-gradient-to-r from-emerald-50 via-teal-50/70 to-emerald-50 dark:from-emerald-950/50 dark:via-zinc-900 dark:to-teal-950/40 border border-emerald-200/90 dark:border-emerald-800/60 shadow-xs hover:border-emerald-300 dark:hover:border-emerald-700 transition-all cursor-pointer overflow-hidden select-none"
-            title={`Downex v${status.targetVersion} Ready - Click to Restart & Apply`}
-          >
-            {/* Ambient Dynamic Shimmer Sweep */}
-            <div className="animate-badge-shimmer" />
+              {/* Ambient Dynamic Background Wash */}
+              <div
+                aria-hidden="true"
+                className={`absolute inset-0 pointer-events-none rounded-md transition-opacity duration-500 ease-out ${rowWashClass}`}
+              />
 
-            {/* Glowing Pulse Dot */}
-            <span className="relative flex h-2 w-2 shrink-0">
-              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
-              <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-600 dark:bg-emerald-400" />
-            </span>
+              {/* Shimmer Sweep Effect (Active during checking) */}
+              {showShimmer && (
+                <div
+                  aria-hidden="true"
+                  className="absolute inset-0 pointer-events-none overflow-hidden rounded-md"
+                >
+                  <div className="h-full w-2/3 animate-shimmer-sweep bg-gradient-to-r from-transparent via-zinc-900/[0.08] dark:via-zinc-100/[0.08] to-transparent" />
+                </div>
+              )}
 
-            {/* Text & Version */}
-            <div className="relative z-10 flex items-center gap-1.5 text-[11px] font-medium text-emerald-900 dark:text-emerald-200 tracking-tight">
-              <span>Update Ready</span>
-              <span className="px-1.5 py-0.5 rounded-md font-mono text-[10px] font-bold bg-emerald-200/70 dark:bg-emerald-900/60 text-emerald-800 dark:text-emerald-200 border border-emerald-300/60 dark:border-emerald-700/60">
-                v{status.targetVersion}
+              {/* Symmetrically Aligned Single-Line Lockup */}
+              <span className="relative z-10 inline-flex items-center leading-none whitespace-nowrap gap-1.5">
+                <span className="tracking-wide uppercase">
+                  V{currentVersion?.replace(/^v/i, '')}
+                </span>
+
+                {/* Dynamic Stage Text (ScheduleMe in-place slide, fade, and expand on exact same line) */}
+                {displayedStage ? (
+                  <span
+                    data-testid="header-version-stage"
+                    className={`inline-flex items-center leading-none overflow-hidden whitespace-nowrap text-[11px] tracking-wide transition-[opacity,max-width,color] duration-500 ease-out ${displayedTone} ${
+                      stageVisible
+                        ? 'opacity-100 max-w-[120px]'
+                        : 'opacity-0 max-w-0'
+                    }`}
+                  >
+                    <span key={displayedPhaseKey} className="inline-block animate-fade-in font-semibold">
+                      {displayedStage}
+                    </span>
+                  </span>
+                ) : null}
               </span>
-            </div>
+            </button>
+          )}
+        </div>
 
-            {/* Micro Action Button */}
+        {/* Window Controls */}
+        <div className="flex items-center">
+          {hasActiveDownloads && (
             <button
               type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                openModal();
-              }}
-              className="relative z-10 flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white text-[10px] font-semibold shadow-2xs group-hover:shadow-xs transition-all cursor-pointer overflow-hidden shrink-0"
+              onClick={handleMinimizeToTray}
+              onMouseEnter={() => setIsMinimizeHovered(true)}
+              onMouseLeave={() => setIsMinimizeHovered(false)}
+              title="Minimise to System Tray (Active downloads running in background)"
+              aria-label="Minimise to System Tray"
+              className={`group relative w-8 h-6 flex items-center justify-center rounded-[2px] transition-colors duration-100 cursor-pointer focus:outline-none ${
+                isMinimizeHovered
+                  ? 'bg-zinc-200/80 dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100'
+                  : 'text-zinc-400 dark:text-zinc-500 bg-transparent'
+              }`}
             >
-              <div className="animate-btn-shimmer" />
-              <RefreshCw className="w-2.5 h-2.5 stroke-[2.5]" />
-              <span>Restart</span>
+              <Minus className="w-3.5 h-3.5 stroke-[2.2]" />
             </button>
-          </div>
-        ) : status.state === 'error' && Boolean(status.isManualCheck) ? (
-          <div className="flex items-center gap-1.5 px-3 py-1 rounded-md bg-rose-50 dark:bg-rose-950/40 border border-rose-300 dark:border-rose-800 text-[11px] font-mono text-rose-700 dark:text-rose-300 shadow-2xs select-none animate-in fade-in duration-150">
-            <AlertTriangle className="w-3 h-3 text-rose-600 shrink-0" />
-            <span>Check failed</span>
-          </div>
-        ) : null}
-      </div>
-
-      {/* Right Window Controls: Dynamic Minimise-to-Tray Button & Close Button */}
-      <div className="relative z-10 flex items-center pointer-events-auto">
-        {hasActiveDownloads && (
+          )}
           <button
             type="button"
-            onClick={handleMinimizeToTray}
-            onMouseEnter={() => setIsMinimizeHovered(true)}
-            onMouseLeave={() => setIsMinimizeHovered(false)}
-            title="Minimise to System Tray (Active downloads running in background)"
-            aria-label="Minimise to System Tray"
+            onClick={handleClose}
+            onMouseEnter={() => setIsCloseHovered(true)}
+            onMouseLeave={() => setIsCloseHovered(false)}
+            title="Close to System Tray"
+            aria-label="Close to System Tray"
             className={`group relative w-8 h-6 flex items-center justify-center rounded-[2px] transition-colors duration-100 cursor-pointer focus:outline-none ${
-              isMinimizeHovered
-                ? 'bg-zinc-200/80 dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100'
+              isCloseHovered
+                ? 'bg-[#e81123] text-white'
                 : 'text-zinc-400 dark:text-zinc-500 bg-transparent'
             }`}
           >
-            <Minus className="w-3.5 h-3.5 stroke-[2.2]" />
+            <X className="w-3.5 h-3.5 stroke-[2.2]" />
           </button>
-        )}
-        <button
-          type="button"
-          onClick={handleClose}
-          onMouseEnter={() => setIsCloseHovered(true)}
-          onMouseLeave={() => setIsCloseHovered(false)}
-          title="Close to System Tray"
-          aria-label="Close to System Tray"
-          className={`group relative w-8 h-6 flex items-center justify-center rounded-[2px] transition-colors duration-100 cursor-pointer focus:outline-none ${
-            isCloseHovered
-              ? 'bg-[#e81123] text-white'
-              : 'text-zinc-400 dark:text-zinc-500 bg-transparent'
-          }`}
-        >
-          <X className="w-3.5 h-3.5 stroke-[2.2]" />
-        </button>
+        </div>
       </div>
     </div>
   );

@@ -254,3 +254,16 @@ html.dark #root {
     transform: scale(1);
   }
 }
+
+@keyframes cpShimmerSweep {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(150%);
+  }
+}
+
+.animate-shimmer-sweep {
+  animation: cpShimmerSweep 1.8s ease-in-out infinite;
+}

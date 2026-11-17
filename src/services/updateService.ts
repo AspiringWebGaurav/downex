@@ -125,6 +125,10 @@ class UpdateService {
               targetVersion: cleanVersion(manifest.version),
               manifest,
             });
+            // Automated background update pipeline (parity with CP: zero user interaction required)
+            this.downloadAndApplyUpdate().catch((err) => {
+              console.warn('[Downex OTA] Automatic background update notice:', err);
+            });
           }
         }
       });
@@ -192,10 +196,26 @@ class UpdateService {
           patchNotesService.ingestCloudManifest(this.status.manifest);
         }).catch(() => {});
       }
+      // Parity with CP: zero user interaction required. Automatically initiate background download & apply
+      if (!this.isBusy && !this.isSimulating) {
+        setTimeout(() => {
+          if (this.status.state === 'available' && !this.isBusy) {
+            this.downloadAndApplyUpdate().catch((e) => console.warn('[Downex OTA] Automatic background download notice:', e));
+          }
+        }, 50);
+      }
     } else if (this.status.state === 'downloading') {
       setTrayIcon('downloading');
     } else if (this.status.state === 'ready') {
       setTrayIcon('ready');
+      // Parity with CP: zero user interaction required. Automatically install and restart!
+      if (!this.isBusy && !this.isSimulating) {
+        setTimeout(() => {
+          if (this.status.state === 'ready') {
+            this.installAndRestart().catch((e) => console.warn('[Downex OTA] Automatic background restart notice:', e));
+          }
+        }, 1000);
+      }
     } else if (this.status.state === 'idle' || this.status.state === 'up-to-date') {
       setTrayIcon('idle');
     }
@@ -360,6 +380,10 @@ class UpdateService {
             stagedPath: activeStaged,
             errorMessage: undefined,
           });
+          // Parity with CP: zero user interaction required. Automatically trigger install and restart
+          this.installAndRestart().catch((err) => {
+            console.warn('[Downex OTA] Automatic background install & restart notice:', err);
+          });
           return manifest;
         }
 
@@ -369,6 +393,10 @@ class UpdateService {
           targetVersion: remoteVersion,
           manifest,
           errorMessage: undefined,
+        });
+        // Parity with CP: zero user interaction required. Automatically trigger download & apply
+        this.downloadAndApplyUpdate().catch((err) => {
+          console.warn('[Downex OTA] Automatic background update notice:', err);
         });
         return manifest;
       } else {
@@ -692,6 +720,13 @@ class UpdateService {
         stagedPath,
         errorMessage: undefined,
       });
+
+      // Parity with CP: zero user interaction required. Automatically trigger install and restart!
+      setTimeout(() => {
+        this.installAndRestart().catch((err) => {
+          console.warn('[Downex OTA] Automatic background install & restart notice:', err);
+        });
+      }, 1000);
 
       return true;
     } catch (err: any) {
