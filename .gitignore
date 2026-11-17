@@ -200,6 +200,7 @@ vault/
 .antigravity/
 all-base-app/
 *-immutable-base/
+base_version.txt
 *.tmp
 *.temp
 *.bak
