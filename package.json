@@ -1,7 +1,7 @@
 {
   "name": "downex",
   "private": true,
-  "version": "0.0.0",
+  "version": "0.0.1",
   "author": "Gaurav Patil",
   "description": "Downex - Independent High-Performance Windows Download Manager",
   "type": "module",

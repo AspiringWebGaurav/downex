@@ -1,6 +1,6 @@
 [package]
 name = "downex"
-version = "0.0.0"
+version = "0.0.1"
 description = "Downex - Independent High-Performance Windows Download Manager"
 authors = ["Gaurav Patil"]
 edition = "2021"
