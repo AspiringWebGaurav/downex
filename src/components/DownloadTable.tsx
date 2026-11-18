@@ -464,8 +464,8 @@ export const DownloadTable: React.FC = () => {
                 const sample: DownloadItem = {
                   id: 'mock-completed-setup',
                   url: 'https://gphost.eu.cc/raw/downex-desktop',
-                  filename: 'Downex-0.0.0-Setup.exe',
-                  destination_path: 'C:\\Users\\namit\\Downloads\\Downex\\Downex-0.0.0-Setup.exe',
+                  filename: 'Downex-0.0.1-Setup.exe',
+                  destination_path: 'C:\\Users\\namit\\Downloads\\Downex\\Downex-0.0.1-Setup.exe',
                   total_bytes: 3562767,
                   downloaded_bytes: 3562767,
                   status: 'completed',
@@ -492,7 +492,7 @@ export const DownloadTable: React.FC = () => {
               className="mt-3.5 inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-emerald-50 hover:bg-emerald-100 dark:bg-emerald-950/60 dark:hover:bg-emerald-900/60 text-emerald-700 dark:text-emerald-300 border border-emerald-300/80 dark:border-emerald-800/80 text-xs font-semibold shadow-xs transition-all cursor-pointer hover:scale-[1.02] active:scale-[0.98]"
             >
               <ShieldCheck className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
-              <span>Load Sample Completed Download (Downex-0.0.0-Setup.exe)</span>
+              <span>Load Sample Completed Download (Downex-0.0.1-Setup.exe)</span>
             </button>
           )}
         </div>

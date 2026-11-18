@@ -2,8 +2,7 @@ import { invoke, isTauri as coreIsTauri } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { DownloadItem, DownloadProgressEvent, ReleaseManifest } from '../types/download';
 import { deriveUnconfirmedStagingPath, isUnconfirmedStagingPath } from '../utils/format';
-import { cleanVersion, compareSemver } from '../utils/version';
-import { getLatestCodebaseVersion } from '../data/patchNotes';
+import { cleanVersion, compareSemver, APP_BASE_VERSION } from '../utils/version';
 
 export function isTauriEnv(): boolean {
   if (typeof window === 'undefined') return false;
@@ -298,7 +297,7 @@ export async function isAutostartEnabled(): Promise<boolean> {
   if (!isTauri) {
     try {
       const v = localStorage.getItem('downex_autostart_enabled');
-      return v !== 'false'; // Default to true
+      return v !== 'false'; // Default to true (ON)
     } catch {
       return true;
     }
@@ -307,18 +306,45 @@ export async function isAutostartEnabled(): Promise<boolean> {
     return await invoke<boolean>('cmd_is_autostart_enabled');
   } catch (e) {
     console.warn('[Downex Autostart] Error checking status:', e);
-    return false;
+    return true; // Default to true (ON) from base app
   }
 }
 
 export async function setAutostartEnabled(enabled: boolean): Promise<boolean> {
+  try {
+    localStorage.setItem('downex_autostart_enabled', String(enabled));
+  } catch {}
   if (!isTauri) {
-    try {
-      localStorage.setItem('downex_autostart_enabled', String(enabled));
-    } catch {}
     return enabled;
   }
   return await invoke<boolean>('cmd_set_autostart', { enabled });
+}
+
+export async function getCloseToTray(): Promise<boolean> {
+  if (!isTauri) {
+    try {
+      const v = localStorage.getItem('downex_close_to_tray');
+      return v !== 'false'; // Default to true (ON)
+    } catch {
+      return true;
+    }
+  }
+  try {
+    return await invoke<boolean>('cmd_get_close_to_tray');
+  } catch (e) {
+    console.warn('[Downex] Error checking close_to_tray:', e);
+    return true; // Default to true (ON) from base app
+  }
+}
+
+export async function setCloseToTray(enabled: boolean): Promise<boolean> {
+  try {
+    localStorage.setItem('downex_close_to_tray', String(enabled));
+  } catch {}
+  if (!isTauri) {
+    return enabled;
+  }
+  return await invoke<boolean>('cmd_set_close_to_tray', { enabled });
 }
 
 
@@ -448,36 +474,58 @@ export async function checkUpdates(): Promise<ReleaseManifest | null> {
 }
 
 export async function getResolvedVersion(): Promise<string> {
-  const latestCodebase = getLatestCodebaseVersion();
+  const baseVersion = APP_BASE_VERSION;
 
   // In browser preview, web demo, or local Vite development server:
-  // Dynamically resolve to the active codebase version so dev always runs the latest
+  // Respect base version 0.0.1 unless user actively simulated/persisted a higher update
   if (!isTauri || (typeof import.meta !== 'undefined' && (import.meta as any).env?.DEV)) {
     try {
       const persisted = localStorage.getItem('downex_persisted_version');
-      if (persisted && persisted !== '0.0.0') {
+      if (persisted && persisted !== '0.0.0' && persisted !== '0.0.1') {
         const pClean = cleanVersion(persisted);
-        if (compareSemver(pClean, latestCodebase) >= 0) {
+        // Clean legacy pre-purge test versions (>= 0.0.40)
+        if (compareSemver(pClean, '0.0.40') >= 0) {
+          localStorage.removeItem('downex_persisted_version');
+          localStorage.removeItem('downex_last_known_version');
+          return baseVersion;
+        }
+        if (compareSemver(pClean, baseVersion) > 0) {
           return pClean;
         }
       }
-      return latestCodebase;
+      return baseVersion;
     } catch {
-      return latestCodebase;
+      return baseVersion;
     }
   }
 
   try {
     const nativeVer = await invoke<string>('cmd_get_resolved_version');
     const clean = cleanVersion(nativeVer);
-    // If native reports 0.0.0 (e.g. unpatched debug base), fallback dynamically to the codebase version
-    if (clean === '0.0.0') {
-      return latestCodebase;
+    // If native reports 0.0.0 or empty, fallback dynamically to base 0.0.1
+    if (clean === '0.0.0' || !clean) {
+      return baseVersion;
     }
     return clean;
   } catch {
-    return latestCodebase;
+    return baseVersion;
   }
+}
+
+export async function resetToBaseAppDev(): Promise<string> {
+  try {
+    localStorage.removeItem('downex_persisted_update_status');
+    localStorage.removeItem('downex_recently_updated');
+    localStorage.removeItem('downex_simulated_version');
+    localStorage.removeItem('downex_toast_dismissed');
+    localStorage.setItem('downex_last_known_version', APP_BASE_VERSION);
+    localStorage.setItem('downex_persisted_version', APP_BASE_VERSION);
+  } catch {}
+
+  if (!isTauri) {
+    return 'Base App v0.0.1 restored (web mode)';
+  }
+  return await invoke<string>('cmd_reset_to_base_app_dev');
 }
 
 export async function syncWindowsInstalledVersion(version?: string): Promise<string> {
@@ -486,7 +534,7 @@ export async function syncWindowsInstalledVersion(version?: string): Promise<str
       localStorage.setItem('downex_persisted_version', version);
     } catch {}
   }
-  if (!isTauri) return version || '0.0.0';
+  if (!isTauri) return version || APP_BASE_VERSION;
   return await invoke<string>('cmd_sync_windows_installed_version', { version });
 }
 
@@ -1142,69 +1190,38 @@ export function onCheckUpdatesFromTray(callback: () => void): () => void {
   };
 }
 
+export function onUiOpened(callback: () => void): () => void {
+  if (!isTauri) return () => {};
+  let isCancelled = false;
+  let unlistenFn: (() => void) | null = null;
 
-
-export interface DbPatchNoteRecord {
-  version: string;
-  title: string;
-  release_date: string;
-  highlights_json: string;
-  raw_notes?: string | null;
-  is_custom: boolean;
-  updated_at: number;
-}
-
-export async function getDbPatchNotes(): Promise<DbPatchNoteRecord[]> {
-  if (!isTauri) {
-    try {
-      const stored = localStorage.getItem('downex_mock_patch_notes');
-      return stored ? JSON.parse(stored) : [];
-    } catch {
-      return [];
+  listen('downex-ui-opened', () => {
+    if (!isCancelled) {
+      callback();
     }
-  }
-  try {
-    return await invoke<DbPatchNoteRecord[]>('cmd_get_patch_notes');
-  } catch (err) {
-    console.warn('[Downex] Failed to get patch notes from DB:', err);
-    return [];
-  }
+  })
+    .then((fn) => {
+      if (isCancelled) {
+        fn();
+      } else {
+        unlistenFn = fn;
+      }
+    })
+    .catch((err) => {
+      console.error('[Downex] Error listening to downex-ui-opened:', err);
+    });
+
+  return () => {
+    isCancelled = true;
+    if (unlistenFn) {
+      unlistenFn();
+      unlistenFn = null;
+    }
+  };
 }
 
-export async function saveDbPatchNote(note: DbPatchNoteRecord): Promise<void> {
-  if (!isTauri) {
-    try {
-      const existing = await getDbPatchNotes();
-      const filtered = existing.filter((n) => n.version !== note.version);
-      filtered.unshift(note);
-      localStorage.setItem('downex_mock_patch_notes', JSON.stringify(filtered));
-    } catch {}
-    return;
-  }
-  try {
-    await invoke('cmd_save_patch_note', { note });
-  } catch (err) {
-    console.error('[Downex] Failed to save patch note to DB:', err);
-    throw err;
-  }
-}
 
-export async function deleteDbPatchNote(version: string): Promise<void> {
-  if (!isTauri) {
-    try {
-      const existing = await getDbPatchNotes();
-      const filtered = existing.filter((n) => n.version !== version);
-      localStorage.setItem('downex_mock_patch_notes', JSON.stringify(filtered));
-    } catch {}
-    return;
-  }
-  try {
-    await invoke('cmd_delete_patch_note', { version });
-  } catch (err) {
-    console.error('[Downex] Failed to delete patch note from DB:', err);
-    throw err;
-  }
-}
+
 
 export async function triggerUninstall(): Promise<void> {
   if (!isTauri) {
@@ -1224,7 +1241,7 @@ export async function repairApplication(): Promise<void> {
 
 export async function resetToBaseVersion(): Promise<string> {
   if (!isTauri) {
-    alert('[Dev Mode] Reset to Base 0.0.0 triggered');
+    alert('[Dev Mode] Reset to Base 0.0.1 triggered');
     return 'Base reset complete (Dev Mode)';
   }
   return await invoke<string>('cmd_reset_to_base_version');

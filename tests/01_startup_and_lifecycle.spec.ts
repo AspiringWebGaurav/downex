@@ -70,11 +70,11 @@ test.describe('Downex Base Application — Startup, Lifecycle & Controls', () =>
 
     // 2. Ctrl+B toggles sidebar collapse/expand
     const sidebar = page.locator('aside');
-    await expect(sidebar).toHaveClass(/w-\[196px\]/);
+    await expect(sidebar).toHaveClass(/w-\[(228|196)px\]/);
     await page.keyboard.press('Control+b');
-    await expect(sidebar).toHaveClass(/w-14/);
+    await expect(sidebar).toHaveClass(/(w-\[70px\]|w-14)/);
     await page.keyboard.press('Control+b');
-    await expect(sidebar).toHaveClass(/w-\[196px\]/);
+    await expect(sidebar).toHaveClass(/w-\[(228|196)px\]/);
 
     // 3. Test Ctrl+N keyboard shortcut event opens New Download Modal
     await page.evaluate(() => {

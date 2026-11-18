@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { useAppVersionStore } from '../stores/appVersionStore';
 import { useDownloadStore } from '../stores/downloadStore';
 import { Button } from './ui/Button';
-import { Download, RefreshCw, X, AlertCircle, CheckCircle2, ArrowDown, FileText } from 'lucide-react';
+import { Download, RefreshCw, X, AlertCircle, CheckCircle2, ArrowDown } from 'lucide-react';
 import { formatVersion, compareSemver } from '../utils/version';
 
 export const UpdateNotification: React.FC = () => {
@@ -13,7 +13,6 @@ export const UpdateNotification: React.FC = () => {
   const downloadUpdate = useAppVersionStore((state) => state.downloadUpdate);
   const installAndRestart = useAppVersionStore((state) => state.installAndRestart);
   const checkForUpdates = useAppVersionStore((state) => state.checkForUpdates);
-  const openSettingsSubView = useDownloadStore((state) => state.openSettingsSubView);
 
   const [isActionLoading, setIsActionLoading] = useState(false);
 
@@ -162,42 +161,30 @@ export const UpdateNotification: React.FC = () => {
         )}
 
         {/* Actions Row */}
-        <div className={`flex items-center justify-between gap-2 ${status.state === 'error' ? 'border-t border-zinc-100 dark:border-zinc-800/80 pt-2.5 mt-0.5' : 'pt-0.5'}`}>
+        <div className={`flex items-center justify-end gap-2 ${status.state === 'error' ? 'border-t border-zinc-100 dark:border-zinc-800/80 pt-2.5 mt-0.5' : 'pt-0.5'}`}>
           {status.state === 'available' ? (
-            <>
-              <button
+            <div className="flex items-center gap-2 shrink-0">
+              <Button
                 type="button"
-                onClick={() => openSettingsSubView('patch-notes')}
-                className="text-xs text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100 flex items-center gap-1.5 transition-colors cursor-pointer select-none group"
-                title="View Release Changelog & New Features"
+                variant="ghost"
+                size="md"
+                onClick={dismissToast}
               >
-                <FileText className="w-3.5 h-3.5 text-zinc-400 group-hover:text-zinc-700 dark:group-hover:text-zinc-200 transition-colors" />
-                <span className="font-medium">View Patch Notes</span>
-              </button>
-
-              <div className="flex items-center gap-2 shrink-0">
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="md"
-                  onClick={dismissToast}
-                >
-                  Later
-                </Button>
-                <Button
-                  type="button"
-                  variant="primary"
-                  size="md"
-                  shimmer
-                  icon={<Download className="w-3.5 h-3.5 stroke-[2.2]" />}
-                  loading={isActionLoading}
-                  loadingText="Starting..."
-                  onClick={handleDownload}
-                >
-                  Download
-                </Button>
-              </div>
-            </>
+                Later
+              </Button>
+              <Button
+                type="button"
+                variant="primary"
+                size="md"
+                shimmer
+                icon={<Download className="w-3.5 h-3.5 stroke-[2.2]" />}
+                loading={isActionLoading}
+                loadingText="Starting..."
+                onClick={handleDownload}
+              >
+                Download
+              </Button>
+            </div>
           ) : (
             <div className="flex items-center justify-end gap-2 w-full">
               {status.state === 'ready' && (

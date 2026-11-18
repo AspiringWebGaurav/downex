@@ -184,13 +184,13 @@ pub fn write_persisted_version<R: tauri::Runtime>(
 
 /// Authoritative Dynamic Version Resolution (REA / GPN 1:1 Architecture)
 /// Resolves the installed version by checking:
-/// 1. In development builds (debug_assertions), strictly adheres to base package version ("0.0.0")
+/// 1. In development builds (debug_assertions), strictly adheres to base package version ("0.0.1")
 ///    unless an OTA update was explicitly applied via the AppData sidecar.
 /// 2. In production builds:
 ///    - PE Header of physical executable (detects physical binary replacement after NTFS atomic swap)
 ///    - AppData sidecar `installed_version.json` (written exclusively by update installer)
 ///    - SQLite Database `app_settings` (`installed_app_version`)
-///    - Base package version ("0.0.0") fallback
+///    - Base package version ("0.0.1") fallback
 ///
 /// Note: Windows Registry is strictly an OS display artifact and is NOT used as an input candidate.
 pub fn resolve_installed_version<R: tauri::Runtime>(
@@ -202,20 +202,21 @@ pub fn resolve_installed_version<R: tauri::Runtime>(
     #[cfg(debug_assertions)]
     {
         // In dev mode, check sidecar and SQLite DB before base version fallback
+        // Strictly filter out legacy pre-purge test versions (>= 0.0.40)
         if let Some(sidecar_ver) = read_sidecar_version(app) {
-            if sidecar_ver != "0.0.0" {
+            if sidecar_ver != "0.0.0" && compare_semver(&sidecar_ver, "0.0.40") == std::cmp::Ordering::Less {
                 return sidecar_ver;
             }
         }
         if let Some(db_mgr) = db {
             if let Some(db_ver) = read_db_installed_version(db_mgr) {
-                if db_ver != "0.0.0" {
+                if db_ver != "0.0.0" && compare_semver(&db_ver, "0.0.40") == std::cmp::Ordering::Less {
                     return db_ver;
                 }
             }
         } else if let Some(state) = app.try_state::<crate::AppState>() {
             if let Some(db_ver) = read_db_installed_version(&state.db) {
-                if db_ver != "0.0.0" {
+                if db_ver != "0.0.0" && compare_semver(&db_ver, "0.0.40") == std::cmp::Ordering::Less {
                     return db_ver;
                 }
             }

@@ -45,6 +45,10 @@ CREATE TABLE IF NOT EXISTS app_settings (
     updated_at INTEGER NOT NULL
 );
 
+-- Default Settings (Default ON from Base App)
+INSERT OR IGNORE INTO app_settings (key, value, updated_at) VALUES ('autostart_enabled', 'true', 0);
+INSERT OR IGNORE INTO app_settings (key, value, updated_at) VALUES ('close_to_tray', 'true', 0);
+
 -- Default Queue
 INSERT OR IGNORE INTO queues (id, name, max_concurrent_tasks, is_active)
 VALUES ('default', 'Main Download Queue', 3, 1);
@@ -104,6 +108,21 @@ pub const MIGRATIONS: &[Migration] = &[
         description: "Add staging_path column to track unconfirmed.{name}.downex staging artifacts across pause/resume",
         sql: r#"
         ALTER TABLE downloads ADD COLUMN staging_path TEXT;
+        "#,
+    },
+    Migration {
+        version: 7,
+        description: "Purge patch_notes table for pure binary parity",
+        sql: r#"
+        DROP TABLE IF EXISTS patch_notes;
+        "#,
+    },
+    Migration {
+        version: 8,
+        description: "Enforce default ON for autostart_enabled and close_to_tray from base app",
+        sql: r#"
+        INSERT OR IGNORE INTO app_settings (key, value, updated_at) VALUES ('autostart_enabled', 'true', 0);
+        INSERT OR IGNORE INTO app_settings (key, value, updated_at) VALUES ('close_to_tray', 'true', 0);
         "#,
     },
 ];

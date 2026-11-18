@@ -80,19 +80,7 @@ pub fn on_downloads_completed<R: Runtime>(app: &AppHandle<R>) {
         }
         let _ = refresh_tray_menu(app);
 
-        // 2. Dispatch Non-Intrusive Windows Native Toast Notification!
-        use tauri_plugin_notification::NotificationExt;
-        let _ = app
-            .notification()
-            .builder()
-            .title("Downex")
-            .body(format!(
-                "Downex v{} update is ready. All downloads have finished.",
-                remote_ver
-            ))
-            .show();
-
-        // 3. Emit real-time unblocked event to frontend!
+        // Emit real-time unblocked event to frontend!
         let _ = app.emit("downex-update-unblocked", &manifest);
         let _ = app.emit("downex-update-detected", &manifest);
     }
@@ -185,11 +173,18 @@ pub fn build_dynamic_tray_menu<R: Runtime>(app: &AppHandle<R>) -> Result<Menu<R>
 
     let menu = Menu::new(app)?;
 
-    // 1. Header: Application & Version Title (disabled)
+    // 1. First menu: App Version, followed by Downex Download Manager
     let version = crate::version::resolve_installed_version(app, None);
-    let header_title = format!("Downex v{}", version);
-    let header_item = MenuItem::with_id(app, "header_title", &header_title, false, None::<&str>)?;
+    let app_version_title = format!("App Version: v{}", version);
+    let version_item = MenuItem::with_id(app, "app_version", &app_version_title, true, None::<&str>)?;
+    menu.append(&version_item)?;
+
+    let header_title = "Downex Download Manager";
+    let header_item = MenuItem::with_id(app, "header_title", header_title, false, None::<&str>)?;
     menu.append(&header_item)?;
+
+    let sep_header = PredefinedMenuItem::separator(app)?;
+    menu.append(&sep_header)?;
 
     let update_state = {
         let guard = TRAY_UPDATE_STATUS.read();
@@ -436,10 +431,10 @@ pub fn setup_system_tray<R: Runtime>(app: &AppHandle<R>) -> Result<TrayIcon<R>, 
     let tray = TrayIconBuilder::with_id("main-tray")
         .icon(icon)
         .menu(&tray_menu)
-        .tooltip("Downex - Download Manager")
+        .tooltip("Downex Download Manager")
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id.as_ref() {
-            "toggle_window" => {
+            "toggle_window" | "app_version" | "header_title" => {
                 if let Some(window) = app.get_webview_window("main") {
                     let is_showing = window.is_visible().unwrap_or(false) && !window.is_minimized().unwrap_or(false);
                     if is_showing {
@@ -1018,6 +1013,7 @@ pub fn create_or_show_main_window<R: Runtime>(app: &AppHandle<R>) -> Result<taur
         if let Some(manifest) = get_pending_update_manifest() {
             let _ = app.emit("downex-update-detected", &manifest);
         }
+        let _ = app.emit("downex-ui-opened", ());
         Ok(window)
     } else {
         let icon_res = Image::from_bytes(include_bytes!("../icons/128x128.png"));
@@ -1040,6 +1036,7 @@ pub fn create_or_show_main_window<R: Runtime>(app: &AppHandle<R>) -> Result<taur
         if let Some(manifest) = get_pending_update_manifest() {
             let _ = app.emit("downex-update-detected", &manifest);
         }
+        let _ = app.emit("downex-ui-opened", ());
         Ok(window)
     }
 }

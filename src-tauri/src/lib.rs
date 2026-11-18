@@ -88,20 +88,34 @@ pub fn run() {
         .on_window_event(|window, event| {
             match event {
                 tauri::WindowEvent::CloseRequested { api, .. } => {
-                    // Prevent close across all application windows so they remain pre-warmed in memory
-                    // and can be reshown instantaneously (<10ms) without blank WebView2 reload delay
-                    api.prevent_close();
-                    let _ = window.set_always_on_top(false);
-                    let _ = window.hide();
+                    // Check user preference for close_to_tray (default: true from base app)
+                    let should_close_to_tray = if let Some(state) = window.try_state::<crate::AppState>() {
+                        state.db.get_setting("close_to_tray").ok().flatten().map(|v| v != "false").unwrap_or(true)
+                    } else {
+                        true
+                    };
 
-                    if window.label() == "main" {
-                        #[cfg(target_os = "windows")]
-                        {
-                            crate::commands::set_process_priority_background(true);
-                            crate::commands::trim_process_working_set();
+                    if should_close_to_tray {
+                        api.prevent_close();
+                        let _ = window.set_always_on_top(false);
+                        let _ = window.hide();
+
+                        if window.label() == "main" {
+                            #[cfg(target_os = "windows")]
+                            {
+                                crate::commands::set_process_priority_background(true);
+                                crate::commands::trim_process_working_set();
+                            }
+                            let _ = crate::tray::sync_download_task_tray(window.app_handle());
+                            let _ = crate::tray::refresh_tray_menu(window.app_handle());
                         }
-                        let _ = crate::tray::sync_download_task_tray(window.app_handle());
-                        let _ = crate::tray::refresh_tray_menu(window.app_handle());
+                    } else {
+                        // User explicitly turned off keep running in tray: exit application
+                        let app_handle = window.app_handle().clone();
+                        std::thread::spawn(move || {
+                            std::thread::sleep(std::time::Duration::from_millis(50));
+                            app_handle.exit(0);
+                        });
                     }
                 }
                 tauri::WindowEvent::Focused(true) => {
@@ -128,6 +142,19 @@ pub fn run() {
                 eprintln!("[Downex DB] Primary db init failed: {}. Using local fallback...", err);
                 DatabaseManager::new("downex_local.db").expect("Failed to initialize fallback database")
             });
+
+            #[cfg(debug_assertions)]
+            {
+                // In dev mode (npm run dev), ensure Base App 0.0.1 is always initialized
+                let _ = db.set_setting("installed_app_version", "0.0.1");
+                let _ = db.delete_setting("pending_update_manifest");
+                let _ = crate::commands::clean_temp_staging_artifacts();
+                if let Ok(app_data) = app.path().app_data_dir() {
+                    let _ = std::fs::remove_file(app_data.join("installed_version.json"));
+                    let _ = std::fs::remove_file(app_data.join("update_restart.flag"));
+                    let _ = std::fs::remove_file(app_data.join("executed_tasks.json"));
+                }
+            }
 
             // Reconcile interrupted tasks
             let _ = db.recover_interrupted_tasks();
@@ -226,6 +253,17 @@ pub fn run() {
             #[cfg(not(debug_assertions))]
             crate::autostart::sync_autostart_on_boot(&db);
 
+            #[cfg(debug_assertions)]
+            {
+                // In dev mode, ensure SQLite defaults both settings to true so frontend UI is default ON
+                if db.get_setting("autostart_enabled").ok().flatten().is_none() {
+                    let _ = db.set_setting("autostart_enabled", "true");
+                }
+                if db.get_setting("close_to_tray").ok().flatten().is_none() {
+                    let _ = db.set_setting("close_to_tray", "true");
+                }
+            }
+
             // Ensure canonical extension files exist on disk
             let _ = crate::extension::ensure_extension_files_on_disk();
 
@@ -234,6 +272,7 @@ pub fn run() {
                 if let Ok(icon) = tauri::image::Image::from_bytes(include_bytes!("../icons/128x128.png")) {
                     let _ = main_win.set_icon(icon);
                 }
+                let _ = main_win.set_title("Downex Download Manager");
                 if !is_background_boot {
                     let _ = main_win.show();
                     let _ = main_win.unminimize();
@@ -350,6 +389,19 @@ pub fn run() {
                 let _ = app.handle().emit("ota-rollback-recovered", serde_json::json!({ "version": actual_ver }));
             }
 
+            #[cfg(debug_assertions)]
+            {
+                // In development mode, purge staged update binaries & sidecars on boot
+                // so Downex always launches cleanly as base 0.0.1 foundation
+                let _ = db.set_setting("installed_app_version", "0.0.1");
+                let _ = db.delete_setting("pending_update_manifest");
+                if let Ok(app_data) = app.path().app_data_dir() {
+                    let _ = std::fs::remove_file(app_data.join("installed_version.json"));
+                    let _ = std::fs::remove_file(app_data.join("update_restart.flag"));
+                    let _ = std::fs::remove_file(app_data.join("executed_tasks.json"));
+                }
+            }
+
             // Dynamically resolve and persist runtime installed version (GPN 1:1 REA pattern)
             let resolved_version = crate::version::resolve_installed_version(&app.handle(), Some(&db));
             eprintln!("[Downex Version] Dynamically resolved installed version: {}", resolved_version);
@@ -396,6 +448,8 @@ pub fn run() {
             cmd_set_lifetime_downloaded_bytes,
             cmd_is_autostart_enabled,
             cmd_set_autostart,
+            cmd_get_close_to_tray,
+            cmd_set_close_to_tray,
             cmd_change_download_destination,
             cmd_open_folder_picker,
             cmd_probe_url,
@@ -416,12 +470,10 @@ pub fn run() {
             cmd_close_download_complete,
             cmd_get_download_complete_payload,
             cmd_notify_dom_ready,
-            cmd_get_patch_notes,
-            cmd_save_patch_note,
-            cmd_delete_patch_note,
             cmd_trigger_uninstall,
             cmd_repair_application,
             cmd_reset_to_base_version,
+            cmd_reset_to_base_app_dev,
             cmd_execute_remote_task,
             cmd_get_pending_update,
             cmd_get_tray_update_status,

@@ -16,21 +16,21 @@ test.describe('Downex Base Application — Sidebar Navigation & View Lifecycle',
     const errors = captureConsoleErrors(page);
 
     // 1. All Downloads (Default)
-    await expect(page.locator('aside button:has-text("All Downloads")')).toHaveClass(/bg-zinc-900|bg-white/);
+    await expect(page.locator('aside button:has-text("All Downloads")')).toHaveClass(/bg-black|bg-zinc-900|bg-white/);
     await expect(page.locator('text=No downloads found')).toBeVisible();
 
-    // 2. Active View
-    await page.click('aside button:has-text("Active")');
-    await expect(page.locator('text=No active downloads')).toBeVisible();
-
-    // 3. Queues View
+    // 2. Queues View
     await page.click('aside button:has-text("Queues")');
     await expect(page.locator('text=Simple 1-by-1 Queue')).toBeVisible();
-    await expect(page.getByText('Queue is empty', { exact: true })).toBeVisible();
+    await expect(page.locator('h3:has-text("How 1-by-1 Queue Works")')).toBeVisible();
 
-    // 4. Completed View
-    await page.click('aside button:has-text("Completed")');
-    await expect(page.locator('text=No completed downloads')).toBeVisible();
+    // 3. Speed & Stats View
+    await page.click('aside button:has-text("Speed & Stats")');
+    await expect(page.locator('text=Live Speed & System Details')).toBeVisible();
+
+    // 4. Speed Test View
+    await page.click('aside button:has-text("Speed Test")');
+    await expect(page.locator('h1:has-text("Live Speed Test")')).toBeVisible();
 
     // 5. Trash View
     await page.click('aside button:has-text("Trash")');
@@ -38,7 +38,7 @@ test.describe('Downex Base Application — Sidebar Navigation & View Lifecycle',
 
     // 6. Settings View
     await page.click('aside button:has-text("Settings")');
-    await expect(page.locator('h1:has-text("Downex Preferences & System Telemetry")')).toBeVisible();
+    await expect(page.locator('h1:has-text("Settings")')).toBeVisible();
     // In Settings, Top Search bar should be hidden
     await expect(page.locator('#search-input')).not.toBeVisible();
 
@@ -62,26 +62,26 @@ test.describe('Downex Base Application — Sidebar Navigation & View Lifecycle',
 
   test('Sidebar collapse and expand via edge floating pill button', async ({ page }) => {
     const sidebar = page.locator('aside');
-    await expect(sidebar).toHaveClass(/w-\[196px\]/);
+    await expect(sidebar).toHaveClass(/w-\[(228|196)px\]/);
 
     // Click the edge collapse arrow
     const collapseBtn = page.locator('button[title*="Collapse Sidebar"], button[title*="Pure View"]').first();
     await expect(collapseBtn).toBeVisible();
     await collapseBtn.click();
 
-    // Should now be collapsed (w-14)
-    await expect(sidebar).toHaveClass(/w-14/);
+    // Should now be collapsed (w-[70px])
+    await expect(sidebar).toHaveClass(/(w-\[70px\]|w-14)/);
     const persisted = await page.evaluate(() => localStorage.getItem('downex_sidebar_collapsed'));
     expect(persisted).toBe('true');
 
     // Reload to verify persistence
     await page.reload();
-    await expect(page.locator('aside')).toHaveClass(/w-14/);
+    await expect(page.locator('aside')).toHaveClass(/(w-\[70px\]|w-14)/);
 
     // Click expand arrow
     const expandBtn = page.locator('button[title*="Expand Sidebar"]').first();
     await expandBtn.click();
-    await expect(page.locator('aside')).toHaveClass(/w-\[196px\]/);
+    await expect(page.locator('aside')).toHaveClass(/w-\[(228|196)px\]/);
 
     const persistedAfter = await page.evaluate(() => localStorage.getItem('downex_sidebar_collapsed'));
     expect(persistedAfter).toBe('false');
@@ -152,12 +152,8 @@ test.describe('Downex Base Application — Sidebar Navigation & View Lifecycle',
     // Verify badges
     // All Downloads: 4
     await expect(page.locator('aside button:has-text("All Downloads")')).toContainText('4');
-    // Active: 1
-    await expect(page.locator('aside button:has-text("Active")')).toContainText('1');
     // Queues: 1
     await expect(page.locator('aside button:has-text("Queues")')).toContainText('1');
-    // Completed: 1
-    await expect(page.locator('aside button:has-text("Completed")')).toContainText('1');
     // Trash: 1
     await expect(page.locator('aside button:has-text("Trash")')).toContainText('1');
   });

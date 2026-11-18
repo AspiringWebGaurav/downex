@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import { Button } from './components/ui/Button';
 import { Plus, ShieldAlert, X } from 'lucide-react';
 import { DownexWindowHeader } from './components/DownexWindowHeader';
@@ -9,23 +9,34 @@ import { TelemetryWidget } from './components/TelemetryWidget';
 import { NewDownloadModal } from './components/NewDownloadModal';
 import { useDownloadStore } from './stores/downloadStore';
 import { useAppVersionStore } from './stores/appVersionStore';
-import { UpdateModal } from './components/UpdateModal';
-// import { UpdateNotification } from './components/UpdateNotification';
 import { DevUpdateSimulator } from './components/DevUpdateSimulator';
-import { PatchNotesModal } from './components/PatchNotesModal';
 import { QueueGuideModal } from './components/Modals/QueueGuideModal';
 import { ShutdownCountdownModal } from './components/Modals/ShutdownCountdownModal';
 import { SettingsView } from './components/SettingsView';
 import { TelemetryView } from './components/TelemetryView';
 import { SpeedtestView } from './components/SpeedtestView';
-import { onOpenNewDownloadModal, restoreManagerWindow, onNavigate, onCheckUpdatesFromTray, onOtaRollbackRecovered, notifyDomReady } from './services/tauriService';
+import { onOpenNewDownloadModal, restoreManagerWindow, onNavigate, onCheckUpdatesFromTray, onOtaRollbackRecovered, notifyDomReady, onUiOpened } from './services/tauriService';
 import './App.css';
 
 export const App: React.FC = () => {
   const [darkMode, setDarkMode] = useState(() => {
-    const saved = localStorage.getItem('downex_theme');
-    return saved === 'dark'; // Default is light theme
+    try {
+      const explicit = localStorage.getItem('downex_theme_explicit');
+      if (explicit === 'true') {
+        return localStorage.getItem('downex_theme') === 'dark';
+      }
+      return false; // Default: Light theme
+    } catch {
+      return false;
+    }
   });
+
+  const handleSetDarkMode = useCallback((val: boolean) => {
+    try {
+      localStorage.setItem('downex_theme_explicit', 'true');
+    } catch {}
+    setDarkMode(val);
+  }, []);
   const loadItems = useDownloadStore((state) => state.loadItems);
   const initListener = useDownloadStore((state) => state.initListener);
   const initVersion = useAppVersionStore((state) => state.initVersion);
@@ -47,7 +58,12 @@ export const App: React.FC = () => {
     loadItems();
     const unlisten = initListener();
 
-    // Re-check updates when window regains focus if > 30s elapsed (GPN pattern)
+    // 1. Initial UI Open / Startup: Trigger update check with polished shimmer effect (matching CP)
+    const startupCheckTimer = setTimeout(() => {
+      useAppVersionStore.getState().checkForUpdates(false);
+    }, 200);
+
+    // 2. Window Focus & Visibility: Check when unminimized or focused (throttled to 15s)
     let lastFocusCheck = Date.now();
     const handleFocus = () => {
       // Clear any stuck button focus state upon window regaining focus
@@ -55,9 +71,18 @@ export const App: React.FC = () => {
         document.activeElement.blur();
       }
       const now = Date.now();
-      if (now - lastFocusCheck > 30000) {
+      if (now - lastFocusCheck > 15000) {
         lastFocusCheck = now;
-        useAppVersionStore.getState().checkForUpdates(true);
+        useAppVersionStore.getState().checkForUpdates(false);
+      }
+    };
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        const now = Date.now();
+        if (now - lastFocusCheck > 15000) {
+          lastFocusCheck = now;
+          useAppVersionStore.getState().checkForUpdates(false);
+        }
       }
     };
     const handleBlur = () => {
@@ -67,14 +92,17 @@ export const App: React.FC = () => {
     };
     window.addEventListener('focus', handleFocus);
     window.addEventListener('blur', handleBlur);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
 
     // Notify native Rust backend that DOM is rendered: Rust reveals the window
     // smoothly if interactive boot, or keeps window hidden if --background/--silent boot
     notifyDomReady().catch(() => {});
 
     return () => {
+      clearTimeout(startupCheckTimer);
       window.removeEventListener('focus', handleFocus);
       window.removeEventListener('blur', handleBlur);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
       unlisten();
     };
   }, [initVersion, loadItems, initListener]);
@@ -141,6 +169,11 @@ export const App: React.FC = () => {
       await useAppVersionStore.getState().checkForUpdates(false);
     });
 
+    // 3. System Tray Click / Reveal: Trigger update check whenever user opens UI from tray
+    const unlistenUiOpened = onUiOpened(async () => {
+      await useAppVersionStore.getState().checkForUpdates(false);
+    });
+
     const unlistenRollback = onOtaRollbackRecovered((payload) => {
       setRollbackAlert(payload.version || 'Previous Stable');
     });
@@ -151,19 +184,20 @@ export const App: React.FC = () => {
       unlistenTrayModal();
       unlistenNavigate();
       unlistenCheckUpdates();
+      unlistenUiOpened();
       unlistenRollback();
     };
   }, [setNewModalOpen, openNewModalWithData, setSelectedView]);
 
   return (
     <div className="w-screen h-screen flex flex-col bg-white dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 overflow-hidden font-sans">
-      {/* GPN-Style Frameless Window Header with Close X Button */}
+      {/* ONE Continuous Top Header Line across full window width */}
       <DownexWindowHeader />
 
-      {/* Main App Body */}
+      {/* Main App Body below Top Line */}
       <div className="flex-1 flex relative min-h-0 z-20">
         {/* Left Navigation Sidebar */}
-        <DownexSidebar darkMode={darkMode} setDarkMode={setDarkMode} />
+        <DownexSidebar darkMode={darkMode} setDarkMode={handleSetDarkMode} />
 
         {/* Center Workspace */}
         <main className="flex-1 flex flex-col min-h-0 h-full overflow-hidden bg-white dark:bg-zinc-950">
@@ -185,7 +219,7 @@ export const App: React.FC = () => {
             </div>
           )}
           {selectedView === 'settings' ? (
-            <SettingsView darkMode={darkMode} setDarkMode={setDarkMode} />
+            <SettingsView darkMode={darkMode} setDarkMode={handleSetDarkMode} />
           ) : selectedView === 'telemetry' ? (
             <TelemetryView onBack={() => setSelectedView('settings')} />
           ) : selectedView === 'speedtest' ? (
@@ -195,18 +229,7 @@ export const App: React.FC = () => {
               {/* Top Control Bar */}
               <div className="h-14 px-4 flex items-center justify-between border-b border-zinc-100 dark:border-zinc-800/60 shrink-0 gap-3">
                 {/* In-App Search Bar */}
-                <InAppSearchBar darkMode={darkMode} setDarkMode={setDarkMode} />
-
-
-
-
-
-
-
-
-
-
-
+                <InAppSearchBar darkMode={darkMode} setDarkMode={handleSetDarkMode} />
 
                 {/* New Download Action Button */}
                 <Button
@@ -231,11 +254,8 @@ export const App: React.FC = () => {
         )}
       </div>
 
-      {/* Modals & Floating Notifications (Update UX unified into 1:1 CP Header Version Lockup) */}
+      {/* Modals & Floating Notifications */}
       <NewDownloadModal />
-      <UpdateModal />
-      {/* <UpdateNotification /> */}
-      <PatchNotesModal />
       <QueueGuideModal />
       <ShutdownCountdownModal />
       <DevUpdateSimulator />

@@ -160,9 +160,10 @@ export const DownloadDialogWindow: React.FC = () => {
   const [activeScenarioId, setActiveScenarioId] = useState<string>('iso');
   const [isDarkTheme, setIsDarkTheme] = useState<boolean>(() => {
     try {
-      return localStorage.getItem('downex_theme') !== 'light';
+      const explicit = localStorage.getItem('downex_theme_explicit');
+      return explicit === 'true' && localStorage.getItem('downex_theme') === 'dark';
     } catch {
-      return true;
+      return false;
     }
   });
   const [toastMessage, setToastMessage] = useState<string | null>(null);
@@ -193,10 +194,8 @@ export const DownloadDialogWindow: React.FC = () => {
   useEffect(() => {
     if (isDarkTheme) {
       document.documentElement.classList.add('dark');
-      localStorage.setItem('downex_theme', 'dark');
     } else {
       document.documentElement.classList.remove('dark');
-      localStorage.setItem('downex_theme', 'light');
     }
   }, [isDarkTheme]);
 

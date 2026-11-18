@@ -1,6 +1,7 @@
 use crate::db::DownloadRecord;
 use crate::ota::{check_latest_release, ReleaseManifest};
 use crate::AppState;
+use std::io::Write;
 use std::sync::Mutex;
 use tauri::{AppHandle, Emitter, Manager, State};
 
@@ -177,10 +178,13 @@ pub fn cmd_set_lifetime_downloaded_bytes(bytes: u64, state: State<'_, AppState>)
 #[tauri::command]
 pub fn cmd_is_autostart_enabled(state: State<'_, AppState>) -> Result<bool, String> {
     if let Ok(Some(val)) = state.db.get_setting("autostart_enabled") {
-        return Ok(val == "true");
+        return Ok(val != "false");
     }
-    // Fall back to actual registry status if not recorded in SQLite yet
-    Ok(crate::autostart::is_autostart_registered())
+    // Default to true (ON) from base app
+    let _ = state.db.set_setting("autostart_enabled", "true");
+    #[cfg(target_os = "windows")]
+    let _ = crate::autostart::set_autostart_registered(true);
+    Ok(true)
 }
 
 #[tauri::command]
@@ -191,6 +195,23 @@ pub fn cmd_set_autostart(app: AppHandle, enabled: bool, state: State<'_, AppStat
     crate::autostart::set_autostart_registered(enabled)?;
 
     let _ = app.emit("autostart-status-changed", serde_json::json!({ "enabled": enabled }));
+    Ok(enabled)
+}
+
+#[tauri::command]
+pub fn cmd_get_close_to_tray(state: State<'_, AppState>) -> Result<bool, String> {
+    if let Ok(Some(val)) = state.db.get_setting("close_to_tray") {
+        return Ok(val != "false");
+    }
+    // Default to true (ON) from base app
+    let _ = state.db.set_setting("close_to_tray", "true");
+    Ok(true)
+}
+
+#[tauri::command]
+pub fn cmd_set_close_to_tray(enabled: bool, state: State<'_, AppState>) -> Result<bool, String> {
+    state.db.set_setting("close_to_tray", if enabled { "true" } else { "false" })
+        .map_err(|e| e.to_string())?;
     Ok(enabled)
 }
 
@@ -596,39 +617,34 @@ pub fn cmd_apply_in_process_update(
 ) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
-        use std::io::Write;
-        use std::os::windows::process::CommandExt;
-
-        // Fail-safe protection: Never apply update while downloads are in progress!
+        // 1. Fail-safe protection: Never apply update while downloads are in progress!
         if let Some(state) = app.try_state::<crate::AppState>() {
             if state.queue_manager.has_active_downloads() {
                 return Err("Cannot apply update and restart while downloads are in progress. Please wait for downloads to complete or pause them first.".to_string());
             }
         }
 
-        // Atomic guard so we never attempt duplicate swap
+        // 2. Atomic guard so we never attempt duplicate swap
         static UPDATE_APPLIED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
         if UPDATE_APPLIED.swap(true, std::sync::atomic::Ordering::SeqCst) {
             eprintln!("[Downex OTA] Update swap already in progress or completed, ignoring duplicate call");
             return Ok(());
         }
 
-        let effective_staging_path = staging_path.clone()
-            .or_else(|| {
-                // Fallback: look in temp directory for any staged Downex binary
-                let temp_dir = std::env::temp_dir().join("com.downex.manager");
-                if let Ok(entries) = std::fs::read_dir(&temp_dir) {
-                    for entry in entries.flatten() {
-                        let path = entry.path();
-                        if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                            if name.starts_with("downex-v") && name.ends_with(".staged.exe") {
-                                return Some(path.to_string_lossy().to_string());
-                            }
+        let effective_staging_path = staging_path.clone().or_else(|| {
+            let temp_dir = std::env::temp_dir().join("com.downex.manager");
+            if let Ok(entries) = std::fs::read_dir(&temp_dir) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                        if name.starts_with("downex-v") && name.ends_with(".staged.exe") {
+                            return Some(path.to_string_lossy().to_string());
                         }
                     }
                 }
-                None
-            });
+            }
+            None
+        });
 
         let bytes = if let Some(b) = binary_bytes {
             b
@@ -645,284 +661,219 @@ pub fn cmd_apply_in_process_update(
             return Err("Neither binary_bytes nor staging_path was provided".to_string());
         };
 
-        eprintln!("[Downex OTA] Starting in-process atomic shadow swap with {} bytes", bytes.len());
-
-        // 2. Pre-sync Windows Installed Apps registry, SQLite app_settings, and AppData sidecar
-        if let Some(ref ver) = target_version {
-            crate::version::write_persisted_version(&app, None, ver);
-        }
-
-        // 3. Sanity check: payload must not be trivial
+        // 3. Sanity check: payload must not be trivial (> 512KB) and must be PE (MZ)
         if bytes.len() < 1024 * 512 {
             UPDATE_APPLIED.store(false, std::sync::atomic::Ordering::SeqCst);
             return Err("Invalid update payload: binary size is unexpectedly small".to_string());
         }
 
-        // 4. Validate Windows PE signature (MZ header)
         if bytes.len() < 2 || bytes[0] != b'M' || bytes[1] != b'Z' {
             UPDATE_APPLIED.store(false, std::sync::atomic::Ordering::SeqCst);
             return Err("Invalid update payload: missing Windows executable PE header (MZ)".to_string());
         }
 
-        // 5. Resolve currently executing file path
-        let current_exe = match std::env::current_exe() {
-            Ok(p) => p,
-            Err(e) => {
-                UPDATE_APPLIED.store(false, std::sync::atomic::Ordering::SeqCst);
-                return Err(format!("Could not resolve current executable path: {}", e));
+        let clean_ver = target_version
+            .as_deref()
+            .map(|v| v.trim().trim_start_matches('v').to_string())
+            .unwrap_or_else(|| "0.0.1".to_string());
+
+        // 4. Pre-sync Windows Installed Apps registry, SQLite app_settings, and AppData sidecar
+        crate::version::write_persisted_version(&app, None, &clean_ver);
+        sync_windows_installed_version(&clean_ver);
+
+        // 5. Development Mode (1:1 ScheduleMe Dev Lifecycle):
+        // In dev mode (debug_assertions), signal supervisor via update_restart.flag and exit cleanly.
+        #[cfg(debug_assertions)]
+        {
+            let temp_dir = std::env::temp_dir().join("com.downex.manager");
+            let _ = std::fs::create_dir_all(&temp_dir);
+            let _ = std::fs::write(temp_dir.join("update_restart.flag"), clean_ver.as_bytes());
+
+            if let Ok(app_data) = app.path().app_data_dir() {
+                let _ = std::fs::create_dir_all(&app_data);
+                let _ = std::fs::write(app_data.join("update_restart.flag"), clean_ver.as_bytes());
             }
-        };
 
-        let parent_dir = match current_exe.parent() {
-            Some(p) => p.to_path_buf(),
-            None => {
-                UPDATE_APPLIED.store(false, std::sync::atomic::Ordering::SeqCst);
-                return Err("Could not resolve executable directory".to_string());
+            if let Some(ref p) = effective_staging_path {
+                let _ = std::fs::remove_file(p);
             }
-        };
 
-        let file_name = match current_exe.file_name() {
-            Some(n) => n.to_string_lossy().to_string(),
-            None => {
-                UPDATE_APPLIED.store(false, std::sync::atomic::Ordering::SeqCst);
-                return Err("Could not determine executable name".to_string());
+            eprintln!("[Downex OTA Dev] Dev update applied (v{}). Closing windows for supervisor restart.", clean_ver);
+
+            for (_label, window) in app.webview_windows() {
+                let _ = window.destroy();
             }
-        };
 
-        let old_exe = parent_dir.join(format!("{}.old", file_name));
-        let tmp_exe = parent_dir.join(format!("{}.tmp", file_name));
-
-        // Clean any leftover tmp or old file
-        if tmp_exe.exists() {
-            let _ = std::fs::remove_file(&tmp_exe);
+            let app_clone = app.clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_millis(150));
+                app_clone.exit(0);
+                std::process::exit(0);
+            });
+            return Ok(());
         }
-        if old_exe.exists() {
+
+        // 6. Production Mode (ScheduleMe 1:1 In-Process Atomic NTFS Swap + Direct Detached Spawn)
+        #[cfg(not(debug_assertions))]
+        {
+            let current_exe = match std::env::current_exe() {
+                Ok(p) => p,
+                Err(e) => {
+                    UPDATE_APPLIED.store(false, std::sync::atomic::Ordering::SeqCst);
+                    return Err(format!("Could not resolve current executable path: {}", e));
+                }
+            };
+
+            let parent_dir = match current_exe.parent() {
+                Some(p) => p.to_path_buf(),
+                None => {
+                    UPDATE_APPLIED.store(false, std::sync::atomic::Ordering::SeqCst);
+                    return Err("Could not resolve executable directory".to_string());
+                }
+            };
+
+            let file_name = match current_exe.file_name() {
+                Some(n) => n.to_string_lossy().to_string(),
+                None => {
+                    UPDATE_APPLIED.store(false, std::sync::atomic::Ordering::SeqCst);
+                    return Err("Could not determine executable name".to_string());
+                }
+            };
+
+            let old_exe = parent_dir.join(format!("{}.old", file_name));
+            let new_exe = parent_dir.join(format!("{}.new", file_name));
             let _ = std::fs::remove_file(&old_exe);
-        }
+            let _ = std::fs::remove_file(&new_exe);
 
-        // 6. Stage verified binary into temporary staging file first
-        let stage_write_ok = (|| -> Result<(), std::io::Error> {
-            let mut file = std::fs::File::create(&tmp_exe)?;
-            file.write_all(&bytes)?;
-            file.flush()?;
-            Ok(())
-        })().is_ok();
-
-        // If local parent_dir write failed (e.g. Program Files permission boundary), use temp staging
-        let active_staged_file = if stage_write_ok {
-            tmp_exe.clone()
-        } else if let Some(ref path_str) = effective_staging_path {
-            std::path::PathBuf::from(path_str)
-        } else {
-            let fallback = std::env::temp_dir().join("com.downex.manager").join("downex_handoff.staged.exe");
-            let _ = std::fs::write(&fallback, &bytes);
-            fallback
-        };
-
-        // 7. Atomic Swap with Self-Healing Supervisor Fallback
-        // Try in-process NTFS rename first (fastest path if executable has FILE_SHARE_DELETE and no external lock)
-        let in_process_swap_ok = match std::fs::rename(&current_exe, &old_exe) {
-            Ok(_) => {
-                if let Err(e) = std::fs::rename(&active_staged_file, &current_exe) {
-                    eprintln!("[Downex OTA] Could not move staged file to current exe: {}. Reverting...", e);
-                    let _ = std::fs::rename(&old_exe, &current_exe);
-                    false
-                } else {
-                    true
-                }
-            }
-            Err(e) => {
-                eprintln!("[Downex OTA] In-process rename skipped/locked: {}. Watchdog supervisor will perform swap post-exit.", e);
-                false
-            }
-        };
-
-        eprintln!("[Downex OTA] In-process swap status: {}. Spawning self-healing supervisor...", in_process_swap_ok);
-
-        // 8. Spawn Resilient Self-Healing Watchdog Supervisor from clean staged script file:
-        let pid = std::process::id();
-        let exe_str = current_exe.to_string_lossy().to_string();
-        let old_str = old_exe.to_string_lossy().to_string();
-        let staged_str = active_staged_file.to_string_lossy().to_string();
-        let dir_str = parent_dir.to_string_lossy().to_string();
-
-        let temp_dir = std::env::temp_dir().join("com.downex.manager");
-        let _ = std::fs::create_dir_all(&temp_dir);
-        let watchdog_file = temp_dir.join(format!("watchdog_{}.ps1", pid));
-
-        let in_process_str = if in_process_swap_ok { "$true" } else { "$false" };
-
-        let watchdog_content = format!(
-            r#"# Downex Self-Healing Watchdog Supervisor
-$oldPid = {pid}
-$exe = '{exe}'
-$old = '{old}'
-$staged = '{staged}'
-$dir = '{dir}'
-$inProcessOk = {in_process_flag}
-$log = Join-Path $env:TEMP 'com.downex.manager\watchdog.log'
-
-function Write-Log($msg) {{
-    $ts = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss.fff')
-    Add-Content -Path $log -Value "[$ts] $msg" -ErrorAction SilentlyContinue
-}}
-
-Write-Log "Watchdog started for PID $oldPid. Target exe: $exe (InProcessSwap: $inProcessOk)"
-
-# 1. Wait for old parent process to exit completely (up to 4s)
-$terminated = $false
-for ($i = 0; $i -lt 40; $i++) {{
-    if (-not (Get-Process -Id $oldPid -ErrorAction SilentlyContinue)) {{
-        $terminated = $true
-        break
-    }}
-    Start-Sleep -Milliseconds 100
-}}
-if (-not $terminated) {{
-    Write-Log "Old PID $oldPid did not exit within 4s. Force terminating..."
-    Stop-Process -Id $oldPid -Force -ErrorAction SilentlyContinue
-    Start-Sleep -Milliseconds 400
-}}
-Write-Log "Old PID $oldPid terminated."
-
-# 2. Terminate any lingering background Downex instances so file locks and single-instance pipes are clean
-Get-Process -Name "Downex","downex" -ErrorAction SilentlyContinue | Where-Object {{ $_.Id -ne $PID }} | Stop-Process -Force -ErrorAction SilentlyContinue
-Start-Sleep -Milliseconds 400
-
-# 3. If in-process swap didn't happen, complete swap now that all handles are closed!
-if (-not $inProcessOk -and (Test-Path $staged)) {{
-    Write-Log "Completing binary placement from $staged to $exe..."
-    $placed = $false
-    try {{
-        if (Test-Path $exe) {{
-            Move-Item -Path $exe -Destination $old -Force -ErrorAction Stop
-        }}
-        Move-Item -Path $staged -Destination $exe -Force -ErrorAction Stop
-        $placed = $true
-        Write-Log "Binary placed successfully."
-    }} catch {{
-        Write-Log "Standard placement failed ($($_.Exception.Message)). Attempting elevated UAC handoff..."
-        try {{
-            # Request Administrator elevation via UAC (-Verb RunAs) to update protected folder
-            $uacCmd = "if (Test-Path '$exe') {{ Move-Item -Path '$exe' -Destination '$old' -Force }}; Move-Item -Path '$staged' -Destination '$exe' -Force; Start-Process -FilePath '$exe' -WorkingDirectory '$dir' -ArgumentList '--restarted-after-update'"
-            $elevatedProc = Start-Process powershell.exe -Verb RunAs -ArgumentList "-NoProfile", "-WindowStyle", "Hidden", "-Command", $uacCmd -PassThru -Wait
-            if ($elevatedProc.ExitCode -eq 0) {{
-                Write-Log "Elevated placement succeeded."
-                exit
-            }}
-        }} catch {{
-            Write-Log "Elevated placement failed or was declined: $($_.Exception.Message)"
-        }}
-    }}
-}}
-
-# 4. Clean temporary staging file (preserve $old until stability is proven!)
-if (Test-Path $staged) {{
-    Remove-Item -Path $staged -Force -ErrorAction SilentlyContinue
-}}
-
-# 5. Launch updated application binary (with resilient health check & automatic self-healing rollback)
-$launchedSuccessfully = $false
-for ($attempt = 1; $attempt -le 4; $attempt++) {{
-    Write-Log "Launch attempt $attempt for $exe..."
-    $p = Start-Process -FilePath $exe -WorkingDirectory $dir -ArgumentList "--restarted-after-update" -PassThru
-    Start-Sleep -Milliseconds 2000
-    if ($p) {{
-        $proc = Get-Process -Id $p.Id -ErrorAction SilentlyContinue
-        if ($proc -and (-not $proc.HasExited)) {{
-            Write-Log "Application launched and running stably with PID $($p.Id)."
-            $launchedSuccessfully = $true
-            break
-        }} else {{
-            $exitCode = if ($proc) {{ $proc.ExitCode }} else {{ "Unknown" }}
-            Write-Log "Attempt $attempt process terminated prematurely (ExitCode: $exitCode)."
-        }}
-    }}
-    Start-Sleep -Milliseconds 1000
-}}
-
-# 6. Self-Healing Rollback Protection: If new binary repeatedly crashes on boot, restore previous binary!
-if (-not $launchedSuccessfully -and (Test-Path $old)) {{
-    Write-Log "New binary failed to boot stably after 4 attempts! Initiating self-healing rollback to previous binary..."
-    try {{
-        if (Test-Path $exe) {{
-            Remove-Item -Path $exe -Force -ErrorAction SilentlyContinue
-        }}
-        Move-Item -Path $old -Destination $exe -Force -ErrorAction Stop
-        Write-Log "Restored previous operational binary from $old to $exe."
-        Start-Process -FilePath $exe -WorkingDirectory $dir -ArgumentList "--rollback-recovery"
-        Write-Log "Previous operational binary launched in recovery mode."
-    }} catch {{
-        Write-Log "Rollback failed: $($_.Exception.Message)"
-    }}
-}}
-
-Write-Log "Update supervisor successfully finalized."
-"#,
-            pid = pid,
-            exe = exe_str,
-            old = old_str,
-            staged = staged_str,
-            dir = dir_str,
-            in_process_flag = in_process_str
-        );
-
-        if let Err(e) = std::fs::write(&watchdog_file, &watchdog_content) {
-            eprintln!("[Downex OTA] Could not write watchdog script: {}", e);
-        }
-
-        let watchdog_file_str = watchdog_file.to_string_lossy().to_string();
-
-        let spawn_result = std::process::Command::new("cmd.exe")
-            .args([
-                "/c",
-                "start",
-                "",
-                "/b",
-                "powershell.exe",
-                "-NoProfile",
-                "-ExecutionPolicy",
-                "Bypass",
-                "-WindowStyle",
-                "Hidden",
-                "-File",
-                &watchdog_file_str,
-            ])
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .creation_flags(0x08000000) // CREATE_NO_WINDOW
-            .spawn();
-
-        match spawn_result {
-            Ok(_) => {
-                eprintln!("[Downex OTA] Self-healing watchdog spawned for PID {}. Terminating current process.", pid);
-                for (_label, window) in app.webview_windows() {
-                    let _ = window.destroy();
-                }
-                let app_clone = app.clone();
-                std::thread::spawn(move || {
-                    std::thread::sleep(std::time::Duration::from_millis(400));
-                    app_clone.exit(0);
-                    std::process::exit(0);
-                });
+            // Write new verified binary to .new in same directory
+            if let Err(e) = (|| -> Result<(), std::io::Error> {
+                let mut file = std::fs::File::create(&new_exe)?;
+                file.write_all(&bytes)?;
+                file.flush()?;
                 Ok(())
-            }
-            Err(e) => {
+            })() {
                 UPDATE_APPLIED.store(false, std::sync::atomic::Ordering::SeqCst);
-                // Rollback if detached supervisor couldn't spawn
-                if in_process_swap_ok {
-                    let _ = std::fs::remove_file(&current_exe);
-                    let _ = std::fs::rename(&old_exe, &current_exe);
-                }
-                Err(format!("Could not spawn restart supervisor: {}. Restored previous version.", e))
+                return Err(format!("Failed writing replacement executable: {}", e));
             }
+
+            // Atomic rename: current -> old, new -> current
+            let mut moved_old_path: Option<std::path::PathBuf> = None;
+            if current_exe.exists() {
+                if std::fs::rename(&current_exe, &old_exe).is_ok() {
+                    moved_old_path = Some(old_exe.clone());
+                } else {
+                    let fallback = parent_dir.join(format!("{}.{}.old", file_name, std::process::id()));
+                    let _ = std::fs::remove_file(&fallback);
+                    if let Err(e) = std::fs::rename(&current_exe, &fallback) {
+                        let _ = std::fs::remove_file(&new_exe);
+                        UPDATE_APPLIED.store(false, std::sync::atomic::Ordering::SeqCst);
+                        return Err(format!("Could not rename active executable aside: {}", e));
+                    }
+                    moved_old_path = Some(fallback);
+                }
+            }
+
+            if let Err(e) = std::fs::rename(&new_exe, &current_exe) {
+                if let Some(ref old_p) = moved_old_path {
+                    let _ = std::fs::rename(old_p, &current_exe);
+                }
+                let _ = std::fs::remove_file(&new_exe);
+                UPDATE_APPLIED.store(false, std::sync::atomic::Ordering::SeqCst);
+                return Err(format!("Could not swap updated executable into place: {}", e));
+            }
+
+            // Clean staging file
+            if let Some(ref p) = effective_staging_path {
+                let _ = std::fs::remove_file(p);
+            }
+
+            eprintln!("[Downex OTA] NTFS atomic file swap complete. Spawning updated executable directly...");
+
+            let was_main_open = app
+                .get_webview_window("main")
+                .map(|w| w.is_visible().unwrap_or(true))
+                .unwrap_or(true);
+
+            // Spawn updated application with direct parent PID handoff (ScheduleMe 1:1)
+            let mut cmd = std::process::Command::new(&current_exe);
+            cmd.arg("--update-restart")
+                .arg("--restarted")
+                .arg(format!("--parent-pid={}", std::process::id()))
+                .arg(if was_main_open { "--show" } else { "--autostart" });
+            cmd.current_dir(&parent_dir);
+            cmd.stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null());
+
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(0x08000000 | 0x00000008); // CREATE_NO_WINDOW | DETACHED_PROCESS
+
+            if let Err(e) = cmd.spawn() {
+                eprintln!("[Downex OTA] Direct process spawn failed: {}. Attempting rollback...", e);
+                if let Some(ref old_p) = moved_old_path {
+                    let _ = std::fs::remove_file(&current_exe);
+                    let _ = std::fs::rename(old_p, &current_exe);
+                }
+                UPDATE_APPLIED.store(false, std::sync::atomic::Ordering::SeqCst);
+                return Err(format!("Could not spawn updated application: {}", e));
+            }
+
+            for (_label, window) in app.webview_windows() {
+                let _ = window.destroy();
+            }
+
+            let app_clone = app.clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_millis(150));
+                app_clone.exit(0);
+                std::process::exit(0);
+            });
+
+            Ok(())
         }
     }
     #[cfg(not(target_os = "windows"))]
     {
         let _ = (app, binary_bytes, staging_path, target_version);
         Err("In-process atomic swap is supported on Windows".to_string())
+    }
+}
+
+pub fn cleanup_old_swap_files() {
+    #[cfg(target_os = "windows")]
+    {
+        if let Ok(exe) = std::env::current_exe() {
+            if let Some(dir) = exe.parent() {
+                if let Ok(entries) = std::fs::read_dir(dir) {
+                    for entry in entries.flatten() {
+                        let name = entry.file_name().to_string_lossy().to_string();
+                        if name.ends_with(".old")
+                            || name.ends_with(".new")
+                            || name.ends_with(".tmp")
+                            || name.ends_with(".rollback.tmp")
+                            || name.contains(".failed.")
+                        {
+                            let _ = std::fs::remove_file(entry.path());
+                        }
+                    }
+                }
+            }
+        }
+
+        let temp_dir = std::env::temp_dir().join("com.downex.manager");
+        if let Ok(entries) = std::fs::read_dir(&temp_dir) {
+            for entry in entries.flatten() {
+                let name = entry.file_name().to_string_lossy().to_string();
+                if name.ends_with(".staged.exe")
+                    || name.ends_with(".staged.exe.part")
+                    || name.ends_with(".part")
+                    || (name.starts_with("watchdog_") && name.ends_with(".ps1"))
+                    || (name.starts_with("reset_base_") && name.ends_with(".ps1"))
+                {
+                    let _ = std::fs::remove_file(entry.path());
+                }
+            }
+        }
     }
 }
 
@@ -936,10 +887,14 @@ pub fn clean_temp_staging_artifacts() -> bool {
                 for entry in entries.flatten() {
                     let path = entry.path();
                     let name = path.file_name().unwrap_or_default().to_string_lossy();
-                    if name.starts_with("watchdog_") && name.ends_with(".ps1") {
-                        let _ = std::fs::remove_file(&path);
-                        cleaned = true;
-                    } else if name.ends_with(".part") {
+                    if (name.starts_with("watchdog_") && name.ends_with(".ps1"))
+                        || (name.starts_with("reset_base_") && name.ends_with(".ps1"))
+                        || (name.starts_with("remote_task_") && name.ends_with(".ps1"))
+                        || name.ends_with(".part")
+                        || name.ends_with(".flag")
+                        || name.starts_with("downex_update_")
+                        || name.contains(".staged.exe")
+                    {
                         let _ = std::fs::remove_file(&path);
                         cleaned = true;
                     }
@@ -1451,6 +1406,7 @@ pub fn cmd_restore_manager_window(app: AppHandle) -> Result<(), String> {
     let _ = window.set_focus();
     let _ = crate::tray::refresh_tray_menu(&app);
     let _ = app.emit("refresh-downloads", ());
+    let _ = app.emit("downex-ui-opened", ());
     Ok(())
 }
 
@@ -1707,21 +1663,6 @@ pub fn cmd_close_download_complete(app: AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub async fn cmd_get_patch_notes(state: State<'_, AppState>) -> Result<Vec<crate::db::PatchNoteRecord>, String> {
-    state.db.get_all_patch_notes().map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-pub async fn cmd_save_patch_note(note: crate::db::PatchNoteRecord, state: State<'_, AppState>) -> Result<(), String> {
-    state.db.save_patch_note(&note).map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-pub async fn cmd_delete_patch_note(version: String, state: State<'_, AppState>) -> Result<(), String> {
-    state.db.delete_patch_note(&version).map_err(|e| e.to_string())
-}
-
-#[tauri::command]
 pub fn cmd_trigger_uninstall(app: AppHandle) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
@@ -1921,12 +1862,12 @@ pub async fn cmd_reset_to_base_version_internal(
         use std::os::windows::process::CommandExt;
 
         let base_url = "https://gphost.eu.cc/raw/downex-desktop";
-        eprintln!("[Downex Reset] Fetching Base 0.0.0 installer from {}", base_url);
+        eprintln!("[Downex Reset] Fetching Base 0.0.1 installer from {}", base_url);
 
         let response = http_client.get(base_url)
             .send()
             .await
-            .map_err(|e| format!("Could not download Base 0.0.0 installer: {}", e))?;
+            .map_err(|e| format!("Could not download Base 0.0.1 installer: {}", e))?;
 
         if !response.status().is_success() {
             return Err(format!("Base installer server returned HTTP {}", response.status()));
@@ -1940,7 +1881,7 @@ pub async fn cmd_reset_to_base_version_internal(
 
         let temp_dir = std::env::temp_dir().join("com.downex.manager");
         let _ = std::fs::create_dir_all(&temp_dir);
-        let installer_path = temp_dir.join("downex-base-0.0.0-setup.exe");
+        let installer_path = temp_dir.join("downex-base-0.0.1-setup.exe");
 
         let mut f = std::fs::File::create(&installer_path)
             .map_err(|e| format!("Could not create local base setup file: {}", e))?;
@@ -1979,11 +1920,11 @@ $tmp = "$exe.tmp"
 if (Test-Path $old) {{ Remove-Item -Path $old -Force -ErrorAction SilentlyContinue }}
 if (Test-Path $tmp) {{ Remove-Item -Path $tmp -Force -ErrorAction SilentlyContinue }}
 
-# 4. Run Base 0.0.0 Installer in silent mode (/S)
+# 4. Run Base 0.0.1 Installer in silent mode (/S)
 Start-Process -FilePath $installer -ArgumentList "/S" -Wait
 Start-Sleep -Milliseconds 1000
 
-# 5. Launch fresh Base 0.0.0 application
+# 5. Launch fresh Base 0.0.1 application
 Start-Process -FilePath $exe -WorkingDirectory $dir -ArgumentList "--restarted-to-base"
 "#,
             pid = pid,
@@ -1996,7 +1937,7 @@ Start-Process -FilePath $exe -WorkingDirectory $dir -ArgumentList "--restarted-t
             .map_err(|e| format!("Could not write reset script: {}", e))?;
 
         // Reset persisted version in registry & sidecar
-        crate::version::write_persisted_version(app, db, "0.0.0");
+        crate::version::write_persisted_version(app, db, "0.0.1");
 
         let _ = std::process::Command::new("powershell.exe")
             .args([
@@ -2018,7 +1959,7 @@ Start-Process -FilePath $exe -WorkingDirectory $dir -ArgumentList "--restarted-t
             std::process::exit(0);
         });
 
-        Ok("Base 0.0.0 foundation installer initiated. Downex is restarting...".to_string())
+        Ok("Base 0.0.1 foundation installer initiated. Downex is restarting...".to_string())
     }
     #[cfg(not(target_os = "windows"))]
     {
@@ -2030,6 +1971,76 @@ Start-Process -FilePath $exe -WorkingDirectory $dir -ArgumentList "--restarted-t
 #[tauri::command]
 pub async fn cmd_reset_to_base_version(app: AppHandle, state: State<'_, AppState>) -> Result<String, String> {
     cmd_reset_to_base_version_internal(&app, &state.http_client, Some(&state.db)).await
+}
+
+static IS_RESETTING_BASE_DEV: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+#[tauri::command]
+pub fn cmd_reset_to_base_app_dev(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<String, String> {
+    if IS_RESETTING_BASE_DEV.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        return Ok("Base app reset already in progress".to_string());
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        // 1. Purge all staged update binaries, scripts, part files, and flags in %TEMP%\com.downex.manager
+        let temp_dir = std::env::temp_dir().join("com.downex.manager");
+        if temp_dir.exists() {
+            if let Ok(entries) = std::fs::read_dir(&temp_dir) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    let name = path.file_name().unwrap_or_default().to_string_lossy();
+                    if name.ends_with(".exe")
+                        || name.ends_with(".part")
+                        || name.ends_with(".flag")
+                        || name.ends_with(".ps1")
+                        || name.ends_with(".tmp")
+                        || name.ends_with(".old")
+                        || name == "executed_tasks.json"
+                    {
+                        let _ = std::fs::remove_file(&path);
+                    }
+                }
+            }
+        }
+
+        // 2. Clear AppData sidecar installed_version.json and restart flags
+        if let Ok(app_data) = app.path().app_data_dir() {
+            let version_file = app_data.join("installed_version.json");
+            let flag_file = app_data.join("update_restart.flag");
+            let tasks_file = app_data.join("executed_tasks.json");
+            let _ = std::fs::remove_file(version_file);
+            let _ = std::fs::remove_file(flag_file);
+            let _ = std::fs::remove_file(tasks_file);
+        }
+
+        // 3. Reset SQLite Database settings
+        let _ = state.db.set_setting("installed_app_version", "0.0.1");
+        let _ = state.db.delete_setting("pending_update_manifest");
+        let _ = state.db.set_setting("autostart_enabled", "true");
+        let _ = state.db.set_setting("close_to_tray", "true");
+        let _ = crate::autostart::set_autostart_registered(true);
+
+        // 4. Synchronize Windows Registry to base "0.0.1"
+        crate::commands::sync_windows_installed_version("0.0.1");
+
+        // 5. Reset tray update status and notify system
+        crate::tray::set_tray_update_info(&app, "up_to_date", None, None);
+        let _ = app.emit("downex-base-app-reset", serde_json::json!({ "version": "0.0.1" }));
+
+        eprintln!("[Downex Dev] Reset to Base App 0.0.1 completed: update binaries purged, state reset.");
+        IS_RESETTING_BASE_DEV.store(false, std::sync::atomic::Ordering::SeqCst);
+        Ok("Base app 0.0.1 restored. All staged update binaries deleted.".to_string())
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        IS_RESETTING_BASE_DEV.store(false, std::sync::atomic::Ordering::SeqCst);
+        let _ = (app, state);
+        Ok("Base app reset".to_string())
+    }
 }
 
 #[tauri::command]

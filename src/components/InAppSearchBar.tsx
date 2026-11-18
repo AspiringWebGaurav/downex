@@ -13,7 +13,6 @@ import {
   Moon,
   Sun,
   RotateCcw,
-  FileText,
   HelpCircle,
 
   Sparkles,
@@ -238,14 +237,6 @@ export const InAppSearchBar: React.FC<InAppSearchBarProps> = ({ darkMode, setDar
         keywords: ['how it works', 'queue guide', 'help', 'tutorial', 'learn', 'guide'],
         icon: <HelpCircle className="w-4 h-4 text-purple-500" />,
         action: () => setQueueGuideOpen(true),
-      },
-      {
-        id: 'action-patch-notes',
-        title: 'Release Changelogs & Patch Notes',
-        subtitle: 'Inspect version changes, release history, and updates',
-        keywords: ['changelog', 'patch', 'notes', 'release', 'version', 'updates', 'history'],
-        icon: <FileText className="w-4 h-4 text-blue-500" />,
-        action: () => openSettingsSubView('patch-notes'),
       },
       {
         id: 'action-reset-settings',

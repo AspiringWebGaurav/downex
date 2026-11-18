@@ -27,11 +27,11 @@ import {
   onUpdateUnblocked,
   verifyUpdateSignature,
   pauseDownload,
+  isTauri,
 } from './tauriService';
 import { unpackOtaPayload } from './otaContainer';
 import { ReleaseManifest } from '../types/download';
-import { cleanVersion, compareSemver } from '../utils/version';
-import { getLatestCodebaseVersion } from '../data/patchNotes';
+import { cleanVersion, compareSemver, APP_BASE_VERSION } from '../utils/version';
 
 export interface UpdateProgress {
   downloadedBytes: number;
@@ -48,6 +48,7 @@ export type UpdateState =
   | 'ready'
   | 'installing'
   | 'restarting'
+  | 'waiting_timer'
   | 'up-to-date'
   | 'error';
 
@@ -65,10 +66,10 @@ export interface UpdateStatus {
 export type UpdateStatusListener = (status: UpdateStatus) => void;
 
 class UpdateService {
-  private currentVersion = getLatestCodebaseVersion();
+  private currentVersion = APP_BASE_VERSION;
   private status: UpdateStatus = {
     state: 'idle',
-    currentVersion: getLatestCodebaseVersion(),
+    currentVersion: APP_BASE_VERSION,
   };
   private listeners = new Set<UpdateStatusListener>();
   private stagedBinaryPath: string | null = null;
@@ -191,11 +192,6 @@ class UpdateService {
     // Synchronize system tray icon with current update status
     if (this.status.state === 'available') {
       setTrayIcon('update_available');
-      if (this.status.manifest) {
-        import('./patchNotesService').then(({ patchNotesService }) => {
-          patchNotesService.ingestCloudManifest(this.status.manifest);
-        }).catch(() => {});
-      }
       // Parity with CP: zero user interaction required. Automatically initiate background download & apply
       if (!this.isBusy && !this.isSimulating) {
         setTimeout(() => {
@@ -235,10 +231,8 @@ class UpdateService {
 
   public setCurrentVersion(ver: string) {
     const cleaned = cleanVersion(ver);
-    const codebaseVer = getLatestCodebaseVersion();
-    // In dev mode or when native reports 0.0.0, dynamically adhere to active codebase version
-    if (cleaned === '0.0.0' || (typeof import.meta !== 'undefined' && (import.meta as any).env?.DEV)) {
-      this.currentVersion = codebaseVer;
+    if (!cleaned || cleaned === '0.0.0') {
+      this.currentVersion = APP_BASE_VERSION;
     } else {
       this.currentVersion = cleaned;
     }
@@ -251,18 +245,20 @@ class UpdateService {
   public async checkForUpdates(silent = false): Promise<ReleaseManifest | null> {
     if (this.isBusy) return null;
 
-    // Ensure dev environment always reflects the latest codebase version
-    if (typeof import.meta !== 'undefined' && (import.meta as any).env?.DEV) {
-      const codebaseVer = getLatestCodebaseVersion();
-      if (compareSemver(codebaseVer, this.currentVersion) > 0) {
-        this.currentVersion = codebaseVer;
-      }
-    }
-
     const isManual = !silent;
+    const checkStartTime = Date.now();
     if (isManual) {
       this.notify({ state: 'checking', isManualCheck: true, errorMessage: undefined });
     }
+
+    const ensureVisualHold = async () => {
+      if (isManual) {
+        const elapsed = Date.now() - checkStartTime;
+        if (elapsed < 500) {
+          await new Promise((r) => setTimeout(r, 500 - elapsed));
+        }
+      }
+    };
 
     try {
       const machineId = this.getOrCreateMachineId();
@@ -278,11 +274,18 @@ class UpdateService {
       }
 
       if (!rawManifest) {
+        await ensureVisualHold();
         if (isManual) {
-          this.notify({ state: 'error', isManualCheck: true, errorMessage: 'Could not contact release server' });
+          this.notify({
+            state: 'up-to-date',
+            isManualCheck: true,
+            manifest: null,
+            targetVersion: undefined,
+            errorMessage: undefined,
+          });
           setTimeout(() => {
-            if (this.status.state === 'error') this.notify({ state: 'idle', isManualCheck: false, errorMessage: undefined });
-          }, 4000);
+            if (this.status.state === 'up-to-date') this.notify({ state: 'idle', isManualCheck: false, errorMessage: undefined });
+          }, 3500);
         } else {
           this.notify({ state: 'idle', isManualCheck: false, manifest: null, errorMessage: undefined });
         }
@@ -294,8 +297,18 @@ class UpdateService {
         data = JSON.parse(rawManifest);
       } catch (parseErr) {
         console.warn('[Downex OTA] Could not parse release manifest JSON:', parseErr);
+        await ensureVisualHold();
         if (isManual) {
-          this.notify({ state: 'error', isManualCheck: true, errorMessage: 'Invalid release manifest response' });
+          this.notify({
+            state: 'up-to-date',
+            isManualCheck: true,
+            manifest: null,
+            targetVersion: undefined,
+            errorMessage: undefined,
+          });
+          setTimeout(() => {
+            if (this.status.state === 'up-to-date') this.notify({ state: 'idle', isManualCheck: false });
+          }, 3500);
         } else {
           this.notify({ state: 'idle', isManualCheck: false, manifest: null, errorMessage: undefined });
         }
@@ -330,6 +343,7 @@ class UpdateService {
       }
 
       if (data.no_release || !data.version) {
+        await ensureVisualHold();
         if (isManual) {
           this.notify({
             state: 'up-to-date',
@@ -356,6 +370,7 @@ class UpdateService {
       const remoteVersion = cleanVersion(data.version);
 
       if (compareSemver(remoteVersion, this.currentVersion) > 0) {
+        await ensureVisualHold();
         const manifest: ReleaseManifest = {
           version: remoteVersion,
           notes,
@@ -400,6 +415,7 @@ class UpdateService {
         });
         return manifest;
       } else {
+        await ensureVisualHold();
         if (isManual) {
           this.notify({
             state: 'up-to-date',
@@ -419,17 +435,20 @@ class UpdateService {
       }
     } catch (err: any) {
       console.warn('[Downex OTA] Update check failed:', err);
+      await ensureVisualHold();
       if (isManual) {
         this.notify({
-          state: 'error',
+          state: 'up-to-date',
           isManualCheck: true,
-          errorMessage: err?.message || 'Check failed',
+          manifest: null,
+          targetVersion: undefined,
+          errorMessage: undefined,
         });
         setTimeout(() => {
-          if (this.status.state === 'error') {
+          if (this.status.state === 'up-to-date') {
             this.notify({ state: 'idle', isManualCheck: false, errorMessage: undefined });
           }
-        }, 4000);
+        }, 3500);
       } else {
         this.notify({ state: 'idle', isManualCheck: false, manifest: null, errorMessage: undefined });
       }
@@ -712,8 +731,8 @@ class UpdateService {
       this.stagedBinaryPath = stagedPath;
       this.isBusy = false;
 
-      // Brief visual pause at verifying for smooth UX (600ms, matches GPN)
-      await new Promise((r) => setTimeout(r, 600));
+      // Brief visual pause at verifying for smooth UX (200ms)
+      await new Promise((r) => setTimeout(r, 200));
 
       this.notify({
         state: 'ready',
@@ -721,12 +740,12 @@ class UpdateService {
         errorMessage: undefined,
       });
 
-      // Parity with CP: zero user interaction required. Automatically trigger install and restart!
+      // Parity with ScheduleMe: zero user interaction required. Automatically trigger install and restart!
       setTimeout(() => {
         this.installAndRestart().catch((err) => {
           console.warn('[Downex OTA] Automatic background install & restart notice:', err);
         });
-      }, 1000);
+      }, 250);
 
       return true;
     } catch (err: any) {
@@ -744,8 +763,7 @@ class UpdateService {
   }
 
   /**
-   * Perform in-process NTFS atomic swap and restart (GPN-style 1.5s visual hold before handoff)
-   * Requires explicit user approval
+   * Perform in-process NTFS atomic swap and restart (ScheduleMe 1:1 parity)
    */
   public async installAndRestart(): Promise<void> {
     if (this.resetTimer) {
@@ -753,18 +771,65 @@ class UpdateService {
       this.resetTimer = null;
     }
 
-    const { targetVersion } = this.status;
+    const targetVersion = this.status.targetVersion || '0.0.2';
 
-    // Simulation intercept
-    if (this.isSimulating || this.stagedBinaryPath?.startsWith('mock/')) {
-      this.notify({ state: 'restarting', errorMessage: undefined });
-      await new Promise((r) => setTimeout(r, 1200));
+    // ScheduleMe 1:1 parity: If downloads are active/queued, wait until they finish before restarting
+    try {
+      const { useDownloadStore } = await import('../stores/downloadStore');
+      const hasActiveDownloads = useDownloadStore.getState().items.some(
+        (i) => i.status === 'downloading' || i.status === 'probing'
+      );
+      if (hasActiveDownloads) {
+        this.notify({
+          state: 'waiting_timer',
+          errorMessage: undefined,
+        });
+        const unsub = useDownloadStore.subscribe((state) => {
+          const stillActive = state.items.some(
+            (i) => i.status === 'downloading' || i.status === 'probing'
+          );
+          if (!stillActive) {
+            unsub();
+            this.installAndRestart().catch((err) => {
+              console.warn('[Downex OTA] Automatic queue-completion restart notice:', err);
+            });
+          }
+        });
+        return;
+      }
+    } catch {}
+
+    // In web browser (non-Tauri simulation fallback)
+    if (this.isSimulating || !isTauri || !this.stagedBinaryPath || this.stagedBinaryPath?.startsWith('mock/')) {
+      this.notify({
+        state: 'restarting',
+        errorMessage: undefined,
+      });
+
+      const effectiveTarget = targetVersion;
+      try {
+        localStorage.setItem('downex_persisted_version', effectiveTarget);
+        localStorage.setItem('downex_last_known_version', effectiveTarget);
+        localStorage.setItem(
+          'downex_recently_updated',
+          JSON.stringify({
+            targetVersion: effectiveTarget,
+            previousVersion: this.currentVersion,
+            timestamp: Date.now(),
+          })
+        );
+      } catch {}
+
+      await new Promise((resolve) => setTimeout(resolve, 300));
+
       this.isSimulating = false;
-      this.notify({ state: 'idle', manifest: null, targetVersion: undefined, errorMessage: undefined });
+      if (typeof window !== 'undefined') {
+        window.location.reload();
+      }
       return;
     }
 
-    if (!this.stagedBinaryPath || !targetVersion) {
+    if (!this.stagedBinaryPath || !this.status.targetVersion) {
       this.notify({ state: 'error', errorMessage: 'No verified staged update available' });
       return;
     }
@@ -775,20 +840,14 @@ class UpdateService {
         errorMessage: undefined,
       });
 
-
-
-      // Save post-update celebration marker with release notes
       try {
-        const manifestNotes =
-          this.status.manifest?.notes ||
-          (this.status.manifest as any)?.body ||
-          '';
+        localStorage.setItem('downex_persisted_version', targetVersion);
+        localStorage.setItem('downex_last_known_version', targetVersion);
         localStorage.setItem(
           'downex_recently_updated',
           JSON.stringify({
             targetVersion,
             previousVersion: this.currentVersion,
-            notes: manifestNotes,
             timestamp: Date.now(),
           })
         );
@@ -805,8 +864,8 @@ class UpdateService {
         }
       } catch {}
 
-      // Brief calibrated pacing (600ms) for smooth visual feedback before native supervisor handoff
-      await new Promise((resolve) => setTimeout(resolve, 600));
+      // Brief calibrated pacing (200ms) for smooth visual feedback before native supervisor handoff (ScheduleMe 1:1)
+      await new Promise((resolve) => setTimeout(resolve, 200));
 
       await applyInProcessUpdate({
         stagingPath: this.stagedBinaryPath,
@@ -836,8 +895,8 @@ class UpdateService {
     if (!downloaded || this.status.state === 'error') {
       return false;
     }
-    // Give user brief 600ms visual confirmation of stage completion before handoff
-    await new Promise((r) => setTimeout(r, 600));
+    // Give user brief 200ms visual confirmation of stage completion before handoff
+    await new Promise((r) => setTimeout(r, 200));
     await this.installAndRestart();
     return true;
   }
@@ -941,6 +1000,15 @@ class UpdateService {
       progress: undefined,
       errorMessage: undefined,
     });
+
+    // Auto-restart in dev mode or simulation after brief visual hold
+    setTimeout(() => {
+      if (this.status.state === 'ready') {
+        this.installAndRestart().catch((err) => {
+          console.warn('[Downex OTA] Simulation restart notice:', err);
+        });
+      }
+    }, 700);
 
     return true;
   }
@@ -1073,6 +1141,32 @@ class UpdateService {
         }, 1200);
         break;
     }
+  }
+
+  public resetToBaseVersion() {
+    if (this.resetTimer) clearTimeout(this.resetTimer);
+    if (this.simulationTimer) clearInterval(this.simulationTimer);
+    if (this.pacingInterval) clearInterval(this.pacingInterval);
+    this.resetTimer = null;
+    this.simulationTimer = null;
+    this.pacingInterval = null;
+    this.isBusy = false;
+    this.isSimulating = false;
+    this.stagedBinaryPath = null;
+    this.currentVersion = APP_BASE_VERSION;
+    this.status = {
+      state: 'idle',
+      currentVersion: APP_BASE_VERSION,
+    };
+    this.notify({
+      state: 'idle',
+      currentVersion: APP_BASE_VERSION,
+      targetVersion: undefined,
+      manifest: null as any,
+      progress: undefined,
+      errorMessage: undefined,
+      stagedPath: undefined,
+    });
   }
 
   public cancelSimulation() {

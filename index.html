@@ -7,8 +7,11 @@
     <title>Downex</title>
     <script>
       try {
-        if (localStorage.getItem('downex_theme') === 'dark') {
+        var explicit = localStorage.getItem('downex_theme_explicit');
+        if (explicit === 'true' && localStorage.getItem('downex_theme') === 'dark') {
           document.documentElement.classList.add('dark');
+        } else {
+          document.documentElement.classList.remove('dark');
         }
       } catch (e) {}
 

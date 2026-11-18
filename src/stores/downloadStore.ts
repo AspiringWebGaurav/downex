@@ -52,8 +52,8 @@ interface DownloadStore {
   setSpeedLimit: (id: string, limitMbps: number | null) => Promise<void>;
   removeDownload: (id: string, deleteFile?: boolean) => Promise<void>;
   setSelectedView: (view: string) => void;
-  settingsSubView: 'settings' | 'patch-notes';
-  openSettingsSubView: (subView: 'settings' | 'patch-notes') => void;
+  settingsSubView: 'settings';
+  openSettingsSubView: (subView?: 'settings') => void;
   setSearchQuery: (query: string) => void;
   setNewModalOpen: (open: boolean) => void;
   isQueueGuideOpen: boolean;
@@ -274,8 +274,8 @@ export const useDownloadStore = create<DownloadStore>((set, get) => ({
     }
   },
   settingsSubView: 'settings',
-  openSettingsSubView: (subView: 'settings' | 'patch-notes') =>
-    set({ selectedView: 'settings', settingsSubView: subView }),
+  openSettingsSubView: (_subView?: 'settings') =>
+    set({ selectedView: 'settings', settingsSubView: 'settings' }),
   setSearchQuery: (query: string) => set({ searchQuery: query }),
   setNewModalOpen: (open: boolean) =>
     set({

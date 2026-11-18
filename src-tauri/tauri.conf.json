@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Downex",
+  "productName": "Downex Download Manager",
   "mainBinaryName": "Downex",
   "version": "0.0.1",
   "identifier": "com.downex.manager",
@@ -14,7 +14,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "Downex",
+        "title": "Downex Download Manager",
         "width": 960,
         "height": 640,
         "minWidth": 820,
@@ -46,6 +46,7 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
+    "licenseFile": "LICENSE.txt",
     "windows": {
       "certificateThumbprint": null,
       "digestAlgorithm": "sha256",
@@ -54,9 +55,11 @@
         "type": "downloadBootstrapper"
       },
       "nsis": {
+        "template": "installer.nsi",
         "headerImage": "icons/nsis-header.bmp",
         "sidebarImage": "icons/nsis-sidebar.bmp",
         "installerIcon": "icons/icon.ico",
+        "uninstallerIcon": "icons/uninstall.ico",
         "installMode": "currentUser",
         "installerHooks": "hooks.nsh"
       }

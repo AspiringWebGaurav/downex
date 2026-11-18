@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { listen } from '@tauri-apps/api/event';
 import {
   isTauri,
   getResolvedVersion,
@@ -6,18 +7,12 @@ import {
   cleanSupersededOldBinaries,
   getStagedUpdate,
   getPendingUpdate,
+  resetToBaseAppDev,
 } from '../services/tauriService';
 import { updateService, UpdateStatus } from '../services/updateService';
-import { cleanVersion, formatVersion, compareSemver } from '../utils/version';
-import { getLatestCodebaseVersion } from '../data/patchNotes';
+import { APP_BASE_VERSION, cleanVersion, formatVersion, compareSemver } from '../utils/version';
 
 const PERSISTED_UPDATE_KEY = 'downex_persisted_update_status';
-
-export interface PatchNotesInfo {
-  version: string;
-  previousVersion: string;
-  notes: string;
-}
 
 interface AppVersionStore {
   currentVersion: string;
@@ -27,8 +22,6 @@ interface AppVersionStore {
   isToastDismissed: boolean;
   isDeferredDueToDownloads: boolean;
   onDownloadsCompleted: () => void;
-  patchNotes: PatchNotesInfo | null;
-  isPatchNotesOpen: boolean;
   dismissToast: () => void;
   showToast: () => void;
   initVersion: () => Promise<void>;
@@ -38,9 +31,10 @@ interface AppVersionStore {
   installAndRestart: () => Promise<void>;
   openModal: () => void;
   closeModal: () => void;
-  openPatchNotes: () => void;
-  closePatchNotes: () => void;
+  resetToBaseApp: (invokeNative?: boolean) => Promise<void>;
 }
+
+let isResettingBaseApp = false;
 
 export const useAppVersionStore = create<AppVersionStore>((set, get) => {
   const initialDismissed = (() => {
@@ -51,7 +45,7 @@ export const useAppVersionStore = create<AppVersionStore>((set, get) => {
     }
   })();
 
-  const initialCodebaseVer = getLatestCodebaseVersion();
+  const initialCodebaseVer = APP_BASE_VERSION;
 
   return {
     currentVersion: initialCodebaseVer,
@@ -59,8 +53,47 @@ export const useAppVersionStore = create<AppVersionStore>((set, get) => {
     status: updateService.getStatus(),
     isModalOpen: false,
     isToastDismissed: initialDismissed,
-    patchNotes: null,
-    isPatchNotesOpen: false,
+
+    resetToBaseApp: async (invokeNative = true) => {
+      if (isResettingBaseApp) return;
+      isResettingBaseApp = true;
+      try {
+        try {
+          localStorage.removeItem(PERSISTED_UPDATE_KEY);
+          localStorage.removeItem('downex_recently_updated');
+          localStorage.removeItem('downex_simulated_version');
+          localStorage.removeItem('downex_toast_dismissed');
+          localStorage.setItem('downex_last_known_version', APP_BASE_VERSION);
+          localStorage.setItem('downex_persisted_version', APP_BASE_VERSION);
+          localStorage.setItem('downex_autostart_enabled', 'true');
+          localStorage.setItem('downex_close_to_tray', 'true');
+        } catch {}
+
+        if (invokeNative) {
+          try {
+            await resetToBaseAppDev();
+          } catch (err) {
+            console.warn('[Downex Store] Native dev reset error:', err);
+          }
+        }
+
+        updateService.resetToBaseVersion();
+
+        set({
+          currentVersion: APP_BASE_VERSION,
+          formattedVersion: formatVersion(APP_BASE_VERSION),
+          status: {
+            state: 'idle',
+            currentVersion: APP_BASE_VERSION,
+          },
+          isModalOpen: false,
+          isToastDismissed: false,
+          isDeferredDueToDownloads: false,
+        });
+      } finally {
+        isResettingBaseApp = false;
+      }
+    },
 
     isDeferredDueToDownloads: false,
     onDownloadsCompleted: async () => {
@@ -94,19 +127,25 @@ export const useAppVersionStore = create<AppVersionStore>((set, get) => {
       set({ isToastDismissed: false });
     },
 
-    openPatchNotes: () => {
-      set({ isPatchNotesOpen: true });
-    },
-
-    closePatchNotes: () => {
-      try {
-        localStorage.removeItem('downex_recently_updated');
-      } catch {}
-      set({ isPatchNotesOpen: false, patchNotes: null });
-    },
-
     initVersion: async () => {
       try {
+        // In dev mode, clean legacy pre-purge test keys (>= 0.0.40) from local storage on startup
+        if (typeof import.meta !== 'undefined' && (import.meta as any).env?.DEV) {
+          try {
+            const persisted = localStorage.getItem('downex_persisted_version');
+            const lastVer = localStorage.getItem('downex_last_known_version');
+            if (
+              (persisted && compareSemver(cleanVersion(persisted), '0.0.40') >= 0) ||
+              (lastVer && compareSemver(cleanVersion(lastVer), '0.0.40') >= 0)
+            ) {
+              localStorage.removeItem('downex_persisted_version');
+              localStorage.removeItem('downex_last_known_version');
+              localStorage.removeItem('downex_recently_updated');
+              localStorage.removeItem(PERSISTED_UPDATE_KEY);
+            }
+          } catch {}
+        }
+
         const rawVer = await getResolvedVersion();
         const cleaned = cleanVersion(rawVer);
         set({
@@ -121,40 +160,12 @@ export const useAppVersionStore = create<AppVersionStore>((set, get) => {
         // Version upgrade transition check (GPN pattern)
         try {
           const lastVersion = localStorage.getItem('downex_last_known_version');
-          const recentUpdateRaw = localStorage.getItem('downex_recently_updated');
-          let recentUpdateData: any = null;
-          if (recentUpdateRaw) {
-            try {
-              recentUpdateData = JSON.parse(recentUpdateRaw);
-            } catch {}
-          }
-
           const hasUpgraded = lastVersion && compareSemver(cleaned, lastVersion) > 0;
-          const isTargetAchieved =
-            recentUpdateData &&
-            recentUpdateData.targetVersion &&
-            compareSemver(cleaned, recentUpdateData.previousVersion || '0.0.0') > 0;
 
-          if (hasUpgraded || isTargetAchieved) {
-            const targetVer = recentUpdateData?.targetVersion || cleaned;
-            const prevVer = recentUpdateData?.previousVersion || lastVersion || '0.0.0';
-            const notes = recentUpdateData?.notes || '';
-
-            set({
-              patchNotes: {
-                version: targetVer,
-                previousVersion: prevVer,
-                notes: notes,
-              },
-              isPatchNotesOpen: true,
-            });
-
+          if (hasUpgraded) {
             localStorage.removeItem(PERSISTED_UPDATE_KEY);
-            cleanSupersededOldBinaries().catch(() => {});
-          } else if (recentUpdateData && recentUpdateData.targetVersion) {
-            // Target was NOT achieved (e.g. rolled back or restart was aborted)
-            // Clean up stale recently_updated so patch notes are not erroneously shown later
             localStorage.removeItem('downex_recently_updated');
+            cleanSupersededOldBinaries().catch(() => {});
           }
           localStorage.setItem('downex_last_known_version', cleaned);
           localStorage.setItem('downex_persisted_version', cleaned);
@@ -236,6 +247,13 @@ export const useAppVersionStore = create<AppVersionStore>((set, get) => {
             } catch {}
           });
         }
+        // Listen for native dev reset event
+        if (isTauri && typeof window !== 'undefined' && !(window as any).__DOWNEX_BASE_RESET_LISTENER__) {
+          (window as any).__DOWNEX_BASE_RESET_LISTENER__ = true;
+          listen('downex-base-app-reset', () => {
+            get().resetToBaseApp(false);
+          }).catch(() => {});
+        }
       } catch (err) {
         console.warn('[Downex Version] Failed to initialize version:', err);
       }
@@ -290,7 +308,7 @@ updateService.subscribe((status) => {
   });
 
   // Persist update status across refreshes/restarts
-  const curVer = useAppVersionStore.getState()?.currentVersion || getLatestCodebaseVersion();
+  const curVer = useAppVersionStore.getState()?.currentVersion || APP_BASE_VERSION;
   const isTargetNewer = Boolean(status.targetVersion && compareSemver(status.targetVersion, curVer) > 0);
 
   if ((status.state === 'available' || status.state === 'ready') && status.manifest && isTargetNewer) {

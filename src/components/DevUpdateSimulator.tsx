@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { updateService } from '../services/updateService';
 import { injectMockDownloadItem, clearMockDownloads } from '../services/tauriService';
 import { useDownloadStore } from '../stores/downloadStore';
+import { useAppVersionStore } from '../stores/appVersionStore';
 import { DownloadItem } from '../types/download';
 import { 
   FlaskConical,
@@ -15,7 +16,8 @@ import {
   Zap,
   Activity,
   FileDown,
-  Sparkles
+  Sparkles,
+  RotateCcw
 } from 'lucide-react';
 
 export const DevUpdateSimulator: React.FC = () => {
@@ -23,6 +25,42 @@ export const DevUpdateSimulator: React.FC = () => {
   const isDev = Boolean((import.meta as any).env?.DEV || typeof window !== 'undefined' && !(window as any).__TAURI_INTERNALS__);
   const [isOpen, setIsOpen] = useState(false);
   const [isLiveTickerActive, setIsLiveTickerActive] = useState(true);
+  const currentVersion = useAppVersionStore((state) => state.currentVersion);
+  const [isResettingBase, setIsResettingBase] = useState(false);
+  const [baseResetMessage, setBaseResetMessage] = useState<string | null>(null);
+
+  const handleResetToBaseApp = async () => {
+    setIsResettingBase(true);
+    setBaseResetMessage('Resetting to Base App v0.0.1...');
+    try {
+      // 1. Reset database, local storage, staged binaries and store to Base 0.0.1
+      await useAppVersionStore.getState().resetToBaseApp();
+
+      setBaseResetMessage('Base App v0.0.1 active • Checking for updates...');
+
+      // 2. Automatically trigger manual check (isManualCheck = true triggers sidebar ScheduleMe UI)
+      const manifest = await updateService.checkForUpdates(false);
+
+      // 3. Evaluate check result
+      const currentStatus = updateService.getStatus();
+      if (!manifest || currentStatus.state === 'up-to-date') {
+        setBaseResetMessage('Base App v0.0.1 • Up to date');
+        setTimeout(() => setBaseResetMessage(null), 4200);
+      } else if (currentStatus.state === 'available' || currentStatus.state === 'ready') {
+        const target = manifest?.version || currentStatus.targetVersion || 'update';
+        setBaseResetMessage(`Update v${target} detected • Auto-downloading & restarting...`);
+        await updateService.downloadAndApplyUpdate();
+      } else if (currentStatus.state === 'error') {
+        setBaseResetMessage(currentStatus.errorMessage || 'Check failed');
+        setTimeout(() => setBaseResetMessage(null), 4500);
+      }
+    } catch (err: any) {
+      setBaseResetMessage('Reset error: ' + (err?.message || String(err)));
+      setTimeout(() => setBaseResetMessage(null), 4000);
+    } finally {
+      setIsResettingBase(false);
+    }
+  };
 
   // Live Speed Limiter Simulation Loop (Ticks every 500ms for active mock downloads)
   useEffect(() => {
@@ -211,8 +249,8 @@ export const DevUpdateSimulator: React.FC = () => {
     const completedMock: DownloadItem = {
       id: 'mock-completed-' + Date.now(),
       url: 'https://gphost.eu.cc/raw/downex-desktop',
-      filename: 'Downex-0.0.0-Setup.exe',
-      destination_path: 'C:\\Users\\gaura\\Downloads\\Downex\\Downex-0.0.0-Setup.exe',
+      filename: 'Downex-0.0.1-Setup.exe',
+      destination_path: 'C:\\Users\\gaura\\Downloads\\Downex\\Downex-0.0.1-Setup.exe',
       total_bytes: 3562767,
       downloaded_bytes: 3562767,
       status: 'completed',
@@ -226,7 +264,7 @@ export const DevUpdateSimulator: React.FC = () => {
     };
     injectMockDownloadItem(completedMock);
     useDownloadStore.setState((prev) => ({
-      items: [completedMock, ...prev.items.filter((i) => i.filename !== 'Downex-0.0.0-Setup.exe')],
+      items: [completedMock, ...prev.items.filter((i) => i.filename !== 'Downex-0.0.1-Setup.exe')],
       selectedView: 'all',
     }));
   };
@@ -420,6 +458,36 @@ export const DevUpdateSimulator: React.FC = () => {
               </div>
               <span className="text-[10px] opacity-75 font-mono">Auto</span>
             </button>
+          </div>
+
+          {/* Section 5: Base App Option (Purge update binaries & restore base 0.0.1) */}
+          <div className="flex flex-col gap-1.5 pt-1 border-t border-zinc-100 dark:border-zinc-800">
+            <div className="text-[10px] font-bold text-zinc-400 dark:text-zinc-500 uppercase tracking-wider px-1 flex items-center justify-between">
+              <span>Base App Foundation:</span>
+              <span className="font-mono text-[9.5px] text-zinc-600 dark:text-zinc-300 font-semibold">
+                v{currentVersion}
+              </span>
+            </div>
+
+            <button
+              onClick={handleResetToBaseApp}
+              disabled={isResettingBase}
+              className="w-full flex items-center justify-between px-3 py-1.5 rounded-lg bg-rose-50 hover:bg-rose-100 dark:bg-rose-950/40 dark:hover:bg-rose-900/50 text-rose-700 dark:text-rose-300 border border-rose-200/80 dark:border-rose-800/80 text-xs font-medium shadow-xs transition-colors cursor-pointer disabled:opacity-50"
+              title="Reset to Base App 0.0.1, purge staged files, and automatically check for updates (restarts if update detected)"
+            >
+              <div className="flex items-center gap-1.5">
+                <RotateCcw className={`w-3.5 h-3.5 shrink-0 ${isResettingBase ? 'animate-spin' : ''}`} />
+                <span>{isResettingBase ? 'Resetting to Base...' : 'Base App'}</span>
+              </div>
+              <span className="text-[10px] opacity-80 font-mono font-semibold">v0.0.1 Auto-Check</span>
+            </button>
+
+            {baseResetMessage && (
+              <div className="text-[10px] text-emerald-600 dark:text-emerald-400 font-medium px-1 flex items-center gap-1">
+                <CheckCircle2 className="w-3 h-3 shrink-0" />
+                <span>{baseResetMessage}</span>
+              </div>
+            )}
           </div>
         </div>
       )}

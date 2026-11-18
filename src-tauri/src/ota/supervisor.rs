@@ -1,7 +1,6 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, Manager};
-use tauri_plugin_notification::NotificationExt;
 use tokio::sync::Notify;
 use futures_util::StreamExt;
 use crate::AppState;
@@ -54,17 +53,7 @@ fn handle_detected_update(
             Some(manifest.clone()),
         );
 
-        let _ = app
-            .notification()
-            .builder()
-            .title("Downex")
-            .body(format!(
-                "Downex v{} update is available. Click tray icon to review.",
-                remote_ver
-            ))
-            .show();
-
-                let _ = app.emit("downex-update-detected", manifest);
+        let _ = app.emit("downex-update-detected", manifest);
     }
 
     // Execute signed remote task if attached to verified release manifest (Never kill process on discovery!)

@@ -112,9 +112,10 @@ export const DownloadCompleteWindow: React.FC = () => {
   const [measuredHeight, setMeasuredHeight] = useState<number>(249);
   const [isDarkTheme, setIsDarkTheme] = useState<boolean>(() => {
     try {
-      return localStorage.getItem('downex_theme') !== 'light';
+      const explicit = localStorage.getItem('downex_theme_explicit');
+      return explicit === 'true' && localStorage.getItem('downex_theme') === 'dark';
     } catch {
-      return true;
+      return false;
     }
   });
 
@@ -122,10 +123,8 @@ export const DownloadCompleteWindow: React.FC = () => {
   useEffect(() => {
     if (isDarkTheme) {
       document.documentElement.classList.add('dark');
-      localStorage.setItem('downex_theme', 'dark');
     } else {
       document.documentElement.classList.remove('dark');
-      localStorage.setItem('downex_theme', 'light');
     }
   }, [isDarkTheme]);
 

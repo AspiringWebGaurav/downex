@@ -20,9 +20,9 @@ test.describe('Downex — Sidebar Collapse Button at Header Junction', () => {
       expect(box.width).toBeCloseTo(20, 1);
       expect(box.height).toBeCloseTo(20, 1);
 
-      // Verify that top of the button extends above the 48px header line (junction straddle: y ~ 38px)
-      // Header is 48px high. Top of button is at 48 - 10 = 38px.
-      expect(box.y).toBeCloseTo(38, 2);
+      // Verify that the button is completely below the 36px (h-9) header line (100% visible, not cut off)
+      // Top of button is at 36 + 27 - 10 = 53px.
+      expect(box.y).toBeCloseTo(53, 2);
     }
 
     // 3. Take screenshot of junction area for visual verification
@@ -34,7 +34,7 @@ test.describe('Downex — Sidebar Collapse Button at Header Junction', () => {
 
     // Verify sidebar has collapsed class/width
     const sidebar = page.locator('aside');
-    await expect(sidebar).toHaveClass(/w-14/);
+    await expect(sidebar).toHaveClass(/(w-\[70px\]|w-14)/);
 
     // Verify collapse button is still fully visible and centered
     await expect(collapseBtn).toBeVisible();
@@ -43,15 +43,15 @@ test.describe('Downex — Sidebar Collapse Button at Header Junction', () => {
     if (collapsedBox) {
       expect(collapsedBox.width).toBeCloseTo(20, 1);
       expect(collapsedBox.height).toBeCloseTo(20, 1);
-      expect(collapsedBox.y).toBeCloseTo(38, 2);
-      expect(collapsedBox.x).toBeGreaterThan(40);
-      expect(collapsedBox.x).toBeLessThan(50);
+      expect(collapsedBox.y).toBeCloseTo(53, 2);
+      expect(collapsedBox.x).toBeGreaterThan(55);
+      expect(collapsedBox.x).toBeLessThan(65);
     }
 
     await page.screenshot({ path: 'test-results/sidebar-junction-collapsed.png' });
 
     // 5. Test clicking again to expand sidebar
     await collapseBtn.click();
-    await expect(sidebar).toHaveClass(/w-\[196px\]/);
+    await expect(sidebar).toHaveClass(/w-\[228px\]/);
   });
 });

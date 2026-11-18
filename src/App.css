@@ -267,3 +267,23 @@ html.dark #root {
 .animate-shimmer-sweep {
   animation: cpShimmerSweep 1.8s ease-in-out infinite;
 }
+
+.font-mono-tabular {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+@keyframes schedulemeFadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(3px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-fade-in {
+  animation: schedulemeFadeIn 500ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}

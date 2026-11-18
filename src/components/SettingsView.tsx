@@ -12,7 +12,6 @@ import {
   Zap, 
   Minimize2, 
   Power, 
-  ChevronRight, 
   FileText, 
   Wrench, 
   RotateCcw, 
@@ -36,6 +35,8 @@ import {
   setMaxSegments as apiSetMaxSegments, 
   isAutostartEnabled, 
   setAutostartEnabled, 
+  getCloseToTray,
+  setCloseToTray as apiSetCloseToTray,
   triggerUninstall, 
   repairApplication, 
   resetToBaseVersion, 
@@ -43,7 +44,6 @@ import {
   quitApp 
 } from '../services/tauriService';
 import { useAppVersionStore } from '../stores/appVersionStore';
-import { PatchNotesView } from './Views/PatchNotesView';
 import { RecoveryActionModal, RecoveryActionType } from './RecoveryActionModal';
 
 interface SettingsViewProps {
@@ -55,8 +55,6 @@ export const SettingsView: React.FC<SettingsViewProps> = () => {
   const showTelemetryOnHome = useDownloadStore((state) => state.showTelemetryOnHome);
   const setShowTelemetryOnHome = useDownloadStore((state) => state.setShowTelemetryOnHome);
   const setSelectedView = useDownloadStore((state) => state.setSelectedView);
-  const settingsSubView = useDownloadStore((state) => state.settingsSubView);
-  const openSettingsSubView = useDownloadStore((state) => state.openSettingsSubView);
   const formattedVersion = useAppVersionStore((state) => state.formattedVersion);
 
   const [defaultDir, setDefaultDir] = useState<string>('Downloads\\Downex');
@@ -150,7 +148,7 @@ export const SettingsView: React.FC<SettingsViewProps> = () => {
       }
     } else if (action === 'reset-base') {
       setIsResettingBase(true);
-      setMaintenanceMessage('Fetching verified Base 0.0.0 installer from GPHost...');
+      setMaintenanceMessage('Fetching verified Base 0.0.1 installer from GPHost...');
       try {
         const res = await resetToBaseVersion();
         setMaintenanceMessage(res || 'Base reset initiated. Restarting...');
@@ -194,6 +192,12 @@ export const SettingsView: React.FC<SettingsViewProps> = () => {
         setAutostart(enabled);
       })
       .catch(() => {});
+
+    getCloseToTray()
+      .then((enabled) => {
+        setCloseToTray(enabled);
+      })
+      .catch(() => {});
   }, []);
 
   const handlePickFolder = async () => {
@@ -225,9 +229,14 @@ export const SettingsView: React.FC<SettingsViewProps> = () => {
     triggerSaved();
   };
 
-  const handleCloseToTrayToggle = (val: boolean) => {
+  const handleCloseToTrayToggle = async (val: boolean) => {
     setCloseToTray(val);
     localStorage.setItem('downex_close_to_tray', String(val));
+    try {
+      await apiSetCloseToTray(val);
+    } catch (e) {
+      console.warn('Failed to toggle close_to_tray:', e);
+    }
     triggerSaved();
   };
 
@@ -256,6 +265,7 @@ export const SettingsView: React.FC<SettingsViewProps> = () => {
   const handleResetToDefaults = async () => {
     setCloseToTray(true);
     localStorage.setItem('downex_close_to_tray', 'true');
+    await apiSetCloseToTray(true).catch(() => {});
 
     setAutostart(true);
     try {
@@ -281,10 +291,6 @@ export const SettingsView: React.FC<SettingsViewProps> = () => {
     setResetFeedback(true);
     setTimeout(() => setResetFeedback(false), 3500);
   };
-
-  if (settingsSubView === 'patch-notes') {
-    return <PatchNotesView onBack={() => openSettingsSubView('settings')} />;
-  }
 
   return (
     <div className="flex-1 h-full min-h-0 overflow-y-auto px-6 py-5 select-none bg-white dark:bg-zinc-950">
@@ -668,41 +674,28 @@ export const SettingsView: React.FC<SettingsViewProps> = () => {
           </Button>
         </div>
 
-        {/* SECTION 4: ABOUT & PATCH NOTES (Clubbed Card) */}
+        {/* SECTION 4: ABOUT & APP VERSION */}
         <div className="space-y-2">
           <div className="flex items-center gap-2 px-1">
             <FileText className="w-4 h-4 text-zinc-500 dark:text-zinc-400" />
             <h2 className="text-xs font-semibold uppercase tracking-wider text-zinc-600 dark:text-zinc-400">
-              About & Updates
+              About Downex
             </h2>
           </div>
 
-          <div className="rounded-xl bg-zinc-50/70 dark:bg-zinc-900/40 border border-zinc-200/80 dark:border-zinc-800/60 shadow-xs divide-y divide-zinc-200/60 dark:divide-zinc-800/60">
-            {/* Version & Release Changelogs */}
-            <div className="p-4 flex items-center justify-between gap-4">
-              <div className="space-y-0.5">
-                <div className="flex items-center gap-2">
-                  <span className="text-xs font-semibold text-zinc-900 dark:text-zinc-100">
-                    Downex Version
-                  </span>
-                  <span className="px-2 py-0.5 rounded-md text-[10px] font-mono font-semibold bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 border border-zinc-200/80 dark:border-zinc-700/80 shadow-2xs">
-                    {formattedVersion}
-                  </span>
-                </div>
-                <p className="text-[11px] text-zinc-500 dark:text-zinc-400">
-                  Explore what is new in this release, view changelogs, or manage update versions.
-                </p>
+          <div className="rounded-xl bg-zinc-50/70 dark:bg-zinc-900/40 border border-zinc-200/80 dark:border-zinc-800/60 shadow-xs p-4 flex items-center justify-between gap-4">
+            <div className="space-y-0.5">
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-semibold text-zinc-900 dark:text-zinc-100">
+                  Downex Desktop
+                </span>
+                <span className="px-2 py-0.5 rounded-md text-[10px] font-mono font-semibold bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 border border-zinc-200/80 dark:border-zinc-700/80 shadow-2xs">
+                  {formattedVersion}
+                </span>
               </div>
-
-              <Button
-                type="button"
-                variant="outline"
-                size="md"
-                iconRight={<ChevronRight className="w-3.5 h-3.5" />}
-                onClick={() => openSettingsSubView('patch-notes')}
-              >
-                View Release Notes
-              </Button>
+              <p className="text-[11px] text-zinc-500 dark:text-zinc-400">
+                Independent High-Performance Windows Download Manager
+              </p>
             </div>
           </div>
         </div>
@@ -755,11 +748,11 @@ export const SettingsView: React.FC<SettingsViewProps> = () => {
               </Button>
             </div>
 
-            {/* Tool 2: Reset to Original Foundation (v0.0.0) */}
+            {/* Tool 2: Reset to Original Foundation (v0.0.1) */}
             <div className="p-3 sm:p-3.5 flex items-center justify-between gap-4">
               <div className="space-y-0.5 min-w-0 flex-1">
                 <span className="text-xs font-semibold text-zinc-900 dark:text-zinc-100">
-                  Revert to Base Version (v0.0.0)
+                  Revert to Base Version (v0.0.1)
                 </span>
                 <p className="text-[11px] text-zinc-500 dark:text-zinc-400">
                   Reverts the application back to the clean original installer if an update ever causes an issue.
@@ -777,7 +770,7 @@ export const SettingsView: React.FC<SettingsViewProps> = () => {
                 disabled={isRepairing}
                 onClick={() => setPendingAction('reset-base')}
               >
-                Reset to v0.0.0
+                Reset to v0.0.1
               </Button>
             </div>
 

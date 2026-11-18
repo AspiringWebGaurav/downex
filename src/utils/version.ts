@@ -4,9 +4,11 @@
  * Prevents double 'vv' prefixes under all circumstances and provides semver comparisons.
  */
 
+export const APP_BASE_VERSION = '0.0.1';
+
 export function cleanVersion(v?: string | null): string {
-  if (!v) return '0.0.0';
-  return v.trim().replace(/^[vV]+/, '') || '0.0.0';
+  if (!v) return APP_BASE_VERSION;
+  return v.trim().replace(/^[vV]+/, '') || APP_BASE_VERSION;
 }
 
 export function formatVersion(v?: string | null): string {

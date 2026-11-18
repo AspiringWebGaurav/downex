@@ -9,11 +9,37 @@ fn set_app_user_model_id() {
     }
 }
 
+#[cfg(target_os = "windows")]
+fn wait_for_exiting_parent(args: &[String]) {
+    let Some(pid_arg) = args.iter().find_map(|a| a.strip_prefix("--parent-pid=")) else {
+        return;
+    };
+    let Ok(pid) = pid_arg.parse::<u32>() else {
+        return;
+    };
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::System::Threading::{OpenProcess, WaitForSingleObject};
+    const PROCESS_SYNCHRONIZE: u32 = 0x0010_0000;
+    unsafe {
+        let handle = OpenProcess(PROCESS_SYNCHRONIZE, 0, pid);
+        if !handle.is_null() {
+            let _ = WaitForSingleObject(handle, 5000);
+            let _ = CloseHandle(handle);
+        }
+    }
+}
+
 fn main() {
     #[cfg(target_os = "windows")]
     set_app_user_model_id();
 
     let args: Vec<String> = std::env::args().collect();
+
+    #[cfg(target_os = "windows")]
+    if args.iter().any(|a| a == "--update-restart" || a == "--restarted-after-update" || a == "--restarted") {
+        wait_for_exiting_parent(&args);
+        downex_lib::commands::cleanup_old_swap_files();
+    }
 
     // 1. Chromium / Firefox Native Messaging Host Mode
     if args.iter().any(|arg| arg == "--native-messaging" || arg.starts_with("chrome-extension://")) {
@@ -123,7 +149,7 @@ fn main() {
         }
     }
 
-    let is_restarted_after_update = args.iter().any(|a| a == "--restarted-after-update");
+    let is_restarted_after_update = args.iter().any(|a| a == "--restarted-after-update" || a == "--update-restart" || a == "--restarted");
     let is_rollback_recovery = args.iter().any(|a| a == "--rollback-recovery");
     let is_update_handoff = is_restarted_after_update || is_rollback_recovery;
 
