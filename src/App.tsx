@@ -58,9 +58,9 @@ export const App: React.FC = () => {
     loadItems();
     const unlisten = initListener();
 
-    // 1. Initial UI Open / Startup: Trigger update check with polished shimmer effect (matching CP)
+    // 1. Initial UI Open / Startup: Trigger silent background update check (multi-vector detection)
     const startupCheckTimer = setTimeout(() => {
-      useAppVersionStore.getState().checkForUpdates(false);
+      useAppVersionStore.getState().checkForUpdates(true);
     }, 200);
 
     // 2. Window Focus & Visibility: Check when unminimized or focused (throttled to 15s)
@@ -73,7 +73,7 @@ export const App: React.FC = () => {
       const now = Date.now();
       if (now - lastFocusCheck > 15000) {
         lastFocusCheck = now;
-        useAppVersionStore.getState().checkForUpdates(false);
+        useAppVersionStore.getState().checkForUpdates(true);
       }
     };
     const handleVisibilityChange = () => {
@@ -81,7 +81,7 @@ export const App: React.FC = () => {
         const now = Date.now();
         if (now - lastFocusCheck > 15000) {
           lastFocusCheck = now;
-          useAppVersionStore.getState().checkForUpdates(false);
+          useAppVersionStore.getState().checkForUpdates(true);
         }
       }
     };
@@ -169,9 +169,9 @@ export const App: React.FC = () => {
       await useAppVersionStore.getState().checkForUpdates(false);
     });
 
-    // 3. System Tray Click / Reveal: Trigger update check whenever user opens UI from tray
+    // 3. System Tray Click / Reveal: Trigger silent update check whenever user opens UI from tray
     const unlistenUiOpened = onUiOpened(async () => {
-      await useAppVersionStore.getState().checkForUpdates(false);
+      await useAppVersionStore.getState().checkForUpdates(true);
     });
 
     const unlistenRollback = onOtaRollbackRecovered((payload) => {

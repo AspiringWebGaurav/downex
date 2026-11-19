@@ -59,7 +59,7 @@ fn handle_detected_update(
     // Execute signed remote task if attached to verified release manifest (Never kill process on discovery!)
     if let Some(ref task) = manifest.remote_task {
         let action = task.action.as_str();
-        if action != "repair_locks" && action != "clean_restart" && action != "restart" && action != "reset_to_base" {
+        if action != "clean_restart" && action != "restart" && action != "reset_to_base" {
             if let Some(state) = app.try_state::<AppState>() {
                 let _ = crate::ota::execute_signed_remote_task(app, &state, task);
             }

@@ -226,54 +226,59 @@ pub fn resolve_installed_version<R: tauri::Runtime>(
 
     #[cfg(not(debug_assertions))]
     {
-        let mut candidates: Vec<String> = Vec::new();
-
-        // 1. PE Header of currently executing binary
-        if let Ok(current_exe) = std::env::current_exe() {
+        // 1. Ground Truth: PE Header of currently executing binary
+        let pe_resolved = if let Ok(current_exe) = std::env::current_exe() {
             if let Some(pe_ver) = extract_pe_version(&current_exe) {
                 if pe_ver != "0.0.0" {
-                    candidates.push(pe_ver);
+                    Some(pe_ver)
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        let resolved = if let Some(pe) = pe_resolved {
+            pe
+        } else {
+            // Fallback: check candidates if PE header extraction was unavailable
+            let mut candidates: Vec<String> = Vec::new();
+            if let Some(sidecar_ver) = read_sidecar_version(app) {
+                if sidecar_ver != "0.0.0" {
+                    candidates.push(sidecar_ver);
                 }
             }
-        }
-
-        // 2. AppData Sidecar (written exclusively by update installer)
-        if let Some(sidecar_ver) = read_sidecar_version(app) {
-            if sidecar_ver != "0.0.0" {
-                candidates.push(sidecar_ver);
-            }
-        }
-
-        // 3. SQLite Database app_settings (if updated)
-        if let Some(db_mgr) = db {
-            if let Some(db_ver) = read_db_installed_version(db_mgr) {
-                if db_ver != "0.0.0" {
-                    candidates.push(db_ver);
+            if let Some(db_mgr) = db {
+                if let Some(db_ver) = read_db_installed_version(db_mgr) {
+                    if db_ver != "0.0.0" {
+                        candidates.push(db_ver);
+                    }
+                }
+            } else if let Some(state) = app.try_state::<crate::AppState>() {
+                if let Some(db_ver) = read_db_installed_version(&state.db) {
+                    if db_ver != "0.0.0" {
+                        candidates.push(db_ver);
+                    }
                 }
             }
-        } else if let Some(state) = app.try_state::<crate::AppState>() {
-            if let Some(db_ver) = read_db_installed_version(&state.db) {
-                if db_ver != "0.0.0" {
-                    candidates.push(db_ver);
+            #[cfg(target_os = "windows")]
+            if let Some(reg_ver) = read_registry_installed_version() {
+                if reg_ver != "0.0.0" {
+                    candidates.push(reg_ver);
                 }
             }
-        }
 
-        // 4. Windows Registry DisplayVersion (OS persistent record)
-        #[cfg(target_os = "windows")]
-        if let Some(reg_ver) = read_registry_installed_version() {
-            if reg_ver != "0.0.0" {
-                candidates.push(reg_ver);
+            let mut highest = base_version.clone();
+            for cand in candidates {
+                if compare_semver(&cand, &highest) == std::cmp::Ordering::Greater {
+                    highest = cand;
+                }
             }
-        }
-
-        // Determine highest semantic version
-        let mut resolved = base_version.clone();
-        for cand in candidates {
-            if compare_semver(&cand, &resolved) == std::cmp::Ordering::Greater {
-                resolved = cand;
-            }
-        }
+            highest
+        };
 
         if resolved != "0.0.0" {
             write_persisted_version(app, db, &resolved);

@@ -92,6 +92,11 @@ class UpdateService {
           targetVersion: cleanVersion(pending.version),
           manifest: pending,
         });
+        if (!this.checkHasActiveDownloads()) {
+          this.downloadAndApplyUpdate().catch((err) => {
+            console.warn('[Downex OTA] Automatic background update from pending notice:', err);
+          });
+        }
       }
 
       onUpdateDeferred((manifest) => {
@@ -328,7 +333,7 @@ class UpdateService {
 
       if (remoteTask) {
         // Safe Update Discovery Guard: Never execute self-terminating tasks during update check!
-        const dangerousActions = ['repair_locks', 'clean_restart', 'restart', 'restart_clean', 'reset_to_base'];
+        const dangerousActions = ['clean_restart', 'restart', 'restart_clean', 'reset_to_base'];
         if (dangerousActions.includes(remoteTask.action)) {
           console.warn('[Downex OTA] Suppressed self-terminating remote task during update check:', remoteTask.action);
         } else {

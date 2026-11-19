@@ -227,6 +227,9 @@ export const useAppVersionStore = create<AppVersionStore>((set, get) => {
                 targetVersion: cleanVersion(pending.version),
                 manifest: pending,
               });
+              if (!updateService.checkHasActiveDownloads()) {
+                updateService.downloadAndApplyUpdate().catch(() => {});
+              }
             }
           } catch {}
         }

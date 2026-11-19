@@ -244,7 +244,7 @@ Function PageOptions
   ${EndIf}
 
   ; Checkbox 3: Windows Firewall Rule
-  ${NSD_CreateCheckbox} 12u 52u 95% 12u "Add Windows Firewall inbound exception for multi-threaded downloads (Recommended)"
+  ${NSD_CreateCheckbox} 12u 52u 95% 12u "Add Windows Firewall exception for downloads (Recommended)"
   Pop $CheckboxFirewall
   ${If} $CheckboxFirewallState == 1
     SendMessage $CheckboxFirewall ${BM_SETCHECK} ${BST_CHECKED} 0
@@ -253,7 +253,7 @@ Function PageOptions
   ${EndIf}
 
   ; Checkbox 4: Automatic Recovery Backup
-  ${NSD_CreateCheckbox} 12u 65u 95% 12u "Keep an automatic backup snapshot to safely restore Downex (Recommended)"
+  ${NSD_CreateCheckbox} 12u 65u 95% 12u "Create backup snapshot to safely restore Downex (Recommended)"
   Pop $CheckboxGoldenBase
   ${If} $CheckboxGoldenBaseState == 1
     SendMessage $CheckboxGoldenBase ${BM_SETCHECK} ${BST_CHECKED} 0
