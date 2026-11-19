@@ -759,25 +759,20 @@ Function un.CheckRunningProcess
 
   FindWindow $0 "Downex_WINDOW_CLASS" ""
   ${If} $0 != 0
-    Goto prompt_user
+    Goto kill_process
   ${EndIf}
 
   ${If} ${FileExists} "$INSTDIR\${MAINBINARYNAME}.exe"
     ClearErrors
     FileOpen $0 "$INSTDIR\${MAINBINARYNAME}.exe" "a"
     ${If} ${Errors}
-      Goto prompt_user
+      Goto kill_process
     ${Else}
       FileClose $0
     ${EndIf}
   ${EndIf}
 
   Return
-
-  prompt_user:
-    MessageBox MB_YESNO|MB_ICONQUESTION \
-      "Downex Download Manager is currently running in the background.$\r$\n$\r$\nWould you like to close Downex now to proceed with uninstallation?" \
-      IDYES kill_process IDNO cancel_uninstall
 
   kill_process:
     FindWindow $0 "Downex_WINDOW_CLASS" ""
@@ -789,10 +784,6 @@ Function un.CheckRunningProcess
     nsExec::Exec '"$SYSDIR\taskkill.exe" /F /IM downex.exe /T'
     Sleep 300
     Return
-
-  cancel_uninstall:
-    MessageBox MB_OK|MB_ICONINFORMATION "Uninstallation cancelled. Please close Downex before running the uninstaller."
-    Abort
 FunctionEnd
 
 Function un.onInit
@@ -901,11 +892,6 @@ Section Uninstall
     DeleteRegKey /ifempty SHCTX "${MANUKEY}"
     DeleteRegKey HKCU "Software\Downex"
     nsExec::ExecToLog 'netsh advfirewall firewall delete rule name="${PRODUCTNAME}"'
-  ${EndIf}
-
-  ; Launch official uninstalled page in default browser
-  ${If} $UpdateMode <> 1
-    ExecShell "open" "https://downex.apps.gauravpatil.site/uninstalled"
   ${EndIf}
 
   !ifmacrodef NSIS_HOOK_POSTUNINSTALL
