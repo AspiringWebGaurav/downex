@@ -49,6 +49,7 @@ export type UpdateState =
   | 'installing'
   | 'restarting'
   | 'waiting_timer'
+  | 'queued'
   | 'up-to-date'
   | 'error';
 
@@ -92,10 +93,9 @@ class UpdateService {
           targetVersion: cleanVersion(pending.version),
           manifest: pending,
         });
+        // Quietly stage download in background without interrupting or restarting
         if (!this.checkHasActiveDownloads()) {
-          this.downloadAndApplyUpdate().catch((err) => {
-            console.warn('[Downex OTA] Automatic background update from pending notice:', err);
-          });
+          this.downloadUpdate().catch(() => {});
         }
       }
 
@@ -119,7 +119,6 @@ class UpdateService {
       });
 
       onUpdateDetected((manifest) => {
-
         if (manifest && manifest.version && compareSemver(cleanVersion(manifest.version), this.currentVersion) > 0) {
           if (this.checkHasActiveDownloads()) {
             this.isDeferredDueToDownloads = true;
@@ -131,9 +130,9 @@ class UpdateService {
               targetVersion: cleanVersion(manifest.version),
               manifest,
             });
-            // Automated background update pipeline (parity with CP: zero user interaction required)
-            this.downloadAndApplyUpdate().catch((err) => {
-              console.warn('[Downex OTA] Automatic background update notice:', err);
+            // Quietly stage in background; NEVER auto-restart in background!
+            this.downloadUpdate().catch((err) => {
+              console.warn('[Downex OTA] Background download staging notice:', err);
             });
           }
         }
@@ -148,10 +147,13 @@ class UpdateService {
 
   public checkHasActiveDownloads(): boolean {
     try {
-      if (typeof window !== 'undefined' && (window as any).useDownloadStore) {
-        return (window as any).useDownloadStore.getState().items.some(
-          (i: any) => i.status === 'downloading' || i.status === 'probing'
-        );
+      if (typeof window !== 'undefined') {
+        const store = (window as any).__DOWNEX_DOWNLOAD_STORE__ || (window as any).useDownloadStore;
+        if (store) {
+          return store.getState().items.some(
+            (i: any) => i.status === 'downloading' || i.status === 'probing'
+          );
+        }
       }
     } catch {}
     return false;
@@ -197,26 +199,10 @@ class UpdateService {
     // Synchronize system tray icon with current update status
     if (this.status.state === 'available') {
       setTrayIcon('update_available');
-      // Parity with CP: zero user interaction required. Automatically initiate background download & apply
-      if (!this.isBusy && !this.isSimulating) {
-        setTimeout(() => {
-          if (this.status.state === 'available' && !this.isBusy) {
-            this.downloadAndApplyUpdate().catch((e) => console.warn('[Downex OTA] Automatic background download notice:', e));
-          }
-        }, 50);
-      }
     } else if (this.status.state === 'downloading') {
       setTrayIcon('downloading');
     } else if (this.status.state === 'ready') {
       setTrayIcon('ready');
-      // Parity with CP: zero user interaction required. Automatically install and restart!
-      if (!this.isBusy && !this.isSimulating) {
-        setTimeout(() => {
-          if (this.status.state === 'ready') {
-            this.installAndRestart().catch((e) => console.warn('[Downex OTA] Automatic background restart notice:', e));
-          }
-        }, 1000);
-      }
     } else if (this.status.state === 'idle' || this.status.state === 'up-to-date') {
       setTrayIcon('idle');
     }
@@ -400,10 +386,6 @@ class UpdateService {
             stagedPath: activeStaged,
             errorMessage: undefined,
           });
-          // Parity with CP: zero user interaction required. Automatically trigger install and restart
-          this.installAndRestart().catch((err) => {
-            console.warn('[Downex OTA] Automatic background install & restart notice:', err);
-          });
           return manifest;
         }
 
@@ -414,10 +396,12 @@ class UpdateService {
           manifest,
           errorMessage: undefined,
         });
-        // Parity with CP: zero user interaction required. Automatically trigger download & apply
-        this.downloadAndApplyUpdate().catch((err) => {
-          console.warn('[Downex OTA] Automatic background update notice:', err);
-        });
+        // Stage quietly in background if no active downloads; NEVER auto-restart in background!
+        if (!this.checkHasActiveDownloads()) {
+          this.downloadUpdate().catch((err) => {
+            console.warn('[Downex OTA] Background download staging notice:', err);
+          });
+        }
         return manifest;
       } else {
         await ensureVisualHold();
@@ -745,13 +729,6 @@ class UpdateService {
         errorMessage: undefined,
       });
 
-      // Parity with ScheduleMe: zero user interaction required. Automatically trigger install and restart!
-      setTimeout(() => {
-        this.installAndRestart().catch((err) => {
-          console.warn('[Downex OTA] Automatic background install & restart notice:', err);
-        });
-      }, 250);
-
       return true;
     } catch (err: any) {
       console.error('[Downex OTA] Verification failed:', err);
@@ -885,6 +862,133 @@ class UpdateService {
         state: 'ready',
         errorMessage: `Restart failed: ${err?.message || err}`,
       });
+    }
+  }
+
+  private lastUserActivityTime = Date.now();
+  private idleGuardTimer: any = null;
+  private isEvaluatingUpdate = false;
+
+  public recordUserActivity() {
+    this.lastUserActivityTime = Date.now();
+  }
+
+  /**
+   * UI-Triggered Evaluation & Safe Activation Lifecycle:
+   * 1. Evaluates available or staged update only when the user opens/interacts with Downex UI.
+   * 2. Checks active download queue: if downloads are running, holds in QUEUED state without interrupting.
+   * 3. User Activity Guard: if user is actively interacting (typing, clicking, mouse movements),
+   *    holds in QUEUED state until user has been completely idle for 4-5 seconds (5000ms).
+   * 4. Holds user with prominent "Important Update" visual hold screen (1.5-2.0s).
+   * 5. Atomically restarts into the verified new binary.
+   */
+  public async evaluateAndApplyUpdate(): Promise<void> {
+    if (this.isEvaluatingUpdate || this.isBusy || this.status.state === 'restarting' || this.status.state === 'installing') {
+      return;
+    }
+
+    // 1. Resolve manifest and target version
+    let manifest = this.status.manifest;
+    let targetVersion = this.status.targetVersion;
+
+    if (!manifest || !targetVersion) {
+      try {
+        const pending = await getPendingUpdate();
+        if (pending && pending.version && compareSemver(cleanVersion(pending.version), this.currentVersion) > 0) {
+          manifest = pending;
+          targetVersion = cleanVersion(pending.version);
+          this.notify({
+            state: 'available',
+            targetVersion,
+            manifest,
+          });
+        }
+      } catch {}
+    }
+
+    if (!manifest || !targetVersion || compareSemver(targetVersion, this.currentVersion) <= 0) {
+      return;
+    }
+
+    // 2. Active downloads check: if user is downloading, hold in QUEUED state
+    if (this.checkHasActiveDownloads()) {
+      this.notify({
+        state: 'waiting_timer', // displays "QUEUED" on sidebar
+        targetVersion,
+        manifest,
+      });
+      try {
+        const { useDownloadStore } = await import('../stores/downloadStore');
+        const unsub = useDownloadStore.subscribe((state) => {
+          const stillActive = state.items.some(
+            (i) => i.status === 'downloading' || i.status === 'probing'
+          );
+          if (!stillActive) {
+            unsub();
+            this.evaluateAndApplyUpdate().catch(() => {});
+          }
+        });
+      } catch {}
+      return;
+    }
+
+    // 3. User Activity Guard & 5-Second Idle Detection
+    const idleMs = Date.now() - this.lastUserActivityTime;
+    if (idleMs < 5000) {
+      this.notify({
+        state: 'waiting_timer', // displays "QUEUED" on sidebar
+        targetVersion,
+        manifest,
+      });
+      if (this.idleGuardTimer) clearTimeout(this.idleGuardTimer);
+      this.idleGuardTimer = setTimeout(() => {
+        this.evaluateAndApplyUpdate().catch(() => {});
+      }, 1000);
+      return;
+    }
+
+    if (this.idleGuardTimer) {
+      clearTimeout(this.idleGuardTimer);
+      this.idleGuardTimer = null;
+    }
+
+    this.isEvaluatingUpdate = true;
+
+    try {
+      // 4. Ensure payload is downloaded & verified
+      let isReady = Boolean(this.stagedBinaryPath && this.status.state === 'ready');
+      if (!isReady) {
+        const stagedOnDisk = await getStagedUpdate(targetVersion);
+        if (stagedOnDisk) {
+          this.stagedBinaryPath = stagedOnDisk;
+          isReady = true;
+        } else {
+          const success = await this.downloadUpdate();
+          if (!success) {
+            this.isEvaluatingUpdate = false;
+            return;
+          }
+          isReady = true;
+        }
+      }
+
+      // 5. User Hold Screen: Show Important Update Notice before restart
+      this.notify({
+        state: 'restarting',
+        targetVersion,
+        manifest,
+      });
+      if (typeof window !== 'undefined' && (window as any).__DOWNEX_VERSION_STORE__) {
+        (window as any).__DOWNEX_VERSION_STORE__.getState().openModal();
+      }
+
+      // Visual hold for 1.8 seconds so user clearly sees the update dialog
+      await new Promise((r) => setTimeout(r, 1800));
+
+      // 6. Execute atomic restart
+      await this.installAndRestart();
+    } finally {
+      this.isEvaluatingUpdate = false;
     }
   }
 

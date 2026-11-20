@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Downex Download Manager",
+  "productName": "Downex",
   "mainBinaryName": "Downex",
   "version": "0.0.1",
   "identifier": "com.downex.manager",

@@ -420,15 +420,38 @@ pub fn sync_windows_installed_version(new_version: &str) {
     let hkcu = RegKey::predef(HKEY_CURRENT_USER);
     let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
 
-    // 1. Purge any duplicate bundle-ID uninstall keys created by previous builds (GPN 1:1 REA pattern)
+    // 1. Purge any duplicate bundle-ID or legacy uninstall keys created by previous builds (GPN 1:1 REA pattern)
     // This permanently prevents duplicate "Downex" entries in Windows Settings Installed Apps
     let obsolete_subkeys = [
+        r"Software\Microsoft\Windows\CurrentVersion\Uninstall\Downex Download Manager",
+        r"Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\Downex Download Manager",
         r"Software\Microsoft\Windows\CurrentVersion\Uninstall\com.downex.manager",
         r"Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\com.downex.manager",
     ];
     for obsolete in &obsolete_subkeys {
+        let _ = hkcu.delete_subkey_all(obsolete);
         let _ = hkcu.delete_subkey(obsolete);
+        let _ = hklm.delete_subkey_all(obsolete);
         let _ = hklm.delete_subkey(obsolete);
+    }
+
+    let obsolete_names = ["Downex Download Manager", "com.downex.manager"];
+    for parent_path in [
+        r"Software\Microsoft\Windows\CurrentVersion\Uninstall",
+        r"Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall",
+    ] {
+        if let Ok(parent) = hkcu.open_subkey_with_flags(parent_path, KEY_ALL_ACCESS).or_else(|_| hkcu.open_subkey_with_flags(parent_path, KEY_WRITE)) {
+            for name in &obsolete_names {
+                let _ = parent.delete_subkey_all(name);
+                let _ = parent.delete_subkey(name);
+            }
+        }
+        if let Ok(parent) = hklm.open_subkey_with_flags(parent_path, KEY_ALL_ACCESS).or_else(|_| hklm.open_subkey_with_flags(parent_path, KEY_WRITE)) {
+            for name in &obsolete_names {
+                let _ = parent.delete_subkey_all(name);
+                let _ = parent.delete_subkey(name);
+            }
+        }
     }
 
     // 2. Canonical NSIS Uninstall Registry Key (single unified entry matching ${PRODUCTNAME})
@@ -455,10 +478,12 @@ pub fn sync_windows_installed_version(new_version: &str) {
     };
 
     if !is_installed {
-        // Clean up any development/debug uninstall keys so they never pollute Windows Settings "Installed apps"
+        // Clean up any development/debug or orphaned uninstall keys so they never pollute Windows Settings "Installed apps"
         let _ = hkcu.delete_subkey(canonical_subkey);
         let _ = hkcu.delete_subkey(r"Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\Downex");
         let _ = hkcu.delete_subkey(r"Software\Microsoft\Windows\CurrentVersion\App Paths\downex.exe");
+        let _ = hklm.delete_subkey(canonical_subkey);
+        let _ = hklm.delete_subkey(r"Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\Downex");
         return;
     }
 
@@ -537,8 +562,7 @@ pub fn cmd_sync_windows_installed_version(app: AppHandle, version: Option<String
 pub fn cmd_write_update_staging_file(file_name: String, bytes: Vec<u8>) -> Result<String, String> {
     #[cfg(target_os = "windows")]
     {
-        use std::io::Write;
-        let temp_dir = std::env::temp_dir().join("com.downex.manager");
+                let temp_dir = std::env::temp_dir().join("com.downex.manager");
         let _ = std::fs::create_dir_all(&temp_dir);
         let target_file = temp_dir.join(&file_name);
         let part_file = temp_dir.join(format!("{}.part", file_name));
@@ -1858,8 +1882,7 @@ pub async fn cmd_reset_to_base_version_internal(
 ) -> Result<String, String> {
     #[cfg(target_os = "windows")]
     {
-        use std::io::Write;
-        use std::os::windows::process::CommandExt;
+                use std::os::windows::process::CommandExt;
 
         let base_url = "https://gphost.eu.cc/raw/downex-desktop";
         eprintln!("[Downex Reset] Fetching Base 0.0.1 installer from {}", base_url);

@@ -26,6 +26,9 @@
   nsExec::Exec '"$SYSDIR\taskkill.exe" /F /IM Downex.exe /T'
   nsExec::Exec '"$SYSDIR\taskkill.exe" /F /IM downex.exe /T'
   Sleep 400
+
+  ; Purge legacy install folder if empty or abandoned
+  RMDir /r "$LOCALAPPDATA\Programs\Downex Download Manager"
 !macroend
 
 ; 3. Pre-uninstall hook: Terminate running Downex before uninstallation
@@ -62,6 +65,7 @@
   Delete "$SMPROGRAMS\Downex Download Manager.lnk"
   RMDir /r "$SMPROGRAMS\Downex"
   RMDir /r "$SMPROGRAMS\Downex Download Manager"
+  RMDir /r "$LOCALAPPDATA\Programs\Downex Download Manager"
 
   ; Delete Windows Firewall inbound rule
   nsExec::ExecToLog 'netsh advfirewall firewall delete rule name="Downex Download Manager"'

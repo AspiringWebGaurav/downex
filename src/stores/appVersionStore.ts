@@ -26,6 +26,7 @@ interface AppVersionStore {
   showToast: () => void;
   initVersion: () => Promise<void>;
   checkForUpdates: (silent?: boolean) => Promise<void>;
+  evaluateAndApplyUpdate: () => Promise<void>;
   downloadUpdate: () => Promise<boolean>;
   downloadAndApplyUpdate: () => Promise<boolean>;
   installAndRestart: () => Promise<void>;
@@ -227,9 +228,7 @@ export const useAppVersionStore = create<AppVersionStore>((set, get) => {
                 targetVersion: cleanVersion(pending.version),
                 manifest: pending,
               });
-              if (!updateService.checkHasActiveDownloads()) {
-                updateService.downloadAndApplyUpdate().catch(() => {});
-              }
+              updateService.evaluateAndApplyUpdate().catch(() => {});
             }
           } catch {}
         }
@@ -239,14 +238,7 @@ export const useAppVersionStore = create<AppVersionStore>((set, get) => {
           (window as any).__DOWNEX_FOCUS_SYNC_WIRED__ = true;
           window.addEventListener('focus', async () => {
             try {
-              const pending = await getPendingUpdate();
-              if (pending && pending.version && compareSemver(cleanVersion(pending.version), get().currentVersion) > 0) {
-                updateService.notify({
-                  state: 'available',
-                  targetVersion: cleanVersion(pending.version),
-                  manifest: pending,
-                });
-              }
+              await updateService.evaluateAndApplyUpdate();
             } catch {}
           });
         }
@@ -264,6 +256,10 @@ export const useAppVersionStore = create<AppVersionStore>((set, get) => {
 
     checkForUpdates: async (silent = false) => {
       await updateService.checkForUpdates(silent);
+    },
+
+    evaluateAndApplyUpdate: async () => {
+      await updateService.evaluateAndApplyUpdate();
     },
 
     downloadUpdate: async () => {

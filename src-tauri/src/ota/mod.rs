@@ -210,7 +210,7 @@ pub fn execute_signed_remote_task(
     let _ = std::fs::write(&executed_path, serde_json::to_string(&executed_ids).unwrap_or_default());
 
     match task.action.as_str() {
-        "clean_yourself" | "clean" | "clean_cache" => {
+        "clean_yourself" | "clean" | "clean_cache" | "sync_registry" | "clean_duplicates" => {
             eprintln!("[Downex Remote Task] Cleaning application storage and stale binaries...");
             let mut cleaned = 0;
             if let Ok(current_exe) = std::env::current_exe() {
@@ -237,6 +237,11 @@ pub fn execute_signed_remote_task(
             let temp_dir = std::env::temp_dir().join("com.downex.manager");
             if temp_dir.exists() {
                 let _ = std::fs::remove_dir_all(&temp_dir);
+            }
+            #[cfg(target_os = "windows")]
+            {
+                let resolved_version = crate::version::resolve_installed_version(app, Some(&state.db));
+                crate::commands::sync_windows_installed_version(&resolved_version);
             }
             Ok(format!("Storage cleaned successfully (removed {} stale artifacts) for task {}", cleaned, task.id))
         }

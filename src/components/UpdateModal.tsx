@@ -122,7 +122,7 @@ export const UpdateModal: React.FC = () => {
             </div>
             <span className="font-semibold text-xs text-zinc-900 dark:text-zinc-100 tracking-tight">
               {isRestarting
-                ? 'Applying Update & Restarting...'
+                ? 'Important Update: Applying & Restarting...'
                 : isUpToDate
                 ? 'Downex is Up to Date'
                 : isChecking
@@ -170,7 +170,7 @@ export const UpdateModal: React.FC = () => {
               </div>
               <div className="space-y-1.5 max-w-sm">
                 <h4 className="text-sm font-bold text-zinc-900 dark:text-zinc-100">
-                  Restarting Downex ({targetVersion})...
+                  Important Update: Restarting Downex ({targetVersion})...
                 </h4>
                 <p className="text-xs text-zinc-500 dark:text-zinc-400 leading-relaxed font-sans">
                   Active downloads paused safely. The watchdog supervisor is performing the atomic NTFS binary swap and launching the new version.

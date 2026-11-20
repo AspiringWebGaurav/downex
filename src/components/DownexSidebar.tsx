@@ -124,6 +124,7 @@ export const DownexSidebar: React.FC<DownexSidebarProps> = ({ darkMode, setDarkM
       case 'restarting':
         return 'UPDATING';
       case 'waiting_timer':
+      case 'queued':
         return 'QUEUED';
       default:
         return '';
@@ -139,6 +140,7 @@ export const DownexSidebar: React.FC<DownexSidebarProps> = ({ darkMode, setDarkM
       case 'error':
         return darkMode ? 'text-rose-400 font-semibold' : 'text-rose-600 font-semibold';
       case 'waiting_timer':
+      case 'queued':
         return darkMode ? 'text-amber-400 font-semibold' : 'text-amber-600 font-semibold';
       default:
         return darkMode ? 'text-emerald-400 font-semibold' : 'text-emerald-600 font-semibold';
@@ -211,7 +213,7 @@ export const DownexSidebar: React.FC<DownexSidebarProps> = ({ darkMode, setDarkM
     ? 'opacity-0'
     : status.state === 'error'
     ? `opacity-100 ${darkMode ? 'bg-rose-500/[0.07]' : 'bg-rose-500/[0.06]'}`
-    : status.state === 'waiting_timer'
+    : status.state === 'waiting_timer' || status.state === 'queued'
     ? `opacity-100 ${darkMode ? 'bg-amber-500/[0.07]' : 'bg-amber-500/[0.06]'}`
     : status.state === 'checking'
     ? `opacity-100 ${darkMode ? 'bg-zinc-800/35' : 'bg-zinc-200/40'}`

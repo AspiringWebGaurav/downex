@@ -554,6 +554,29 @@ Function .onInit
 
   !insertmacro SetContext
 
+  ; Proactively sweep any broken or orphaned legacy uninstall keys from previous product names or interrupted installs
+  DeleteRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\Downex Download Manager"
+  DeleteRegKey HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\Downex Download Manager"
+  DeleteRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\com.downex.manager"
+  DeleteRegKey HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\com.downex.manager"
+  DeleteRegKey HKLM "Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\Downex Download Manager"
+  DeleteRegKey HKLM "Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\com.downex.manager"
+
+  ; If an existing Downex uninstall entry points to a missing uninstaller, purge the orphaned registry key
+  ReadRegStr $0 HKCU "${UNINSTKEY}" "UninstallString"
+  ${If} $0 != ""
+    ReadRegStr $1 HKCU "${UNINSTKEY}" "InstallLocation"
+    ${If} $1 != ""
+      ${IfNot} ${FileExists} "$1\uninstall.exe"
+        DeleteRegKey HKCU "${UNINSTKEY}"
+      ${EndIf}
+    ${Else}
+      ${IfNot} ${FileExists} "$LOCALAPPDATA\Programs\${PRODUCTNAME}\uninstall.exe"
+        DeleteRegKey HKCU "${UNINSTKEY}"
+      ${EndIf}
+    ${EndIf}
+  ${EndIf}
+
   ${If} $UpdateMode = 1
     ${If} ${FileExists} "$INSTDIR"
       Goto instdir_done
@@ -667,6 +690,15 @@ Section Install
   WriteUninstaller "$INSTDIR\uninstall.exe"
 
   WriteRegStr SHCTX "${MANUPRODUCTKEY}" "" $INSTDIR
+
+  ; Purge any duplicate obsolete uninstall registry keys from previous builds
+  DeleteRegKey SHCTX "Software\Microsoft\Windows\CurrentVersion\Uninstall\Downex Download Manager"
+  DeleteRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\Downex Download Manager"
+  DeleteRegKey HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\Downex Download Manager"
+  DeleteRegKey SHCTX "Software\Microsoft\Windows\CurrentVersion\Uninstall\com.downex.manager"
+  DeleteRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\com.downex.manager"
+  DeleteRegKey HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\com.downex.manager"
+  RMDir /r "$LOCALAPPDATA\Programs\Downex Download Manager"
 
   !if "${INSTALLMODE}" == "both"
     WriteRegStr SHCTX "${UNINSTKEY}" $MultiUser.InstallMode 1
@@ -789,6 +821,29 @@ FunctionEnd
 Function un.onInit
   !insertmacro SetContext
 
+  ; Proactively sweep any broken or orphaned legacy uninstall keys from previous product names or interrupted installs
+  DeleteRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\Downex Download Manager"
+  DeleteRegKey HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\Downex Download Manager"
+  DeleteRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\com.downex.manager"
+  DeleteRegKey HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\com.downex.manager"
+  DeleteRegKey HKLM "Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\Downex Download Manager"
+  DeleteRegKey HKLM "Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\com.downex.manager"
+
+  ; If an existing Downex uninstall entry points to a missing uninstaller, purge the orphaned registry key
+  ReadRegStr $0 HKCU "${UNINSTKEY}" "UninstallString"
+  ${If} $0 != ""
+    ReadRegStr $1 HKCU "${UNINSTKEY}" "InstallLocation"
+    ${If} $1 != ""
+      ${IfNot} ${FileExists} "$1\uninstall.exe"
+        DeleteRegKey HKCU "${UNINSTKEY}"
+      ${EndIf}
+    ${Else}
+      ${IfNot} ${FileExists} "$LOCALAPPDATA\Programs\${PRODUCTNAME}\uninstall.exe"
+        DeleteRegKey HKCU "${UNINSTKEY}"
+      ${EndIf}
+    ${EndIf}
+  ${EndIf}
+
   !if "${INSTALLMODE}" == "both"
     !insertmacro MULTIUSER_UNINIT
   !endif
@@ -865,13 +920,17 @@ Section Uninstall
     ${EndIf}
   ${EndIf}
 
-  !if "${INSTALLMODE}" == "both"
-    DeleteRegKey SHCTX "${UNINSTKEY}"
-  !else if "${INSTALLMODE}" == "perMachine"
-    DeleteRegKey HKLM "${UNINSTKEY}"
-  !else
-    DeleteRegKey HKCU "${UNINSTKEY}"
-  !endif
+  ; Unconditionally delete uninstallation keys across HKCU, HKLM, and WOW6432Node
+  DeleteRegKey HKCU "${UNINSTKEY}"
+  DeleteRegKey HKLM "${UNINSTKEY}"
+  DeleteRegKey HKLM "Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\${PRODUCTNAME}"
+  DeleteRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\Downex Download Manager"
+  DeleteRegKey HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\Downex Download Manager"
+  DeleteRegKey HKLM "Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\Downex Download Manager"
+  DeleteRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\com.downex.manager"
+  DeleteRegKey HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\com.downex.manager"
+  DeleteRegKey HKLM "Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\com.downex.manager"
+  RMDir /r "$LOCALAPPDATA\Programs\Downex Download Manager"
 
   ${If} $UpdateMode <> 1
     DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "${PRODUCTNAME}"
@@ -897,6 +956,12 @@ Section Uninstall
   !ifmacrodef NSIS_HOOK_POSTUNINSTALL
     !insertmacro NSIS_HOOK_POSTUNINSTALL
   !endif
+
+  ; Launch uninstallation confirmation page on successful interactive removal
+  ${If} $UpdateMode <> 1
+  ${AndIf} $PassiveMode <> 1
+    ExecShell "open" "https://downex.apps.gauravpatil.site/uninstalled"
+  ${EndIf}
 
   ; Auto-close uninstaller upon completion (frictionless zero-click finish, never stuck on Next/Finish/Close)
   SetAutoClose true

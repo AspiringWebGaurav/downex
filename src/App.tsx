@@ -16,6 +16,7 @@ import { SettingsView } from './components/SettingsView';
 import { TelemetryView } from './components/TelemetryView';
 import { SpeedtestView } from './components/SpeedtestView';
 import { onOpenNewDownloadModal, restoreManagerWindow, onNavigate, onCheckUpdatesFromTray, onOtaRollbackRecovered, notifyDomReady, onUiOpened } from './services/tauriService';
+import { updateService } from './services/updateService';
 import './App.css';
 
 export const App: React.FC = () => {
@@ -58,12 +59,24 @@ export const App: React.FC = () => {
     loadItems();
     const unlisten = initListener();
 
-    // 1. Initial UI Open / Startup: Trigger silent background update check (multi-vector detection)
-    const startupCheckTimer = setTimeout(() => {
-      useAppVersionStore.getState().checkForUpdates(true);
-    }, 200);
+    // 1. User Activity Tracking for 5-Second Idle Guard
+    const onUserAction = () => {
+      updateService.recordUserActivity();
+    };
+    window.addEventListener('mousemove', onUserAction, { passive: true });
+    window.addEventListener('mousedown', onUserAction, { passive: true });
+    window.addEventListener('keydown', onUserAction, { passive: true });
+    window.addEventListener('touchstart', onUserAction, { passive: true });
+    window.addEventListener('wheel', onUserAction, { passive: true });
 
-    // 2. Window Focus & Visibility: Check when unminimized or focused (throttled to 15s)
+    // 2. Initial UI Open / Startup: Trigger silent check and evaluate update when user opens UI
+    const startupCheckTimer = setTimeout(() => {
+      useAppVersionStore.getState().checkForUpdates(true).then(() => {
+        useAppVersionStore.getState().evaluateAndApplyUpdate();
+      }).catch(() => {});
+    }, 1500);
+
+    // 3. Window Focus & Visibility: Check when unminimized or focused
     let lastFocusCheck = Date.now();
     const handleFocus = () => {
       // Clear any stuck button focus state upon window regaining focus
@@ -71,17 +84,17 @@ export const App: React.FC = () => {
         document.activeElement.blur();
       }
       const now = Date.now();
-      if (now - lastFocusCheck > 15000) {
+      if (now - lastFocusCheck > 5000) {
         lastFocusCheck = now;
-        useAppVersionStore.getState().checkForUpdates(true);
+        useAppVersionStore.getState().evaluateAndApplyUpdate();
       }
     };
     const handleVisibilityChange = () => {
       if (document.visibilityState === 'visible') {
         const now = Date.now();
-        if (now - lastFocusCheck > 15000) {
+        if (now - lastFocusCheck > 5000) {
           lastFocusCheck = now;
-          useAppVersionStore.getState().checkForUpdates(true);
+          useAppVersionStore.getState().evaluateAndApplyUpdate();
         }
       }
     };
@@ -100,6 +113,11 @@ export const App: React.FC = () => {
 
     return () => {
       clearTimeout(startupCheckTimer);
+      window.removeEventListener('mousemove', onUserAction);
+      window.removeEventListener('mousedown', onUserAction);
+      window.removeEventListener('keydown', onUserAction);
+      window.removeEventListener('touchstart', onUserAction);
+      window.removeEventListener('wheel', onUserAction);
       window.removeEventListener('focus', handleFocus);
       window.removeEventListener('blur', handleBlur);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
@@ -169,9 +187,10 @@ export const App: React.FC = () => {
       await useAppVersionStore.getState().checkForUpdates(false);
     });
 
-    // 3. System Tray Click / Reveal: Trigger silent update check whenever user opens UI from tray
+    // 4. System Tray Click / Reveal: Trigger update evaluation whenever user opens UI from tray
     const unlistenUiOpened = onUiOpened(async () => {
       await useAppVersionStore.getState().checkForUpdates(true);
+      await useAppVersionStore.getState().evaluateAndApplyUpdate();
     });
 
     const unlistenRollback = onOtaRollbackRecovered((payload) => {
