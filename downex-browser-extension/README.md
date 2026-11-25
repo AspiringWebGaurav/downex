@@ -1,39 +1,38 @@
-# Downex Browser Extension (MV3)
+# Downex Browser Extension (Chrome, Edge & Brave)
 
-High-performance browser companion for the **Downex** Windows Download Manager.
-
-## Features vs IDM Comparison
-
-| Feature | Internet Download Manager (IDM) | Downex Browser Extension |
-|---|---|---|
-| **Media Grabber** | Flickering Win32 layered overlay that drifts when scrolling | In-DOM Shadow-DOM floating pill smoothly anchored to HTML5 video/audio |
-| **YouTube 1080p/4K** | Frequently breaks when YouTube changes scripts; requires assembly | Automatic DASH/HLS adaptive stream sniffer (video + audio itags separation) |
-| **Browser Interception** | Hooks deep Windows network driver | Clean `chrome.downloads.onCreated` interceptor with full cookie preservation |
-| **Bridge Communication** | Fragile COM/Registry dependency | Authenticated Local Loopback HTTP (`127.0.0.1:18888`) |
-| **UI Aesthetics** | Legacy 1990s Win32 dialogs | Sleek glassmorphism / GPN centered dark mode matching desktop shell |
+Official browser companion for **Downex** — catches download links automatically and hands them off to the Downex Windows desktop app for fast multi-threaded downloading.
 
 ---
 
-## Installation Guide
+## How to Install (Load Unpacked — Takes 30 Seconds)
 
-### 1. Load Unpacked in Chrome / Edge / Brave
-1. Open `chrome://extensions` or `edge://extensions` in your browser.
-2. Enable **Developer mode** (toggle in the top-right corner).
-3. Click **Load unpacked**.
-4. Select the `c:\GITHUB\downex\downex-browser-extension\` folder.
-
-### 2. Seamless Desktop Integration
-- Downex automatically runs an authenticated local loopback bridge on `http://127.0.0.1:18888`.
-- Once unpacked in your browser, the extension connects immediately with zero registry modifications or manual configuration required.
+1. **Keep This Folder Extracted**
+   - Make sure you extracted the `.zip` archive so this **`downex-browser-extension`** folder sits in a permanent location you won't accidentally delete (for example `Documents\downex-browser-extension`).
+2. **Open Your Browser Extensions Page**
+   - Google Chrome: open `chrome://extensions`
+   - Microsoft Edge: open `edge://extensions`
+   - Brave: open `brave://extensions`
+3. **Enable Developer Mode**
+   - Turn ON the **Developer mode** switch (top-right in Chrome/Brave, left sidebar in Edge).
+4. **Click "Load unpacked"**
+   - Click **Load unpacked** and select this **`downex-browser-extension`** folder (the folder containing `manifest.json` and this `README.md`).
+   - Done! You should now see **Downex — Download Accelerator Companion** enabled in your extensions list.
 
 ---
 
-## Enterprise Specification & Developer Information
+## How It Works
 
-- **Developer / Maintainer:** Gaurav Patil ([@AspiringWebGaurav](https://github.com/AspiringWebGaurav))
-- **Project Repository:** [github.com/AspiringWebGaurav/downex](https://github.com/AspiringWebGaurav/downex)
+- **When Downex Desktop Is Running:** Download clicks and browser file downloads are caught cleanly and sent straight to the Downex app over your local machine (`http://127.0.0.1:18888`) with full cookie and referer support.
+- **When Downex Desktop Is Closed:** The extension stays completely out of your way and lets Chrome/Edge/Brave download files natively.
+- **Bypass Any Single Link (`Alt + Click`):** Hold `Alt` while clicking any download link to let your browser handle that link directly instead of sending it to Downex.
+
+---
+
+## Privacy & Details
+
+- **100% Local & Private:** Communicates only with the local Downex desktop bridge on `127.0.0.1:18888`. No analytics, no tracking, and no browsing history leaves your computer.
+- **Supported Browsers:** Google Chrome, Microsoft Edge, Brave, and Chromium-based browsers (Manifest V3).
 - **License:** MIT License ([LICENSE](LICENSE))
-- **Security & Privacy:**
-  - **Zero Telemetry:** Downex does not transmit cookies, URLs, browsing history, or file data to any remote server or third party.
-  - **Air-Gapped Communication:** All bridge calls run over strict local loopback on `http://127.0.0.1:18888`.
-  - **Memory Safety:** Scoped Shadow-DOM sandbox prevents CSS pollution of web pages, and WeakMaps prevent DOM memory leaks.
+- **Official Website:** [https://downex.apps.gauravpatil.site](https://downex.apps.gauravpatil.site)
+- **Portfolio:** [https://gauravpatil.site](https://gauravpatil.site)
+- **Source Code:** [https://github.com/AspiringWebGaurav/downex](https://github.com/AspiringWebGaurav/downex)
