@@ -284,6 +284,8 @@ pub fn run() {
                     let _ = main_win.show();
                     let _ = main_win.unminimize();
                     let _ = main_win.set_focus();
+                    #[cfg(target_os = "windows")]
+                    crate::commands::force_window_to_foreground(&main_win);
                     let _ = crate::tray::refresh_tray_menu(app.handle());
                 }
             }
@@ -513,6 +515,8 @@ pub fn run() {
             cmd_get_global_shutdown_status,
             cmd_cancel_shutdown_countdown,
             cmd_trigger_immediate_shutdown,
+            cmd_get_runtime_session_state,
+            cmd_set_runtime_session_tab,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Downex application");

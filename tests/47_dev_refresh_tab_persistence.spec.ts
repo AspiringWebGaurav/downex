@@ -8,24 +8,35 @@ test.describe('Downex — Dev Refresh Tab Persistence & Production Lockdown', ()
     await page.waitForLoadState('networkidle');
   });
 
-  test('Dev Mode: Active tab persists across page reloads and hard refreshes', async ({ page }) => {
-    // 1. Initial boot starts on All Downloads
+  test('Session Mode: Active tab persists across reloads while running, with zero localStorage hard persistence', async ({ page, context }) => {
+    // Seed a legacy hard-persisted tab in localStorage to ensure it is purged on boot
+    await page.evaluate(() => {
+      localStorage.setItem('downex_dev_selected_view', 'trash');
+    });
+    await page.reload();
+    await page.waitForLoadState('networkidle');
+
+    // 1. Fresh boot starts on All Downloads and clears legacy localStorage key
     await expect(page.locator('button:has-text("All Downloads")')).toBeVisible();
+    const legacyAfterBoot = await page.evaluate(() => localStorage.getItem('downex_dev_selected_view'));
+    expect(legacyAfterBoot).toBeNull();
 
     // 2. Navigate to Settings
     const settingsBtn = page.locator('button:has-text("Settings")');
     await settingsBtn.click();
     await expect(page.locator('h1:has-text("Settings.")')).toBeVisible();
 
-    // Verify localStorage has persisted 'settings' in dev
-    const persistedView1 = await page.evaluate(() => localStorage.getItem('downex_dev_selected_view'));
-    expect(persistedView1).toBe('settings');
+    // Verify sessionStorage (not localStorage) holds 'settings' while running
+    const sessionView1 = await page.evaluate(() => sessionStorage.getItem('downex_session_selected_view'));
+    const hardView1 = await page.evaluate(() => localStorage.getItem('downex_dev_selected_view'));
+    expect(sessionView1).toBe('settings');
+    expect(hardView1).toBeNull();
 
-    // 3. Simulate Hard Refresh in Dev (page.reload preserves localStorage)
+    // 3. Simulate Refresh while running (preserves sessionStorage)
     await page.reload();
     await page.waitForLoadState('networkidle');
 
-    // Verify that after refresh, Settings remains the active tab!
+    // Verify that after refresh while running, Settings remains the active tab
     await expect(page.locator('h1:has-text("Settings.")')).toBeVisible();
     await expect(page.locator('text=Start with Windows')).toBeVisible();
     const currentViewAfterReload = await page.evaluate(() => {
@@ -38,11 +49,10 @@ test.describe('Downex — Dev Refresh Tab Persistence & Production Lockdown', ()
     await queuesBtn.click();
     await expect(page.locator('button:has-text("Add Download to Queue")')).toBeVisible();
 
-    // Verify localStorage has updated to 'queues'
-    const persistedView2 = await page.evaluate(() => localStorage.getItem('downex_dev_selected_view'));
-    expect(persistedView2).toBe('queues');
+    const sessionView2 = await page.evaluate(() => sessionStorage.getItem('downex_session_selected_view'));
+    expect(sessionView2).toBe('queues');
 
-    // 5. Hard refresh again
+    // 5. Refresh while running again
     await page.reload();
     await page.waitForLoadState('networkidle');
 
@@ -58,11 +68,9 @@ test.describe('Downex — Dev Refresh Tab Persistence & Production Lockdown', ()
     await statsBtn.click();
     await expect(page.locator('text=Live Speed & System Details')).toBeVisible();
 
-    // Hard refresh again
     await page.reload();
     await page.waitForLoadState('networkidle');
 
-    // Verify Speed & Stats remains active!
     await expect(page.locator('text=Live Speed & System Details')).toBeVisible();
     const currentViewStats = await page.evaluate(() => {
       return (window as any).useDownloadStore?.getState().selectedView;
@@ -72,18 +80,16 @@ test.describe('Downex — Dev Refresh Tab Persistence & Production Lockdown', ()
     // 7. Navigate back to All Downloads
     const allDownloadsBtn = page.locator('button:has-text("All Downloads")');
     await allDownloadsBtn.click();
-    const persistedViewAll = await page.evaluate(() => localStorage.getItem('downex_dev_selected_view'));
-    expect(persistedViewAll).toBe('all');
+    const sessionViewAll = await page.evaluate(() => sessionStorage.getItem('downex_session_selected_view'));
+    expect(sessionViewAll).toBe('all');
 
-    // Reload again
-    await page.reload();
-    await page.waitForLoadState('networkidle');
-
-    // Remains on All Downloads
-    const currentViewAll = await page.evaluate(() => {
-      return (window as any).useDownloadStore?.getState().selectedView;
-    });
-    expect(currentViewAll).toBe('all');
+    // 8. Simulate fresh app/system restart (new page/session without prior sessionStorage) -> opens fresh on 'all'
+    const freshPage = await context.newPage();
+    await freshPage.goto('/');
+    await freshPage.waitForLoadState('networkidle');
+    const freshView = await freshPage.evaluate(() => (window as any).useDownloadStore?.getState().selectedView);
+    expect(freshView).toBe('all');
+    await freshPage.close();
   });
 
   test('Production Mode: Reload shortcuts remain strictly locked down', async ({ page }) => {

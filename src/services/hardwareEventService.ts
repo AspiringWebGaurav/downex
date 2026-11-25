@@ -9,10 +9,11 @@
  */
 
 import { useHardwareBanStore } from '../stores/hardwareBanStore';
-import { useMarqueeNoticeStore } from '../stores/marqueeNoticeStore';
+import { useMarqueeNoticeStore, MarqueeNotice } from '../stores/marqueeNoticeStore';
+import { useAppVersionStore } from '../stores/appVersionStore';
 import { updateService } from './updateService';
-import { isTauri } from './tauriService';
-import { APP_BASE_VERSION } from '../utils/version';
+import { isTauri, getResolvedVersion } from './tauriService';
+import { APP_BASE_VERSION, cleanVersion } from '../utils/version';
 
 let resolvedEcosystemBaseUrl: string | null = null;
 
@@ -61,7 +62,8 @@ export function getEcosystemBaseUrl(): string {
 let activeEventSource: EventSource | null = null;
 let reconnectTimer: any = null;
 let isInitialized = false;
-let isProcessingTransition = false;
+let currentBootEpoch = 0;
+let syncQueuePromise: Promise<void> = Promise.resolve();
 
 interface DirectivePayload {
   action: 'BAN' | 'UNBAN' | 'hardware_ban' | 'hardware_unban' | 'HARDWARE_BAN' | 'HARDWARE_UNBAN' | string;
@@ -70,11 +72,126 @@ interface DirectivePayload {
   timestamp?: number;
 }
 
+const ACTIVE_OTA_STATES = new Set([
+  'downloading',
+  'verifying',
+  'patching',
+  'installing',
+  'restarting',
+  'waiting_timer',
+  'queued',
+  'ready',
+]);
+
+function buildNoticesSignature(list: unknown): string {
+  if (!Array.isArray(list) || list.length === 0) return '';
+  return list
+    .filter((item): item is MarqueeNotice => Boolean(item && typeof item === 'object'))
+    .map(
+      (n) =>
+        `${n.id || ''}:${n.updatedAt || n.createdAt || ''}:${(n.text || '').trim()}:${n.tone || ''}:${n.modeLabel || ''}:${n.modeColor || ''}:${n.direction || ''}:${n.speed ?? 1}:${Boolean(n.showCountdown)}:${n.expiresAt ?? ''}`
+    )
+    .join('|');
+}
+
+function runAppVersionPacketSync(
+  applyToSystem: () => Promise<void> | void,
+  shouldRun?: () => boolean
+): Promise<void> {
+  const execute = async () => {
+    if (shouldRun && !shouldRun()) {
+      return;
+    }
+
+    const currentOtaState = updateService.getStatus().state;
+    const otaBusy = ACTIVE_OTA_STATES.has(currentOtaState) && !updateService.getStatus().isSilentSync;
+    if (otaBusy) {
+      await applyToSystem();
+      return;
+    }
+
+    // 1. Checking incoming SSE / server payload
+    updateService.notify({
+      state: 'checking',
+      isManualCheck: false,
+      isSilentSync: true,
+      errorMessage: undefined,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 220));
+
+    // 2. Smooth 1% -> 100% download stage on APP VERSION row
+    const packetBytes = 65536;
+    const steps = 20;
+    for (let i = 1; i <= steps; i++) {
+      const pct = Math.min(100, Math.round((i / steps) * 100));
+      updateService.notify({
+        state: 'downloading',
+        isManualCheck: false,
+        isSilentSync: true,
+        progress: {
+          percentage: pct,
+          downloadedBytes: Math.floor((pct / 100) * packetBytes),
+          totalBytes: packetBytes,
+        },
+        errorMessage: undefined,
+      });
+      await new Promise((resolve) => setTimeout(resolve, 28));
+    }
+
+    // 3. Cryptographic / structural verification stage
+    updateService.notify({
+      state: 'verifying',
+      isManualCheck: false,
+      isSilentSync: true,
+      progress: {
+        percentage: 100,
+        downloadedBytes: packetBytes,
+        totalBytes: packetBytes,
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 280));
+
+    // 4. Patching / applying verified state to the running system
+    updateService.notify({
+      state: 'patching',
+      isManualCheck: false,
+      isSilentSync: true,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 240));
+
+    await applyToSystem();
+
+    // Return cleanly to idle APP VERSION (no false UP TO DATE badge on background sync)
+    updateService.notify({
+      state: 'idle',
+      isManualCheck: false,
+      isSilentSync: false,
+      progress: undefined,
+      errorMessage: undefined,
+    });
+  };
+
+  syncQueuePromise = syncQueuePromise.then(execute, execute);
+  return syncQueuePromise;
+}
+
+function syncNoticesThroughAppVersion(list: unknown, pulseOnReveal: boolean): Promise<void> {
+  const incomingList = Array.isArray(list) ? list : [];
+  const nextSig = buildNoticesSignature(incomingList);
+
+  return runAppVersionPacketSync(
+    () => {
+      useMarqueeNoticeStore.getState().setNotices(incomingList, pulseOnReveal && incomingList.length > 0);
+    },
+    () => nextSig !== buildNoticesSignature(useMarqueeNoticeStore.getState().notices)
+  );
+}
+
 /**
  * Handles incoming directives from either SSE stream or attestation fallback.
  */
 export async function handleDirectivePayload(payload: DirectivePayload, hwid: string): Promise<void> {
-  if (!payload || !payload.action || isProcessingTransition) return;
+  if (!payload || !payload.action) return;
 
   const target = (payload.target_hwid || '').trim().toUpperCase();
   const current = hwid.trim().toUpperCase();
@@ -86,67 +203,28 @@ export async function handleDirectivePayload(payload: DirectivePayload, hwid: st
       const currentBanState = useHardwareBanStore.getState().isBanned;
       if (currentBanState) return; // Already banned, skip animation
 
-      isProcessingTransition = true;
-      try {
-        console.warn('[Downex Silicon] Instant REALTIME BAN directive received:', payload);
-
-        // 1. Stage progression animation on sidebar App Version
-        updateService.notify({ state: 'checking', isManualCheck: true });
-        await new Promise((resolve) => setTimeout(resolve, 300));
-
-        updateService.notify({ state: 'verifying', isManualCheck: true });
-        await new Promise((resolve) => setTimeout(resolve, 350));
-
-        updateService.notify({ state: 'patching', isManualCheck: true });
-        await new Promise((resolve) => setTimeout(resolve, 450));
-
-        // 2. Enforce live ban instantly in React store & native Rust
+      console.warn('[Downex Silicon] Instant REALTIME BAN directive received:', payload);
+      await runAppVersionPacketSync(async () => {
         await useHardwareBanStore.getState().enforceBanLive(payload.reason || 'You have been banned from ADMIN');
-
-        // 3. Clear updating state
-        updateService.notify({ state: 'idle', isManualCheck: false });
-      } finally {
-        isProcessingTransition = false;
-      }
+      });
     } else if (actionUpper === 'UNBAN' || actionUpper === 'HARDWARE_UNBAN') {
       const currentBanState = useHardwareBanStore.getState().isBanned;
       if (!currentBanState) return; // Already unbanned, skip animation
 
-      isProcessingTransition = true;
+      console.log('[Downex Silicon] Instant REALTIME UNBAN directive received:', payload);
+      useHardwareBanStore.getState().setReinstating(true);
       try {
-        console.log('[Downex Silicon] Instant REALTIME UNBAN directive received:', payload);
         const startedAt = Date.now();
-
-        // 1. Enter 1.5s restoring state on live UI while keeping sidebar cleanly locked
-        useHardwareBanStore.getState().setReinstating(true);
-
-        // 2. Stage progression animation on sidebar App Version
-        updateService.notify({ state: 'verifying', isManualCheck: true });
-        await new Promise((resolve) => setTimeout(resolve, 350));
-
-        updateService.notify({ state: 'installing', isManualCheck: true });
-        await new Promise((resolve) => setTimeout(resolve, 450));
-
-        // 3. Lift ban and reinstate saved user settings (sidebar, menu, layout)
-        await useHardwareBanStore.getState().liftBanLive();
-
-        // 4. Hold clean loader until ~1.5s total transition completes so user sees reinstatement
-        const remainingMs = Math.max(0, 1500 - (Date.now() - startedAt));
-        if (remainingMs > 0) {
-          await new Promise((resolve) => setTimeout(resolve, remainingMs));
-        }
-
-        // 5. Reveal restored workspace & sidebar
-        useHardwareBanStore.getState().setReinstating(false);
-
-        // 6. Show clean UP TO DATE completion for 2.5s
-        updateService.notify({ state: 'up-to-date', isManualCheck: true });
-        setTimeout(() => {
-          updateService.notify({ state: 'idle', isManualCheck: false });
-        }, 2500);
+        await runAppVersionPacketSync(async () => {
+          await useHardwareBanStore.getState().liftBanLive();
+          const remainingMs = Math.max(0, 1200 - (Date.now() - startedAt));
+          if (remainingMs > 0) {
+            await new Promise((resolve) => setTimeout(resolve, remainingMs));
+          }
+          useHardwareBanStore.getState().setReinstating(false);
+        });
       } finally {
         useHardwareBanStore.getState().setReinstating(false);
-        isProcessingTransition = false;
       }
     }
   }
@@ -156,7 +234,7 @@ export async function handleDirectivePayload(payload: DirectivePayload, hwid: st
  * Attests device to remote ecosystem registry and verifies permission state.
  * Probes candidate URLs safely and locks onto the first responsive endpoint.
  */
-async function attestDevice(hwid: string): Promise<string> {
+async function attestDevice(hwid: string, bootEpoch: number): Promise<string> {
   const preferred = getEcosystemBaseUrl();
   // Never allow browser/Playwright previews (!isTauri) to attest or stream into production ecosystem DB
   const candidates = !isTauri
@@ -180,12 +258,20 @@ async function attestDevice(hwid: string): Promise<string> {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 6000);
 
+      let reportedVersion = useAppVersionStore.getState().currentVersion || APP_BASE_VERSION;
+      try {
+        const resolved = cleanVersion(await getResolvedVersion());
+        if (resolved && resolved !== '0.0.0') {
+          reportedVersion = resolved;
+        }
+      } catch {}
+
       const res = await fetch(`${candidate}/api/downex/attest`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           hwid,
-          version: APP_BASE_VERSION,
+          version: reportedVersion,
           os: 'Windows 11 x64 (NTFS Silicon Enforced)',
         }),
         signal: controller.signal,
@@ -193,10 +279,12 @@ async function attestDevice(hwid: string): Promise<string> {
       clearTimeout(timeoutId);
 
       if (res.ok) {
+        if (bootEpoch !== currentBootEpoch) return candidate;
         resolvedEcosystemBaseUrl = candidate;
         const data = await res.json();
+        if (bootEpoch !== currentBootEpoch) return candidate;
         if (data && Array.isArray(data.notices)) {
-          useMarqueeNoticeStore.getState().setNotices(data.notices, false);
+          await syncNoticesThroughAppVersion(data.notices, true);
         }
         if (data && data.is_banned === true) {
           if (!useHardwareBanStore.getState().isBanned) {
@@ -274,37 +362,8 @@ function connectDirectiveStream(hwid: string): void {
         const parsed = JSON.parse(e.data);
         if (!parsed || !Array.isArray(parsed.notices)) return;
 
-        if (parsed.is_initial === true) {
-          // Silent initial sync on connect
-          useMarqueeNoticeStore.getState().setNotices(parsed.notices, false);
-          return;
-        }
-
-        // Live packet from Admin: animate APP VERSION stage progression just like BAN/UNBAN packets
-        if (!isProcessingTransition) {
-          isProcessingTransition = true;
-          try {
-            updateService.notify({ state: 'checking', isManualCheck: true });
-            await new Promise((resolve) => setTimeout(resolve, 280));
-
-            updateService.notify({ state: 'verifying', isManualCheck: true });
-            await new Promise((resolve) => setTimeout(resolve, 320));
-
-            updateService.notify({ state: 'patching', isManualCheck: true });
-            await new Promise((resolve) => setTimeout(resolve, 380));
-
-            useMarqueeNoticeStore.getState().setNotices(parsed.notices, true);
-
-            updateService.notify({ state: 'up-to-date', isManualCheck: true });
-            setTimeout(() => {
-              updateService.notify({ state: 'idle', isManualCheck: false });
-            }, 2200);
-          } finally {
-            isProcessingTransition = false;
-          }
-        } else {
-          useMarqueeNoticeStore.getState().setNotices(parsed.notices, true);
-        }
+        // Always download & verify through APP VERSION pipeline whenever notices change (never pop out of the box)
+        await syncNoticesThroughAppVersion(parsed.notices, true);
       } catch (err) {
         console.warn('[Downex Silicon] Failed to parse marquee notices packet:', err);
       }
@@ -352,6 +411,7 @@ export function initHardwareEventService(): () => void {
     return () => {};
   }
   isInitialized = true;
+  const bootEpoch = ++currentBootEpoch;
 
   let currentHwid = '';
 
@@ -359,18 +419,20 @@ export function initHardwareEventService(): () => void {
     try {
       // 1. Initialize store ban status first
       await useHardwareBanStore.getState().initBanStatus();
+      if (bootEpoch !== currentBootEpoch) return;
       currentHwid = useHardwareBanStore.getState().hwid;
       if (!currentHwid) return;
 
       // 2. Initial Attestation (runs strictly ONCE on boot)
-      await attestDevice(currentHwid);
+      await attestDevice(currentHwid, bootEpoch);
+      if (bootEpoch !== currentBootEpoch) return;
 
       // 3. Open Zero-Poll Real-Time SSE Stream (pure push from Firebase RTDB)
       connectDirectiveStream(currentHwid);
 
       // 4. Re-connect on network recovery
       window.addEventListener('online', () => {
-        if (currentHwid) {
+        if (bootEpoch === currentBootEpoch && currentHwid) {
           connectDirectiveStream(currentHwid);
         }
       });
@@ -380,6 +442,7 @@ export function initHardwareEventService(): () => void {
   })();
 
   return () => {
+    currentBootEpoch++;
     isInitialized = false;
     if (reconnectTimer) clearTimeout(reconnectTimer);
     if (activeEventSource) {

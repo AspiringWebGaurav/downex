@@ -10,11 +10,12 @@ test.beforeAll(() => {
   }
 });
 
-test.describe('OTA Update Transitions & Zero-Modal Fade-Out', () => {
-  test('1. Old UI pure fade-out: Zero in-window modal popup during restart', async ({ page }) => {
+test.describe('OTA Update Transitions & Direct Crisp UI Close', () => {
+  test('1. Old UI direct close: Zero in-window modal popup and zero white blank flash during restart', async ({ page }) => {
     await page.goto('/');
     await page.waitForLoadState('domcontentloaded');
     await page.waitForSelector('text=All Downloads', { timeout: 15000 });
+    await page.waitForTimeout(450);
 
     // Verify modal does not exist initially
     const bridgeModal = page.locator('[data-testid="updating-bridge-modal"]');
@@ -37,12 +38,16 @@ test.describe('OTA Update Transitions & Zero-Modal Fade-Out', () => {
     // Check that updating-bridge-modal is STILL completely absent from DOM
     await expect(bridgeModal).toHaveCount(0);
 
-    // Verify the root container has the fade-out class
-    const fadeContainer = page.locator('.app-fade-container.fade-out');
-    await expect(fadeContainer).toBeAttached({ timeout: 5000 });
+    // Verify zero white blank flash (no .fade-out opacity-0 class; root stays crisp until HWND direct close)
+    await expect(page.locator('.fade-out')).toHaveCount(0);
+    const opacity = await page.evaluate(() => {
+      const rootEl = document.querySelector('#root > div');
+      return rootEl ? window.getComputedStyle(rootEl).opacity : '1';
+    });
+    expect(opacity).toBe('1');
 
-    // Capture screenshot of pure smooth fade-out (NO modal on screen)
-    const screenshotPath = path.join(screenshotDir, '01_old_ui_pure_fade_out.png');
+    // Capture screenshot of clean direct-close ready state (NO modal, NO white blank flash)
+    const screenshotPath = path.join(screenshotDir, '01_old_ui_direct_close.png');
     await page.screenshot({ path: screenshotPath });
     console.log(`Saved screenshot: ${screenshotPath}`);
   });

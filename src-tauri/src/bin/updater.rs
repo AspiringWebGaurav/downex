@@ -117,11 +117,12 @@ fn wait_for_parent_exit(pid: u32) {
     unsafe {
         let handle = OpenProcess(PROCESS_SYNCHRONIZE | PROCESS_TERMINATE, 0, pid);
         if !handle.is_null() {
-            // Wait up to 4000ms for clean parent process termination
-            let res = WaitForSingleObject(handle, 4000);
+            // Wait up to 6000ms for clean parent process termination
+            let res = WaitForSingleObject(handle, 6000);
             if res != 0 {
-                // Fallback: If parent process hangs, terminate it forcefully to avoid deadlock
+                // Fallback: If parent process hangs, terminate it forcefully to avoid file lock deadlock
                 let _ = TerminateProcess(handle, 1);
+                let _ = WaitForSingleObject(handle, 1500);
             }
             let _ = CloseHandle(handle);
         }
@@ -138,27 +139,56 @@ fn resolve_install_root() -> Option<PathBuf> {
     }
 }
 
-fn relaunch_process(main_exe: &Path, install_root: &Path, should_show: bool) {
-    if !main_exe.exists() {
-        return;
+fn resolve_main_exe(install_root: &Path) -> PathBuf {
+    if let Ok(entries) = std::fs::read_dir(install_root) {
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name.eq_ignore_ascii_case("Downex.exe") {
+                return entry.path();
+            }
+        }
     }
-    let mut cmd = std::process::Command::new(main_exe);
-    cmd.arg("--update-restart")
-        .arg("--restarted")
-        .arg(format!("--parent-pid={}", std::process::id()))
-        .arg(if should_show { "--show" } else { "--autostart" });
-    cmd.current_dir(install_root);
-    cmd.stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null());
+    let upper = install_root.join("Downex.exe");
+    if upper.exists() {
+        upper
+    } else {
+        install_root.join("downex.exe")
+    }
+}
 
-    #[cfg(target_os = "windows")]
-    {
-        use std::os::windows::process::CommandExt;
-        cmd.creation_flags(0x08000000 | 0x00000008); // CREATE_NO_WINDOW | DETACHED_PROCESS
+fn relaunch_process(main_exe: &Path, install_root: &Path, should_show: bool) -> bool {
+    let target_exe = if main_exe.exists() {
+        main_exe.to_path_buf()
+    } else {
+        resolve_main_exe(install_root)
+    };
+    if !target_exe.exists() {
+        return false;
     }
 
-    let _ = cmd.spawn();
+    let build_cmd = |flags: u32| -> std::process::Command {
+        let mut cmd = std::process::Command::new(&target_exe);
+        cmd.arg("--update-restart")
+            .arg("--restarted")
+            .arg(format!("--parent-pid={}", std::process::id()))
+            .arg(if should_show { "--show" } else { "--autostart" });
+        cmd.current_dir(install_root);
+        cmd.stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        #[cfg(target_os = "windows")]
+        if flags != 0 {
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(flags);
+        }
+        cmd
+    };
+
+    // CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP ensures clean independent GUI relaunch without console flicker
+    if build_cmd(0x0800_0000 | 0x0000_0200).spawn().is_ok() {
+        return true;
+    }
+    build_cmd(0).spawn().is_ok()
 }
 
 fn verify_binary_integrity(path: &Path) -> bool {
@@ -238,11 +268,8 @@ fn execute_atomic_update_pipeline(
     }
     std::thread::sleep(std::time::Duration::from_millis(200));
 
-    // Resolve main binary
-    let mut main_exe = install_root.join("Downex.exe");
-    if !main_exe.exists() && install_root.join("downex.exe").exists() {
-        main_exe = install_root.join("downex.exe");
-    }
+    // Resolve main binary preserving actual filesystem name
+    let main_exe = resolve_main_exe(install_root);
 
     // Resolve staged binary
     let staged_file: Option<PathBuf> = if let Some(p) = staged_arg {
@@ -275,24 +302,24 @@ fn execute_atomic_update_pipeline(
         std::thread::sleep(std::time::Duration::from_millis(80));
     }
 
-    // Phase 2: Atomic rename current -> .old (retry loop)
+    // Phase 2: Atomic rename current -> .old (robust retry loop for slow Defender/WebView2 handle release)
     let mut renamed_to_old = false;
     if main_exe.exists() {
-        for _ in 0..15 {
+        for _ in 0..25 {
             if std::fs::rename(&main_exe, &old_exe).is_ok() {
                 renamed_to_old = true;
                 break;
             }
-            std::thread::sleep(std::time::Duration::from_millis(120));
+            std::thread::sleep(std::time::Duration::from_millis(150));
         }
     } else {
         renamed_to_old = true;
     }
 
-    // Phase 3: Move staged -> Downex.exe (retry loop)
+    // Phase 3: Move staged -> target exe (robust retry loop)
     let mut swap_success = false;
     if renamed_to_old {
-        for _ in 0..15 {
+        for _ in 0..25 {
             if std::fs::rename(&staged, &main_exe).is_ok() {
                 swap_success = true;
                 break;
@@ -302,7 +329,7 @@ fn execute_atomic_update_pipeline(
                 swap_success = true;
                 break;
             }
-            std::thread::sleep(std::time::Duration::from_millis(120));
+            std::thread::sleep(std::time::Duration::from_millis(150));
         }
     }
 
@@ -585,10 +612,7 @@ fn main() {
         return;
     };
 
-    let mut main_exe = install_root.join("Downex.exe");
-    if !main_exe.exists() && install_root.join("downex.exe").exists() {
-        main_exe = install_root.join("downex.exe");
-    }
+    let main_exe = resolve_main_exe(&install_root);
 
     let target_ver = args
         .iter()
@@ -626,7 +650,8 @@ fn main() {
     if !should_show {
         let _success = execute_atomic_update_pipeline(&install_root, &target_ver, staged_arg.as_ref(), parent_pid);
         if !is_dev_mode {
-            relaunch_process(&main_exe, &install_root, false);
+            let launch_exe = resolve_main_exe(&install_root);
+            let _ = relaunch_process(&launch_exe, &install_root, false);
         }
         return;
     }
@@ -711,15 +736,13 @@ fn main() {
         SetTimer(hwnd, 1, 16, None); // 60+ FPS high-refresh timer for hardware-smooth emerald progress
 
         let install_root_clone = install_root.clone();
-        let main_exe_clone = main_exe.clone();
         let target_ver_clone = target_ver.clone();
         let staged_arg_clone = staged_arg.clone();
         let hwnd_raw = hwnd as isize;
         let is_preview_clone = is_preview;
-        let is_dev_mode_clone = is_dev_mode;
 
         // Spawn background worker with lifecycle timing & fallbacks
-        std::thread::spawn(move || {
+        let worker_handle = std::thread::spawn(move || {
             let win_handle = hwnd_raw as HWND;
 
             // Smooth Window Fade-In (300ms)
@@ -804,18 +827,9 @@ fn main() {
                 std::thread::sleep(std::time::Duration::from_millis(20));
             }
 
-            // Close updater window
+            // Signal close ONLY AFTER atomic swap & fade-out finish
             WORKER_DONE.store(true, Ordering::Relaxed);
             let _ = PostMessageW(win_handle, WM_CLOSE, 0, 0);
-
-            // Stop #2: Deliberate 0.75-second calm pause before launching new application
-            std::thread::sleep(std::time::Duration::from_millis(750));
-
-            // In dev mode, scripts/dev.mjs supervisor resumes tauri dev automatically in the terminal!
-            // In production installed binary, relaunch Downex.exe directly:
-            if !is_dev_mode_clone {
-                relaunch_process(&main_exe_clone, &install_root_clone, true);
-            }
         });
 
         // Win32 message pump
@@ -823,6 +837,17 @@ fn main() {
         while GetMessageW(&mut msg, std::ptr::null_mut(), 0, 0) > 0 {
             TranslateMessage(&msg);
             DispatchMessageW(&msg);
+        }
+
+        // CRITICAL: Guarantee worker completes and updater window is gone BEFORE Stop #2 & relaunch!
+        // Running Stop #2 & relaunch on the main thread ensures process exit NEVER kills the launcher mid-sleep.
+        let _ = worker_handle.join();
+
+        if !is_preview && !is_dev_mode {
+            // Stop #2: Deliberate 0.75-second calm pause before launching upgraded application
+            std::thread::sleep(std::time::Duration::from_millis(750));
+            let launch_exe = resolve_main_exe(&install_root);
+            let _ = relaunch_process(&launch_exe, &install_root, should_show);
         }
     }
 }

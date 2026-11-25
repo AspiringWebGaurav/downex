@@ -57,6 +57,7 @@ export interface UpdateStatus {
   errorMessage?: string;
   stagedPath?: string;
   isManualCheck?: boolean;
+  isSilentSync?: boolean;
 }
 
 export type UpdateStatusListener = (status: UpdateStatus) => void;
@@ -242,7 +243,7 @@ class UpdateService {
           setTimeout(() => {
             if (this.status.state === 'up-to-date') this.notify({ state: 'idle', isManualCheck: false, errorMessage: undefined });
           }, 3500);
-        } else {
+        } else if (!this.status.isSilentSync) {
           this.notify({ state: 'idle', isManualCheck: false, manifest: null, errorMessage: undefined });
         }
         return null;
@@ -265,7 +266,7 @@ class UpdateService {
           setTimeout(() => {
             if (this.status.state === 'up-to-date') this.notify({ state: 'idle', isManualCheck: false });
           }, 3500);
-        } else {
+        } else if (!this.status.isSilentSync) {
           this.notify({ state: 'idle', isManualCheck: false, manifest: null, errorMessage: undefined });
         }
         return null;
@@ -311,7 +312,7 @@ class UpdateService {
           setTimeout(() => {
             if (this.status.state === 'up-to-date') this.notify({ state: 'idle', isManualCheck: false });
           }, 3500);
-        } else {
+        } else if (!this.status.isSilentSync) {
           // GPN Rule: If same version on silent check, stay idle and show nothing!
           this.notify({ state: 'idle', isManualCheck: false, manifest: null });
         }
@@ -365,12 +366,12 @@ class UpdateService {
           manifest,
           errorMessage: undefined,
         });
-        // Auto-download update strictly while UI is visible and open (hold 'available' state for 2 seconds)
+        // Auto-download update first strictly while UI is visible and open (even if downloads or interactions are active)
         if (this.availableHoldTimer) {
           clearTimeout(this.availableHoldTimer);
           this.availableHoldTimer = null;
         }
-        if (this.isWindowVisible() && !this.checkHasActiveDownloads()) {
+        if (this.isWindowVisible()) {
           this.availableHoldTimer = setTimeout(() => {
             this.availableHoldTimer = null;
             if (this.status.state === 'available') {
@@ -394,7 +395,7 @@ class UpdateService {
           setTimeout(() => {
             if (this.status.state === 'up-to-date') this.notify({ state: 'idle', isManualCheck: false });
           }, 3500);
-        } else {
+        } else if (!this.status.isSilentSync) {
           // GPN Rule: If same version on silent check, stay idle and show nothing!
           this.notify({ state: 'idle', isManualCheck: false, manifest: null });
         }
@@ -416,7 +417,7 @@ class UpdateService {
             this.notify({ state: 'idle', isManualCheck: false, errorMessage: undefined });
           }
         }, 3500);
-      } else {
+      } else if (!this.status.isSilentSync) {
         this.notify({ state: 'idle', isManualCheck: false, manifest: null, errorMessage: undefined });
       }
       return null;
@@ -721,12 +722,11 @@ class UpdateService {
           }
         } catch {}
 
-        // Wait for UI smooth fade-out (500ms) so the window fades away completely before process handoff
-        await new Promise((resolve) => setTimeout(resolve, 500));
-
+        // Direct close old UI immediately (ZERO DOM white blank flash; native window hides cleanly before handoff)
         const theme = localStorage.getItem('downex_theme') || (typeof document !== 'undefined' && document.documentElement.classList.contains('dark') ? 'dark' : 'light');
+        const wasVisible = typeof document === 'undefined' ? true : document.visibilityState === 'visible';
         const { launchUpdaterAndExit } = await import('./tauriService');
-        await launchUpdaterAndExit(effectiveTarget, this.stagedBinaryPath || 'mock', theme);
+        await launchUpdaterAndExit(effectiveTarget, this.stagedBinaryPath || 'mock', theme, wasVisible);
         return;
       } catch (err: any) {
         console.error('[Downex OTA] External updater handoff failed:', err);
@@ -784,12 +784,21 @@ class UpdateService {
     this.lastUserActivityTime = Date.now();
   }
 
+  private isUserActivelyTyping(): boolean {
+    if (typeof document === 'undefined') return false;
+    const active = document.activeElement as HTMLElement | null;
+    if (!active) return false;
+    const tag = active.tagName?.toUpperCase();
+    return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || active.isContentEditable;
+  }
+
   /**
    * UI-Triggered Evaluation & Safe Activation Lifecycle:
-   * 1. Evaluates available or staged update only when the user opens/interacts with Downex UI.
-   * 2. Checks active download queue: if downloads are running, holds in QUEUED state.
-   *    Once completed, waits a 2-second safety buffer for SQLite WAL and disk flush.
-   * 3. Executes lock-free external updater handoff (Zero modal spam).
+   * 1. Resolves available or staged update only when the user opens/interacts with Downex UI.
+   * 2. FIRST downloads, verifies, and stages payload to disk (NEVER enters QUEUED before downloading!).
+   * 3. ONLY AFTER download/staging completes: checks active downloads & 5s user interaction/typing guard
+   *    (holds cleanly in QUEUED state until downloads settle and user is idle for 5 continuous seconds).
+   * 4. Executes direct close of old UI & detached external updater handoff (ZERO white flash, guaranteed relaunch).
    */
   public async evaluateAndApplyUpdate(): Promise<void> {
     if (this.isEvaluatingUpdate || this.isBusy || this.status.state === 'restarting' || this.status.state === 'installing') {
@@ -797,6 +806,11 @@ class UpdateService {
     }
     if (!this.status.isManualCheck && !this.isWindowVisible()) {
       return;
+    }
+
+    if (this.availableHoldTimer) {
+      clearTimeout(this.availableHoldTimer);
+      this.availableHoldTimer = null;
     }
 
     // 1. Resolve manifest and target version
@@ -822,55 +836,11 @@ class UpdateService {
       return;
     }
 
-    // 2. Active downloads check: if user is downloading, hold in QUEUED state
-    if (this.checkHasActiveDownloads()) {
-      this.notify({
-        state: 'waiting_timer', // displays "QUEUED" on sidebar
-        targetVersion,
-        manifest,
-      });
-      try {
-        const { useDownloadStore } = await import('../stores/downloadStore');
-        const unsub = useDownloadStore.subscribe(async (state) => {
-          const stillActive = state.items.some(
-            (i) => i.status === 'downloading' || i.status === 'probing'
-          );
-          if (!stillActive) {
-            unsub();
-            // Wait 2-second safety buffer for clean disk I/O & SQLite WAL settlement
-            await new Promise((r) => setTimeout(r, 2000));
-            this.evaluateAndApplyUpdate().catch(() => {});
-          }
-        });
-      } catch {}
-      return;
-    }
-
-    // 3. User Activity Guard (Immediate on manual check, 5s quiet time on automatic)
-    const isManual = Boolean(this.status.isManualCheck);
-    const idleMs = Date.now() - this.lastUserActivityTime;
-    if (!isManual && idleMs < 5000) {
-      this.notify({
-        state: 'waiting_timer', // displays "QUEUED" on sidebar
-        targetVersion,
-        manifest,
-      });
-      if (this.idleGuardTimer) clearTimeout(this.idleGuardTimer);
-      this.idleGuardTimer = setTimeout(() => {
-        this.evaluateAndApplyUpdate().catch(() => {});
-      }, 1500);
-      return;
-    }
-
-    if (this.idleGuardTimer) {
-      clearTimeout(this.idleGuardTimer);
-      this.idleGuardTimer = null;
-    }
-
     this.isEvaluatingUpdate = true;
+    let handedOffToRestart = false;
 
     try {
-      // 4. Ensure payload is downloaded & staged
+      // 2. ALWAYS download, verify, and stage FIRST before entering any QUEUED hold
       let isReady = Boolean(this.stagedBinaryPath);
       if (!isReady) {
         const stagedOnDisk = await getStagedUpdate(targetVersion);
@@ -880,39 +850,92 @@ class UpdateService {
         } else {
           const success = await this.downloadUpdate();
           if (!success) {
-            this.isEvaluatingUpdate = false;
             return;
           }
           isReady = true;
         }
       }
 
-      // 5. Dynamic stage transitions: PATCHING -> WORKING -> RESTARTING
+      if (!isReady) {
+        return;
+      }
+
+      // 3. Active downloads guard (AFTER download): hold in QUEUED state until active transfers finish
+      if (this.checkHasActiveDownloads()) {
+        this.notify({
+          state: 'waiting_timer', // displays "QUEUED" on sidebar
+          targetVersion,
+          manifest,
+        });
+        try {
+          const { useDownloadStore } = await import('../stores/downloadStore');
+          const unsub = useDownloadStore.subscribe(async (state) => {
+            const stillActive = state.items.some(
+              (i) => i.status === 'downloading' || i.status === 'probing'
+            );
+            if (!stillActive) {
+              unsub();
+              // Wait 2-second safety buffer for clean disk I/O & SQLite WAL settlement
+              await new Promise((r) => setTimeout(r, 2000));
+              this.evaluateAndApplyUpdate().catch(() => {});
+            }
+          });
+        } catch {}
+        return;
+      }
+
+      // 4. User Activity & Typing Guard (AFTER download): immediate on manual click, 5s continuous idle on automatic
+      const isManual = Boolean(this.status.isManualCheck);
+      const idleMs = Date.now() - this.lastUserActivityTime;
+      if (!isManual && (this.isUserActivelyTyping() || idleMs < 5000)) {
+        this.notify({
+          state: 'waiting_timer', // displays "QUEUED" on sidebar
+          targetVersion,
+          manifest,
+        });
+        if (this.idleGuardTimer) clearTimeout(this.idleGuardTimer);
+        this.idleGuardTimer = setTimeout(() => {
+          this.evaluateAndApplyUpdate().catch(() => {});
+        }, 1500);
+        return;
+      }
+
+      if (this.idleGuardTimer) {
+        clearTimeout(this.idleGuardTimer);
+        this.idleGuardTimer = null;
+      }
+
+      // 5. Dynamic stage transitions: PATCHING -> WORKING -> RESTARTING (direct crisp handoff, no white blank)
       this.notify({
         state: 'patching',
         targetVersion,
         manifest,
       });
-      await new Promise((r) => setTimeout(r, 450));
+      await new Promise((r) => setTimeout(r, 350));
 
       this.notify({
         state: 'installing', // displays "WORKING" on sidebar
         targetVersion,
         manifest,
       });
-      await new Promise((r) => setTimeout(r, 450));
+      await new Promise((r) => setTimeout(r, 350));
 
       this.notify({
         state: 'restarting', // displays "RESTARTING" on sidebar
         targetVersion,
         manifest,
       });
-      await new Promise((r) => setTimeout(r, 350));
+      await new Promise((r) => setTimeout(r, 150));
 
-      // 6. Execute atomic external updater restart
+      // 6. Execute direct UI close & atomic external updater restart
+      handedOffToRestart = true;
       await this.installAndRestart();
     } finally {
-      this.isEvaluatingUpdate = false;
+      if (!handedOffToRestart) {
+        this.isEvaluatingUpdate = false;
+      } else {
+        this.isEvaluatingUpdate = false;
+      }
     }
   }
 

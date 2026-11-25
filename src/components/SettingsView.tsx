@@ -56,7 +56,6 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ darkMode = false }) 
     }
   });
   const [autostart, setAutostart] = useState<boolean>(true);
-  const [confirmReset, setConfirmReset] = useState<boolean>(false);
 
   const [extInfo, setExtInfo] = useState<ExtensionInfo | null>(null);
   const [copiedExtPath, setCopiedExtPath] = useState(false);
@@ -67,6 +66,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ darkMode = false }) 
   const [isRepairing, setIsRepairing] = useState(false);
   const [isResettingBase, setIsResettingBase] = useState(false);
   const [isUninstalling, setIsUninstalling] = useState(false);
+  const [isResettingDefaults, setIsResettingDefaults] = useState(false);
   const [maintenanceMessage, setMaintenanceMessage] = useState<string | null>(null);
   const [pendingAction, setPendingAction] = useState<RecoveryActionType>(null);
   const [isFolderModalOpen, setIsFolderModalOpen] = useState(false);
@@ -80,12 +80,6 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ darkMode = false }) 
     isAutostartEnabled().then(setAutostart).catch(console.warn);
     getCloseToTray().then(setCloseToTray).catch(console.warn);
   }, []);
-
-  useEffect(() => {
-    if (!confirmReset) return;
-    const t = window.setTimeout(() => setConfirmReset(false), 3500);
-    return () => window.clearTimeout(t);
-  }, [confirmReset]);
 
   const handleOpenExtensionFolder = async () => {
     try {
@@ -224,6 +218,13 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ darkMode = false }) 
       } catch (err: any) {
         setIsUninstalling(false);
         setMaintenanceMessage(`Uninstall launch error: ${err?.message || err}`);
+      }
+    } else if (action === 'reset-defaults') {
+      setIsResettingDefaults(true);
+      try {
+        await handleResetToDefaults();
+      } finally {
+        setIsResettingDefaults(false);
       }
     }
   };
@@ -511,7 +512,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ darkMode = false }) 
           </button>
         </div>
 
-        {/* Row 13: Reset all preferences (1:1 ScheduleMe wipe data pattern) */}
+        {/* Row 13: Reset all preferences */}
         <div className="px-4 py-3 flex items-center justify-between gap-4">
           <div className="min-w-0 flex-1">
             <div className="text-[13px] font-semibold">Reset all preferences</div>
@@ -521,23 +522,15 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ darkMode = false }) 
           </div>
           <button
             type="button"
-            onClick={() => {
-              if (!confirmReset) {
-                setConfirmReset(true);
-                return;
-              }
-              setConfirmReset(false);
-              void handleResetToDefaults();
-            }}
+            disabled={isResettingDefaults}
+            onClick={() => setPendingAction('reset-defaults')}
             className={`${actionSize} ${
-              confirmReset
-                ? 'bg-red-600 border-red-600 text-white font-semibold'
-                : darkMode
-                  ? 'border-zinc-700 text-zinc-300 hover:border-red-500 hover:text-red-400'
-                  : 'border-zinc-300 text-zinc-700 hover:border-red-600 hover:text-red-600'
+              darkMode
+                ? 'border-zinc-700 text-zinc-300 hover:border-red-500 hover:text-red-400'
+                : 'border-zinc-300 text-zinc-700 hover:border-red-600 hover:text-red-600'
             }`}
           >
-            {confirmReset ? 'CONFIRM RESET' : 'RESET DEFAULTS'}
+            {isResettingDefaults ? 'RESETTING...' : 'RESET DEFAULTS'}
           </button>
         </div>
       </div>
@@ -611,7 +604,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ darkMode = false }) 
         actionType={pendingAction}
         onClose={() => setPendingAction(null)}
         onConfirm={executeConfirmedAction}
-        isLoading={isRepairing || isResettingBase || isUninstalling}
+        isLoading={isRepairing || isResettingBase || isUninstalling || isResettingDefaults}
       />
 
       {/* Custom Folder Change Modal (Matches Latest UI/UX Industrial Practices) */}

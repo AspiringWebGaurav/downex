@@ -3,6 +3,12 @@ import { clearTestStorage, captureConsoleErrors } from './helpers/test-utils';
 
 test.describe('Downex — Auto-Update Pipeline & Dynamic Stage Progression (WORKING, PATCHING, etc.)', () => {
   test.beforeEach(async ({ page }) => {
+    await page.route('**/api/downex/stream/**', async (route) => {
+      await route.fulfill({ status: 200, contentType: 'text/event-stream', body: ': keepalive\n\n' });
+    });
+    await page.route('**/api/downex/attest*', async (route) => {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ notices: [] }) });
+    });
     await page.goto('/');
     await clearTestStorage(page);
     await page.reload();

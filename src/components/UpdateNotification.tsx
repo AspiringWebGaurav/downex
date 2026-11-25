@@ -29,6 +29,7 @@ export const UpdateNotification: React.FC = () => {
   const isDeferredDueToDownloads = useAppVersionStore((state) => state.isDeferredDueToDownloads);
 
   const isRealActive =
+    !status.isSilentSync &&
     !hasActiveDownloads &&
     !isDeferredDueToDownloads &&
     !isToastDismissed &&

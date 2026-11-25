@@ -3,20 +3,13 @@ import { X, Minus } from 'lucide-react';
 import { minimizeToBackground } from '../services/tauriService';
 import { useDownloadStore } from '../stores/downloadStore';
 import { useHardwareBanStore } from '../stores/hardwareBanStore';
-import { useMarqueeNoticeStore, MarqueeNotice, resolveDesktopNoticeAppearance } from '../stores/marqueeNoticeStore';
-
-function buildShuffledQueue(list: MarqueeNotice[], avoidFirstId?: string): MarqueeNotice[] {
-  const arr = [...list];
-  for (let i = arr.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [arr[i], arr[j]] = [arr[j], arr[i]];
-  }
-  if (arr.length > 1 && avoidFirstId && arr[0].id === avoidFirstId) {
-    const swapIdx = 1 + Math.floor(Math.random() * (arr.length - 1));
-    [arr[0], arr[swapIdx]] = [arr[swapIdx], arr[0]];
-  }
-  return arr;
-}
+import {
+  useMarqueeNoticeStore,
+  MarqueeNotice,
+  resolveDesktopNoticeAppearance,
+  computeMarqueeDurationSec,
+  stripDuplicateNoticePrefix,
+} from '../stores/marqueeNoticeStore';
 
 function formatCountdown(expiresAt: number | null, now: number): string {
   if (expiresAt === null) return '';
@@ -26,20 +19,23 @@ function formatCountdown(expiresAt: number | null, now: number): string {
   const days = Math.floor(totalSec / 86400);
   const hours = Math.floor((totalSec % 86400) / 3600);
   const mins = Math.floor((totalSec % 3600) / 60);
+  const secs = totalSec % 60;
   if (days > 0) return `${days}d ${hours}h`;
   if (hours > 0) return `${hours}h ${mins}m`;
-  return `${Math.max(1, mins)}m`;
+  if (mins > 0) return `${mins}m`;
+  return `${Math.max(1, secs)}s`;
 }
 
 export const DownexWindowHeader: React.FC = () => {
   const [isCloseHovered, setIsCloseHovered] = useState(false);
   const [isMinimizeHovered, setIsMinimizeHovered] = useState(false);
+  const [isMarqueeHovered, setIsMarqueeHovered] = useState(false);
   const [nowTick, setNowTick] = useState<number>(() => Date.now());
   const [playback, setPlayback] = useState<{
-    items: MarqueeNotice[];
-    index: number;
+    currentId: string | null;
+    lastIndex: number;
     cycleKey: number;
-  }>({ items: [], index: 0, cycleKey: 0 });
+  }>({ currentId: null, lastIndex: 0, cycleKey: 0 });
 
   const hasActiveDownloads = useDownloadStore((state) =>
     state.items.some((i) => i.status === 'downloading' || i.status === 'probing')
@@ -51,29 +47,51 @@ export const DownexWindowHeader: React.FC = () => {
   const pruneExpired = useMarqueeNoticeStore((state) => state.pruneExpired);
 
   const activeNotices = useMemo(
-    () => notices.filter((n) => n.active && (n.expiresAt === null || n.expiresAt > nowTick)),
+    () =>
+      notices
+        .filter((n) => n.active && (n.expiresAt === null || n.expiresAt > nowTick))
+        .sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0) || String(a.id).localeCompare(String(b.id))),
     [notices, nowTick]
   );
 
   const activePoolKey = activeNotices
-    .map((n) => `${n.id}:${n.updatedAt || n.createdAt}:${n.text}:${n.tone}:${n.direction}:${n.showCountdown}`)
+    .map(
+      (n) =>
+        `${n.id}:${n.updatedAt || n.createdAt}:${n.text}:${n.tone}:${n.modeLabel || ''}:${n.modeColor || ''}:${n.direction}:${n.speed ?? 1}:${n.showCountdown}`
+    )
     .join('|');
 
   const activeNoticesRef = useRef<MarqueeNotice[]>(activeNotices);
   activeNoticesRef.current = activeNotices;
+  const lastCompletedCycleRef = useRef<number>(-1);
 
-  // Reshuffle playback queue ONLY when the active notice set actually changes (never on 1s countdown ticks)
+  // Preserve current scrolling notice when stack changes; only advance if current item expired/removed
   useEffect(() => {
     const currentPool = activeNoticesRef.current;
     if (currentPool.length === 0) {
-      setPlayback((prev) => ({ items: [], index: 0, cycleKey: prev.cycleKey + 1 }));
+      lastCompletedCycleRef.current = -1;
+      setPlayback({ currentId: null, lastIndex: 0, cycleKey: 0 });
       return;
     }
+
     setPlayback((prev) => {
-      const lastId = prev.items[prev.index]?.id;
+      const stillIdx = prev.currentId
+        ? currentPool.findIndex((n) => n.id === prev.currentId)
+        : -1;
+
+      if (stillIdx !== -1) {
+        if (stillIdx === prev.lastIndex) return prev;
+        return {
+          ...prev,
+          lastIndex: stillIdx,
+        };
+      }
+
+      const nextIdx =
+        prev.lastIndex >= 0 && prev.lastIndex < currentPool.length ? prev.lastIndex : 0;
       return {
-        items: buildShuffledQueue(currentPool, lastId),
-        index: 0,
+        currentId: currentPool[nextIdx].id,
+        lastIndex: nextIdx,
         cycleKey: prev.cycleKey + 1,
       };
     });
@@ -90,30 +108,67 @@ export const DownexWindowHeader: React.FC = () => {
     return () => window.clearInterval(id);
   }, [notices, pruneExpired]);
 
-  const handleMarqueeCycleEnd = useCallback(() => {
+  const handleMarqueeCycleEnd = useCallback((expectedCycleKey?: number) => {
     const currentPool = activeNoticesRef.current;
     if (currentPool.length === 0) return;
-    setPlayback((prev) => {
-      const nextIdx = prev.index + 1;
-      if (nextIdx < prev.items.length) {
-        return {
-          items: prev.items,
-          index: nextIdx,
-          cycleKey: prev.cycleKey + 1,
-        };
+
+    if (typeof expectedCycleKey === 'number') {
+      if (lastCompletedCycleRef.current === expectedCycleKey) {
+        return;
       }
-      const lastShown = prev.items[prev.index]?.id;
+      lastCompletedCycleRef.current = expectedCycleKey;
+    }
+
+    setPlayback((prev) => {
+      if (typeof expectedCycleKey === 'number' && prev.cycleKey !== expectedCycleKey) {
+        return prev;
+      }
+
+      const prevIdx = prev.currentId
+        ? currentPool.findIndex((n) => n.id === prev.currentId)
+        : prev.lastIndex;
+      const baseIdx = prevIdx >= 0 && prevIdx < currentPool.length ? prevIdx : 0;
+      const nextIdx = (baseIdx + 1) % currentPool.length;
+      const nextNotice = currentPool[nextIdx];
+
       return {
-        items: buildShuffledQueue(currentPool, lastShown),
-        index: 0,
+        currentId: nextNotice.id,
+        lastIndex: nextIdx,
         cycleKey: prev.cycleKey + 1,
       };
     });
   }, []);
 
-  const currentNotice = playback.items[playback.index] || activeNotices[0] || null;
+  const currentNotice = useMemo(() => {
+    if (activeNotices.length === 0) return null;
+    if (playback.currentId) {
+      const found = activeNotices.find((n) => n.id === playback.currentId);
+      if (found) return found;
+    }
+    const fallbackIdx =
+      playback.lastIndex >= 0 && playback.lastIndex < activeNotices.length ? playback.lastIndex : 0;
+    return activeNotices[fallbackIdx] || activeNotices[0];
+  }, [activeNotices, playback.currentId, playback.lastIndex]);
+
   const cycleKey = playback.cycleKey;
   const showTitlebarMarquee = !isBanned && !isReinstating && currentNotice !== null;
+
+  // Watchdog failsafe: advance cleanly if WebView2 suspends CSS animation frames across hide/show transitions
+  useEffect(() => {
+    if (!showTitlebarMarquee || !currentNotice || isMarqueeHovered) return;
+    const displayText =
+      stripDuplicateNoticePrefix(
+        currentNotice.text,
+        resolveDesktopNoticeAppearance(currentNotice).label,
+        currentNotice.tone
+      ) || currentNotice.text;
+    const durationMs = computeMarqueeDurationSec(displayText, currentNotice.speed) * 1000;
+    const activeCycle = cycleKey;
+    const watchdog = window.setTimeout(() => {
+      handleMarqueeCycleEnd(activeCycle);
+    }, durationMs + 1200);
+    return () => window.clearTimeout(watchdog);
+  }, [showTitlebarMarquee, currentNotice, cycleKey, isMarqueeHovered, handleMarqueeCycleEnd]);
 
   useEffect(() => {
     const clearHover = () => {
@@ -192,45 +247,51 @@ export const DownexWindowHeader: React.FC = () => {
       <div className="flex-1 h-full flex items-center justify-center px-3 min-w-0" data-tauri-drag-region>
         {showTitlebarMarquee && currentNotice && (() => {
           const appearance = resolveDesktopNoticeAppearance(currentNotice);
+          const displayText =
+            stripDuplicateNoticePrefix(currentNotice.text, appearance.label, currentNotice.tone) ||
+            currentNotice.text;
           const countdownText =
             currentNotice.showCountdown && currentNotice.expiresAt !== null
               ? formatCountdown(currentNotice.expiresAt, nowTick)
               : '';
-          const durationSec = Math.min(
-            18,
-            Math.max(8, 7 + currentNotice.text.length * 0.085)
-          ).toFixed(1);
+          const durationSec = computeMarqueeDurationSec(displayText, currentNotice.speed).toFixed(1);
 
           return (
             <div
-              title={currentNotice.text}
-              className={`downex-marquee-group relative h-[24px] w-full max-w-[420px] rounded-full border backdrop-blur-md overflow-hidden flex items-center transition-all duration-300 ${
+              title={displayText}
+              onMouseEnter={() => setIsMarqueeHovered(true)}
+              onMouseLeave={() => setIsMarqueeHovered(false)}
+              className={`downex-marquee-group relative h-[24px] w-full max-w-[480px] rounded-full border backdrop-blur-md overflow-hidden flex items-center transition-all duration-300 ${
                 noticePulse
-                  ? 'ring-1 ring-emerald-500/50 dark:ring-emerald-400/50'
+                  ? 'ring-2 ring-emerald-500/50 dark:ring-emerald-400/50'
                   : ''
               } ${appearance.glassClass}`}
             >
               <div className="downex-marquee-track relative w-full h-full overflow-hidden">
                 <div
                   key={`${currentNotice.id}-${cycleKey}`}
-                  onAnimationEnd={handleMarqueeCycleEnd}
+                  onAnimationEnd={() => handleMarqueeCycleEnd(cycleKey)}
                   style={{
                     animationDuration: `${durationSec}s`,
                     animationIterationCount: 1,
                   }}
-                  className={`absolute inset-y-0 flex items-center whitespace-nowrap gap-1.5 text-[11px] leading-none font-medium ${
+                  className={`absolute inset-y-0 flex items-center whitespace-nowrap gap-1.5 text-[11.5px] leading-none font-semibold ${
                     currentNotice.direction === 'rtl'
                       ? 'downex-marquee-item-rtl'
                       : 'downex-marquee-item-ltr'
                   }`}
                 >
-                  <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${appearance.dotClass}`} />
-                  <span className="font-semibold uppercase tracking-wide opacity-80 leading-none">
-                    {appearance.label}:
+                  <span
+                    className={`w-1.5 h-1.5 rounded-full shrink-0 ${appearance.dotClass} ${appearance.dotRingClass}`}
+                  />
+                  <span
+                    className={`px-1.5 py-[2px] rounded-full border text-[9.5px] font-bold uppercase tracking-wider leading-none ${appearance.badgeClass}`}
+                  >
+                    {appearance.label}
                   </span>
-                  <span className="leading-none">{currentNotice.text}</span>
+                  <span className="leading-none">{displayText}</span>
                   {countdownText && countdownText !== 'expired' && (
-                    <span className="font-mono-tabular text-[10.5px] leading-none opacity-75">
+                    <span className="font-mono-tabular text-[10.5px] font-semibold leading-none opacity-85">
                       ({countdownText})
                     </span>
                   )}

@@ -3,13 +3,17 @@ import { clearTestStorage, captureConsoleErrors } from './helpers/test-utils';
 
 test.describe('Downex — Full OTA Lifecycle, Fallbacks, and Timing', () => {
   test.beforeEach(async ({ page }) => {
+    await page.route('**/api/downex/**', async (route) => {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ notices: [] }) });
+    });
     await page.goto('/');
     await clearTestStorage(page);
     await page.reload();
     await page.waitForLoadState('domcontentloaded');
+    await page.waitForTimeout(450);
   });
 
-  test('Test 1: Full success lifecycle progression on UI open with smooth fade-out', async ({ page }) => {
+  test('Test 1: Full success lifecycle progression on UI open with zero white blank flash', async ({ page }) => {
     test.setTimeout(15000);
     const errors = captureConsoleErrors(page);
 
@@ -100,7 +104,7 @@ test.describe('Downex — Full OTA Lifecycle, Fallbacks, and Timing', () => {
     });
     await expect(stageEl).toContainText('WORKING', { timeout: 3000 });
 
-    // Simulate restarting state -> triggers CSS fade-out
+    // Simulate restarting state -> direct crisp UI close with ZERO white blank flash
     await page.evaluate(() => {
       const store = (window as any).__DOWNEX_VERSION_STORE__;
       store.setState({
@@ -112,9 +116,13 @@ test.describe('Downex — Full OTA Lifecycle, Fallbacks, and Timing', () => {
     });
     await expect(stageEl).toContainText('RESTARTING', { timeout: 3000 });
 
-    // Verify root container has smooth fade-out class applied
-    const appContainer = page.locator('.app-fade-container');
-    await expect(appContainer).toHaveClass(/fade-out/, { timeout: 3000 });
+    // Verify no white-flash fade-out class is applied
+    await expect(page.locator('.fade-out')).toHaveCount(0);
+    const rootOpacity = await page.evaluate(() => {
+      const el = document.querySelector('#root > div');
+      return el ? window.getComputedStyle(el).opacity : '1';
+    });
+    expect(rootOpacity).toBe('1');
 
     expect(errors).toEqual([]);
   });
@@ -183,27 +191,65 @@ test.describe('Downex — Full OTA Lifecycle, Fallbacks, and Timing', () => {
     expect(await searchInput.inputValue()).toBe('recovery test');
   });
 
-  test('Test 4: Standalone Updater Window Lifecycle Timing (Simulated Dynamic Hold)', async ({ page }) => {
+  test('Test 4: Active download holds QUEUED only AFTER download & verification complete', async ({ page }) => {
     test.setTimeout(15000);
-    const start = Date.now();
+    const stageEl = page.locator('[data-testid="sidebar-version-stage"]');
 
-    // Verify calibrated 350ms fade-out hold before process handoff
-    await page.evaluate(async () => {
-      const container = document.querySelector('.app-fade-container');
-      if (container) {
-        container.classList.add('fade-out');
+    await page.evaluate(() => {
+      const dlStore = (window as any).__DOWNEX_DOWNLOAD_STORE__;
+      const svc = (window as any).updateService;
+      if (dlStore) {
+        dlStore.setState({
+          items: [
+            {
+              id: 'dl-active-1',
+              url: 'https://example.com/archive.zip',
+              filename: 'archive.zip',
+              destination_path: 'C:\\Downloads\\archive.zip',
+              total_bytes: 1000000,
+              downloaded_bytes: 250000,
+              status: 'downloading',
+              queue_id: 'default',
+              speed_bytes_sec: 500000,
+              created_at: Date.now(),
+              updated_at: Date.now(),
+            },
+          ],
+        });
       }
-      await new Promise((r) => setTimeout(r, 350));
+      if (svc) {
+        (window as any).__DOWNEX_STATES_DL__ = [];
+        svc.subscribe((st: any) => {
+          const list = (window as any).__DOWNEX_STATES_DL__;
+          if (list[list.length - 1] !== st.state) list.push(st.state);
+        });
+        svc.notify({
+          state: 'available',
+          targetVersion: '0.0.2',
+          isManualCheck: false,
+          manifest: {
+            version: '0.0.2',
+            notes: 'Download first while active transfer runs',
+            pub_date: new Date().toISOString(),
+            url: 'https://gphost.eu.cc/releases/downex/v0.0.2/update0.0.2.downex.bin',
+            signature: 'SIMULATED_SIGNATURE',
+            size: 15414272,
+          },
+        });
+        svc.evaluateAndApplyUpdate();
+      }
     });
 
-    const elapsed = Date.now() - start;
-    expect(elapsed).toBeGreaterThanOrEqual(300);
+    // Must download first (even while another download is running!) and ONLY then enter QUEUED
+    await expect(stageEl).toContainText('%', { timeout: 5000 });
+    await expect(stageEl).toContainText('QUEUED', { timeout: 10000 });
 
-    // Verify container opacity transition
-    const opacity = await page.evaluate(() => {
-      const el = document.querySelector('.app-fade-container');
-      return el ? window.getComputedStyle(el).opacity : '1';
-    });
-    expect(opacity).toBe('0');
+    const observed = await page.evaluate(() => (window as any).__DOWNEX_STATES_DL__ || []);
+    const dlIdx = observed.indexOf('downloading');
+    const verIdx = observed.indexOf('verifying');
+    const qIdx = observed.indexOf('waiting_timer');
+    expect(dlIdx).toBeGreaterThanOrEqual(0);
+    expect(verIdx).toBeGreaterThan(dlIdx);
+    expect(qIdx).toBeGreaterThan(verIdx);
   });
 });

@@ -646,13 +646,22 @@ pub fn launch_external_updater_and_exit(
 
         cmd.spawn().map_err(|e| format!("Failed to spawn updater.exe: {}", e))?;
 
+        // Direct close of old UI HWND immediately so zero white blank WebView frame flashes
         for (_label, window) in app.webview_windows() {
+            if let Ok(hwnd) = window.hwnd() {
+                unsafe {
+                    windows_sys::Win32::UI::WindowsAndMessaging::ShowWindow(
+                        hwnd.0 as _,
+                        windows_sys::Win32::UI::WindowsAndMessaging::SW_HIDE,
+                    );
+                }
+            }
             let _ = window.hide();
         }
 
         let app_handle = app.clone();
         std::thread::spawn(move || {
-            std::thread::sleep(std::time::Duration::from_millis(50));
+            std::thread::sleep(std::time::Duration::from_millis(25));
             app_handle.exit(0);
             std::process::exit(0);
         });

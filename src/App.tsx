@@ -89,7 +89,6 @@ export const App: React.FC = () => {
   const selectedView = useDownloadStore((state) => state.selectedView);
   const setSelectedView = useDownloadStore((state) => state.setSelectedView);
   const showTelemetryOnHome = useDownloadStore((state) => state.showTelemetryOnHome);
-  const status = useAppVersionStore((state) => state.status);
   const [rollbackAlert, setRollbackAlert] = useState<string | null>(null);
 
   // Centralized Reactive Silicon Hardware Ban State
@@ -116,6 +115,7 @@ export const App: React.FC = () => {
     }
     initVersion();
     loadItems();
+    useDownloadStore.getState().reconcileRuntimeSessionView().catch(() => {});
     const unlisten = initListener();
 
     // 1. User Activity Tracking for 5-Second Idle Guard
@@ -288,14 +288,10 @@ export const App: React.FC = () => {
     };
   }, [setNewModalOpen, openNewModalWithData, setSelectedView]);
 
-  const isRestarting = status?.state === 'restarting';
-
   return (
     <>
       <div
-        className={`w-screen h-screen flex flex-col bg-white dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 overflow-hidden font-sans app-fade-container app-fade-in ${
-          isRestarting ? 'fade-out' : ''
-        }`}
+        className="w-screen h-screen flex flex-col bg-white dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 overflow-hidden font-sans app-fade-in"
       >
         {/* ONE Continuous Top Header Line across full window width */}
         <DownexWindowHeader />

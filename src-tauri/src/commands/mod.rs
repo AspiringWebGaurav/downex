@@ -8,6 +8,38 @@ use tauri::{AppHandle, Emitter, Manager, State};
 static LAST_DOWNLOAD_DIALOG_PAYLOAD: Mutex<Option<serde_json::Value>> = Mutex::new(None);
 static LAST_DIALOG_SHOW_TIME: Mutex<Option<(String, std::time::Instant)>> = Mutex::new(None);
 static LAST_DOWNLOAD_COMPLETE_PAYLOAD: Mutex<Option<serde_json::Value>> = Mutex::new(None);
+static PROCESS_BOOT_ID: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+static RUNTIME_ACTIVE_TAB: Mutex<Option<String>> = Mutex::new(None);
+
+fn get_process_boot_id() -> &'static str {
+    PROCESS_BOOT_ID.get_or_init(|| uuid::Uuid::new_v4().to_string())
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+pub struct RuntimeSessionState {
+    pub boot_id: String,
+    pub active_tab: String,
+}
+
+#[tauri::command]
+pub fn cmd_get_runtime_session_state() -> RuntimeSessionState {
+    let active_tab = RUNTIME_ACTIVE_TAB
+        .lock()
+        .ok()
+        .and_then(|g| g.clone())
+        .unwrap_or_else(|| "all".to_string());
+    RuntimeSessionState {
+        boot_id: get_process_boot_id().to_string(),
+        active_tab,
+    }
+}
+
+#[tauri::command]
+pub fn cmd_set_runtime_session_tab(tab: String) {
+    if let Ok(mut guard) = RUNTIME_ACTIVE_TAB.lock() {
+        *guard = Some(tab);
+    }
+}
 
 #[tauri::command]
 pub async fn cmd_probe_url(
@@ -396,11 +428,13 @@ pub fn cmd_launch_updater_and_exit(
     target_version: String,
     staged_path: String,
     theme: Option<String>,
+    was_visible: Option<bool>,
 ) -> Result<(), String> {
-    let was_main_open = app
+    let win_visible = app
         .get_webview_window("main")
         .and_then(|w| w.is_visible().ok())
         .unwrap_or(true);
+    let was_main_open = win_visible || was_visible.unwrap_or(false);
     crate::ota::launch_external_updater_and_exit(&app, &target_version, &staged_path, was_main_open, theme.as_deref())
 }
 

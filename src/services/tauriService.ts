@@ -723,7 +723,8 @@ export async function downloadAndStageUpdate(
 export async function launchUpdaterAndExit(
   targetVersion: string,
   stagedPath: string,
-  theme?: string
+  theme?: string,
+  wasVisible = true
 ): Promise<void> {
   if (!isTauri) {
     console.log(`[Mock Mode] Launched external updater for v${targetVersion} with theme ${theme}!`);
@@ -733,6 +734,7 @@ export async function launchUpdaterAndExit(
     targetVersion,
     stagedPath,
     theme: theme || 'dark',
+    wasVisible,
   });
 }
 
@@ -1777,4 +1779,25 @@ export function onShutdownCancelled(callback: () => void): () => void {
       unlistenFn = null;
     }
   };
+}
+
+export interface RuntimeSessionState {
+  boot_id: string;
+  active_tab: string;
+}
+
+export async function getRuntimeSessionState(): Promise<RuntimeSessionState | null> {
+  if (!isTauri) return null;
+  try {
+    return await invoke<RuntimeSessionState>('cmd_get_runtime_session_state');
+  } catch {
+    return null;
+  }
+}
+
+export async function setRuntimeSessionTab(tab: string): Promise<void> {
+  if (!isTauri) return;
+  try {
+    await invoke('cmd_set_runtime_session_tab', { tab });
+  } catch {}
 }

@@ -18,12 +18,15 @@ import {
   setLifetimeDownloadedBytes,
   notifyDownloadsCompletedNative,
   setDownloadSpeedLimit,
+  getRuntimeSessionState,
+  setRuntimeSessionTab,
 } from '../services/tauriService';
-import { isDevEnvironment } from '../utils/reloadGuard';
 
-export const DEV_VIEW_STORAGE_KEY = 'downex_dev_selected_view';
+export const SESSION_VIEW_STORAGE_KEY = 'downex_session_selected_view';
+export const SESSION_BOOT_STORAGE_KEY = 'downex_session_boot_id';
+export const LEGACY_DEV_VIEW_STORAGE_KEY = 'downex_dev_selected_view';
 
-export const VALID_DEV_VIEWS = new Set([
+export const VALID_VIEWS = new Set([
   'all',
   'queues',
   'telemetry',
@@ -34,30 +37,43 @@ export const VALID_DEV_VIEWS = new Set([
   'completed',
 ]);
 
-export function getInitialSelectedView(): string {
+// Track explicit tab switches in the current mount so async runtime boot check never overrides user clicks.
+let hasExplicitTabChangeInMount = false;
+
+export function purgeLegacyHardTabPersistence(): void {
   try {
-    if (typeof window !== 'undefined' && isDevEnvironment()) {
-      const saved = localStorage.getItem(DEV_VIEW_STORAGE_KEY);
-      if (saved && VALID_DEV_VIEWS.has(saved)) {
+    if (typeof window !== 'undefined' && window.localStorage) {
+      window.localStorage.removeItem(LEGACY_DEV_VIEW_STORAGE_KEY);
+      window.localStorage.removeItem('downex_selected_view');
+    }
+  } catch {}
+}
+
+export function getInitialSelectedView(): string {
+  purgeLegacyHardTabPersistence();
+  try {
+    if (typeof window !== 'undefined' && window.sessionStorage) {
+      const saved = window.sessionStorage.getItem(SESSION_VIEW_STORAGE_KEY);
+      if (saved && VALID_VIEWS.has(saved)) {
         return saved;
       }
     }
   } catch (err) {
-    console.warn('Failed to read persisted dev view:', err);
+    console.warn('Failed to read session tab view:', err);
   }
   return 'all';
 }
 
-export function persistDevSelectedView(view: string): void {
+export function persistSessionSelectedView(view: string): void {
+  if (!VALID_VIEWS.has(view)) return;
   try {
-    if (typeof window !== 'undefined' && isDevEnvironment()) {
-      if (VALID_DEV_VIEWS.has(view)) {
-        localStorage.setItem(DEV_VIEW_STORAGE_KEY, view);
-      }
+    if (typeof window !== 'undefined' && window.sessionStorage) {
+      window.sessionStorage.setItem(SESSION_VIEW_STORAGE_KEY, view);
     }
   } catch (err) {
-    console.warn('Failed to persist dev view:', err);
+    console.warn('Failed to persist session tab view:', err);
   }
+  setRuntimeSessionTab(view).catch(() => {});
 }
 
 interface DownloadStore {
@@ -102,6 +118,7 @@ interface DownloadStore {
   queueAllDownloads: () => Promise<void>;
   unqueueAllDownloads: () => Promise<void>;
   setSelectedView: (view: string) => void;
+  reconcileRuntimeSessionView: () => Promise<void>;
   settingsSubView: 'settings';
   openSettingsSubView: (subView?: 'settings') => void;
   setSearchQuery: (query: string) => void;
@@ -487,16 +504,62 @@ export const useDownloadStore = create<DownloadStore>((set, get) => ({
   },
 
   setSelectedView: (view: string) => {
-    persistDevSelectedView(view);
+    hasExplicitTabChangeInMount = true;
+    persistSessionSelectedView(view);
     if (view === 'telemetry') {
       set((state) => ({ selectedView: view, telemetryEpoch: state.telemetryEpoch + 1 }));
     } else {
       set({ selectedView: view });
     }
   },
+  reconcileRuntimeSessionView: async () => {
+    purgeLegacyHardTabPersistence();
+    const runtime = await getRuntimeSessionState();
+    if (!runtime || !runtime.boot_id) return;
+
+    let savedBootId: string | null = null;
+    try {
+      savedBootId = typeof window !== 'undefined' && window.sessionStorage
+        ? window.sessionStorage.getItem(SESSION_BOOT_STORAGE_KEY)
+        : null;
+    } catch {}
+
+    const isFreshAppOrSystemBoot = savedBootId !== runtime.boot_id;
+    try {
+      if (typeof window !== 'undefined' && window.sessionStorage) {
+        window.sessionStorage.setItem(SESSION_BOOT_STORAGE_KEY, runtime.boot_id);
+      }
+    } catch {}
+
+    if (isFreshAppOrSystemBoot) {
+      if (!hasExplicitTabChangeInMount) {
+        try {
+          if (typeof window !== 'undefined' && window.sessionStorage) {
+            window.sessionStorage.removeItem(SESSION_VIEW_STORAGE_KEY);
+          }
+        } catch {}
+        set({ selectedView: 'all' });
+        setRuntimeSessionTab('all').catch(() => {});
+      }
+      return;
+    }
+
+    // Same running app process: restore active tab if WebView recreated while tray stayed alive
+    if (!hasExplicitTabChangeInMount && runtime.active_tab && VALID_VIEWS.has(runtime.active_tab)) {
+      try {
+        if (typeof window !== 'undefined' && window.sessionStorage) {
+          window.sessionStorage.setItem(SESSION_VIEW_STORAGE_KEY, runtime.active_tab);
+        }
+      } catch {}
+      if (get().selectedView !== runtime.active_tab) {
+        set({ selectedView: runtime.active_tab });
+      }
+    }
+  },
   settingsSubView: 'settings',
   openSettingsSubView: (_subView?: 'settings') => {
-    persistDevSelectedView('settings');
+    hasExplicitTabChangeInMount = true;
+    persistSessionSelectedView('settings');
     set({ selectedView: 'settings', settingsSubView: 'settings' });
   },
   setSearchQuery: (query: string) => set({ searchQuery: query }),
@@ -686,10 +749,10 @@ export const useDownloadStore = create<DownloadStore>((set, get) => ({
   },
 }));
 
-// Automatically synchronize any state changes to selectedView with dev persistence
+// Automatically synchronize any state changes to selectedView with session persistence
 useDownloadStore.subscribe((state, prevState) => {
   if (state.selectedView !== prevState.selectedView) {
-    persistDevSelectedView(state.selectedView);
+    persistSessionSelectedView(state.selectedView);
   }
 });
 

@@ -1,5 +1,16 @@
 import React, { useState, useEffect } from 'react';
-import { X, Wrench, RotateCcw, Trash2, AlertTriangle, CheckCircle2, Loader2, Power, FolderOpen, Check } from 'lucide-react';
+import { createPortal } from 'react-dom';
+import {
+  X,
+  Wrench,
+  RotateCcw,
+  Trash2,
+  AlertTriangle,
+  Check,
+  Loader2,
+  Power,
+  FolderOpen,
+} from 'lucide-react';
 
 export type RecoveryActionType =
   | 'repair'
@@ -18,6 +29,244 @@ interface RecoveryActionModalProps {
   isLoading: boolean;
 }
 
+type ToneVariant = 'rose' | 'emerald' | 'amber' | 'neutral';
+
+interface ActionModalConfig {
+  title: string;
+  badge: string;
+  subtitle: string;
+  tone: ToneVariant;
+  icon: React.ComponentType<{ className?: string }>;
+  description: string;
+  operationValue: string;
+  operationTag: string;
+  safetyValue: string;
+  safetyTag: string;
+  statusPill: string;
+  bulletPoints: string[];
+  warningTitle: string;
+  warningDescription: string;
+  requiresCheckbox: boolean;
+  checkboxLabel: string;
+  footerHint: string;
+  confirmButtonText: string;
+  confirmButtonLoading: string;
+}
+
+const ACTION_CONFIGS: Record<Exclude<RecoveryActionType, null>, ActionModalConfig> = {
+  'reset-defaults': {
+    title: 'Reset all preferences to defaults?',
+    badge: 'RESET DEFAULTS',
+    subtitle: 'PREFERENCES RESET',
+    tone: 'rose',
+    icon: RotateCcw,
+    description:
+      'Restores your startup, tray, clipboard, home stats, and speed settings back to default values.',
+    operationValue: 'Reset Settings',
+    operationTag: 'RESET',
+    safetyValue: 'Folder & Files Safe',
+    safetyTag: 'SAFE',
+    statusPill: 'RESETS SETTINGS',
+    bulletPoints: [
+      'Turns Start with Windows and Keep in system tray back ON',
+      'Turns automatic clipboard link detection back ON',
+      'Sets download connections back to 32',
+      'Turns the Speed & Stats panel on the home screen OFF',
+    ],
+    warningTitle: 'Overwrites custom preferences',
+    warningDescription: 'Resets app settings only; your download folder and files stay safe.',
+    requiresCheckbox: true,
+    checkboxLabel: 'I confirm resetting my Downex preferences back to defaults.',
+    footerHint: 'Downloaded files are not affected',
+    confirmButtonText: 'Reset Defaults',
+    confirmButtonLoading: 'Resetting...',
+  },
+  'reset-folder': {
+    title: 'Reset default download folder?',
+    badge: 'RESET FOLDER',
+    subtitle: 'SAVE LOCATION',
+    tone: 'neutral',
+    icon: FolderOpen,
+    description: 'Changes your save folder back to the standard Windows Downloads folder.',
+    operationValue: 'Downloads\\Downex',
+    operationTag: 'FOLDER',
+    safetyValue: 'Existing Files Safe',
+    safetyTag: 'SAFE',
+    statusPill: 'FILES SAFE',
+    bulletPoints: [
+      'New downloads save to %USERPROFILE%\\Downloads\\Downex',
+      'Files you already downloaded stay untouched',
+      'You can change this folder anytime in Settings',
+    ],
+    warningTitle: 'Folder update',
+    warningDescription: 'Only new downloads will save to the default folder.',
+    requiresCheckbox: false,
+    checkboxLabel: 'Confirm folder reset.',
+    footerHint: 'Applies to new downloads',
+    confirmButtonText: 'Reset Folder',
+    confirmButtonLoading: 'Resetting...',
+  },
+  repair: {
+    title: 'Repair app & restart?',
+    badge: 'RUN REPAIR',
+    subtitle: 'APP MAINTENANCE',
+    tone: 'amber',
+    icon: Wrench,
+    description:
+      'Closes and restarts Downex cleanly to fix stuck tasks, leftover files, or tray icon glitches.',
+    operationValue: 'Clean & Restart',
+    operationTag: 'REPAIR',
+    safetyValue: 'Downloads & Settings Safe',
+    safetyTag: 'SAFE',
+    statusPill: 'RESTARTS APP',
+    bulletPoints: [
+      'Closes and restarts the Downex app automatically',
+      'Cleans up leftover update files that may block the app',
+      'Refreshes your system tray icon and app shortcuts',
+      'Keeps all your downloaded files, queue, and settings safe',
+    ],
+    warningTitle: 'Restarts the app',
+    warningDescription: 'Downex will close and reopen; any active downloads will pause.',
+    requiresCheckbox: true,
+    checkboxLabel: 'I understand Downex will restart to complete the repair.',
+    footerHint: 'Saved downloads stay intact',
+    confirmButtonText: 'Run Repair',
+    confirmButtonLoading: 'Repairing...',
+  },
+  'reset-base': {
+    title: 'Go back to Base version (v0.0.1)?',
+    badge: 'REVERT TO V0.0.1',
+    subtitle: 'VERSION ROLLBACK',
+    tone: 'amber',
+    icon: RotateCcw,
+    description:
+      'Downloads the original Base v0.0.1 version and reinstalls the app while keeping your data safe.',
+    operationValue: 'Reinstall v0.0.1',
+    operationTag: 'ROLLBACK',
+    safetyValue: 'Downloads & Settings Safe',
+    safetyTag: 'SAFE',
+    statusPill: 'REINSTALLS V0.0.1',
+    bulletPoints: [
+      'Downloads and installs the original Base v0.0.1 app',
+      'Removes newer updates and restarts Downex cleanly',
+      'Keeps your download list, saved files, and settings',
+      'You can always update to a newer version later',
+    ],
+    warningTitle: 'Replaces current app version',
+    warningDescription: 'Swaps your app back to v0.0.1 and restarts Downex automatically.',
+    requiresCheckbox: true,
+    checkboxLabel: 'I confirm going back to Base v0.0.1 and restarting the app.',
+    footerHint: 'Requires active internet connection',
+    confirmButtonText: 'Revert to v0.0.1',
+    confirmButtonLoading: 'Reverting...',
+  },
+  uninstall: {
+    title: 'Uninstall Downex Desktop?',
+    badge: 'UNINSTALL DOWNEX',
+    subtitle: 'WINDOWS REMOVAL',
+    tone: 'rose',
+    icon: Trash2,
+    description:
+      'Closes Downex and opens the Windows uninstaller so you can remove the app cleanly.',
+    operationValue: 'Remove Program',
+    operationTag: 'UNINSTALL',
+    safetyValue: 'Downloads Kept',
+    safetyTag: 'SAFE',
+    statusPill: 'FILES KEPT SAFE',
+    bulletPoints: [
+      'Closes Downex and stops background download capture',
+      'Opens the official Windows removal wizard',
+      'Removes the app program and desktop shortcuts',
+      'Files you already downloaded on your PC are NOT deleted',
+    ],
+    warningTitle: 'Removes Downex from Windows',
+    warningDescription: 'Removes the application only; your saved downloads stay safe.',
+    requiresCheckbox: true,
+    checkboxLabel: 'I confirm closing Downex and opening the Windows uninstaller.',
+    footerHint: 'Downloaded files are safe',
+    confirmButtonText: 'Uninstall Downex',
+    confirmButtonLoading: 'Launching...',
+  },
+  'stop-engine': {
+    title: 'Exit Downex completely?',
+    badge: 'EXIT APPLICATION',
+    subtitle: 'CLOSE APP',
+    tone: 'rose',
+    icon: Power,
+    description: 'Closes all windows, removes the tray icon, and pauses active downloads until reopened.',
+    operationValue: 'Close App',
+    operationTag: 'EXIT',
+    safetyValue: 'Queue Paused',
+    safetyTag: 'SAFE',
+    statusPill: 'FULL EXIT',
+    bulletPoints: [
+      'Pauses running downloads safely',
+      'Removes the Downex icon from the system tray',
+      'Stops browser download capture until you reopen Downex',
+    ],
+    warningTitle: 'Background capture off',
+    warningDescription: 'Browser links will not auto-capture while closed.',
+    requiresCheckbox: false,
+    checkboxLabel: 'Exit Downex completely.',
+    footerHint: 'Reopen anytime from Start menu',
+    confirmButtonText: 'Exit App',
+    confirmButtonLoading: 'Exiting...',
+  },
+};
+
+const TONE_CLASSES: Record<
+  ToneVariant,
+  {
+    headerText: string;
+    activeBox: string;
+    activeCheck: string;
+    activePill: string;
+    activeBanner: string;
+    activeButton: string;
+  }
+> = {
+  rose: {
+    headerText: 'text-rose-600 dark:text-rose-400',
+    activeBox: 'border-rose-500/50 bg-rose-500/[0.04] dark:bg-rose-950/20',
+    activeCheck: 'bg-rose-600 border-rose-600 text-white',
+    activePill: 'text-rose-600 dark:text-rose-400 bg-rose-500/10 border-rose-500/30',
+    activeBanner:
+      'bg-rose-500/10 dark:bg-rose-950/40 border-rose-500/30 text-rose-800 dark:text-rose-300',
+    activeButton:
+      'bg-rose-600 hover:bg-rose-700 active:bg-rose-800 border-rose-600 text-white',
+  },
+  emerald: {
+    headerText: 'text-emerald-600 dark:text-emerald-400',
+    activeBox: 'border-emerald-500/50 bg-emerald-500/[0.04] dark:bg-emerald-950/20',
+    activeCheck: 'bg-emerald-600 border-emerald-600 text-white',
+    activePill: 'text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 border-emerald-500/30',
+    activeBanner:
+      'bg-emerald-500/[0.08] dark:bg-emerald-950/30 border-emerald-500/25 text-emerald-800 dark:text-emerald-300',
+    activeButton:
+      'bg-black hover:bg-zinc-800 border-black text-white dark:bg-white dark:hover:bg-zinc-200 dark:border-white dark:text-zinc-950',
+  },
+  amber: {
+    headerText: 'text-amber-600 dark:text-amber-400',
+    activeBox: 'border-amber-500/50 bg-amber-500/[0.04] dark:bg-amber-950/20',
+    activeCheck: 'bg-amber-600 border-amber-600 text-white',
+    activePill: 'text-amber-700 dark:text-amber-400 bg-amber-500/10 border-amber-500/30',
+    activeBanner:
+      'bg-amber-500/[0.08] dark:bg-amber-950/30 border-amber-500/30 text-amber-800 dark:text-amber-300',
+    activeButton:
+      'bg-amber-600 hover:bg-amber-700 active:bg-amber-800 border-amber-600 text-white',
+  },
+  neutral: {
+    headerText: 'text-zinc-700 dark:text-zinc-300',
+    activeBox: 'border-zinc-500/50 bg-zinc-500/[0.04] dark:bg-zinc-900/40',
+    activeCheck: 'bg-zinc-900 border-zinc-900 text-white dark:bg-zinc-100 dark:border-zinc-100 dark:text-zinc-950',
+    activePill: 'text-zinc-700 dark:text-zinc-300 bg-zinc-200/70 dark:bg-zinc-800 border-zinc-300 dark:border-zinc-700',
+    activeBanner:
+      'bg-zinc-100 dark:bg-zinc-900 border-zinc-300 dark:border-zinc-700 text-zinc-700 dark:text-zinc-300',
+    activeButton:
+      'bg-black hover:bg-zinc-800 border-black text-white dark:bg-white dark:hover:bg-zinc-200 dark:border-white dark:text-zinc-950',
+  },
+};
+
 export const RecoveryActionModal: React.FC<RecoveryActionModalProps> = ({
   isOpen,
   actionType,
@@ -27,12 +276,10 @@ export const RecoveryActionModal: React.FC<RecoveryActionModalProps> = ({
 }) => {
   const [hasAcknowledged, setHasAcknowledged] = useState(false);
 
-  // Reset acknowledgment checkbox whenever modal opens/changes
   useEffect(() => {
     setHasAcknowledged(false);
   }, [isOpen, actionType]);
 
-  // Handle ESC key
   useEffect(() => {
     if (!isOpen) return;
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -46,289 +293,229 @@ export const RecoveryActionModal: React.FC<RecoveryActionModalProps> = ({
 
   if (!isOpen || !actionType) return null;
 
-  const config = {
-    'reset-defaults': {
-      title: 'Reset All Settings to Recommended Defaults?',
-      badge: 'RESTORE RECOMMENDED DEFAULTS',
-      badgeColor: 'bg-emerald-100 dark:bg-emerald-950/80 text-emerald-800 dark:text-emerald-300 border-emerald-300 dark:border-emerald-800',
-      icon: RotateCcw,
-      iconColor: 'text-emerald-600 dark:text-emerald-400',
-      iconBg: 'bg-emerald-50 dark:bg-emerald-950/40 border-emerald-200 dark:border-emerald-800/80',
-      description:
-        'This will reset your Downex preferences back to recommended factory settings. Your downloaded files, active tasks, and history are safe and will NOT be touched.',
-      bulletPoints: [
-        'Keep running in system tray on close: Set to ON (Recommended)',
-        'Start Downex with Windows: Set to ON (Recommended)',
-        'Clipboard URL auto-detection: Set to ON',
-        'Speed & Stats panel on home page: Set to OFF (Clean Mode)',
-        'Download acceleration: Reset to 16 parallel connections',
-        'Default download folder: Reset to %USERPROFILE%\\Downloads\\Downex',
-      ],
-      warningTitle: 'Preference Reset Confirmation',
-      warningDescription:
-        'Your custom preferences will be restored to recommended defaults. Downloaded files remain untouched.',
-      requiresCheckbox: false,
-      checkboxLabel: 'I want to reset my settings to recommended defaults.',
-      confirmButtonText: 'Reset to Defaults',
-      confirmButtonLoading: 'Resetting...',
-      confirmButtonClass: 'bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white',
-    },
-    'reset-folder': {
-      title: 'Reset Default Download Folder?',
-      badge: 'RESET FOLDER',
-      badgeColor: 'bg-zinc-200 dark:bg-zinc-800 text-zinc-800 dark:text-zinc-200 border-zinc-300 dark:border-zinc-700',
-      icon: FolderOpen,
-      iconColor: 'text-zinc-700 dark:text-zinc-300',
-      iconBg: 'bg-zinc-100 dark:bg-zinc-800 border-zinc-200 dark:border-zinc-700',
-      description:
-        'This will change the default folder where new downloads are saved back to your Windows user Downloads folder.',
-      bulletPoints: [
-        'New downloads will save to: %USERPROFILE%\\Downloads\\Downex',
-        'Files previously downloaded in your current folder will remain completely untouched',
-        'You can change this folder again at any time using "Change Folder..."',
-      ],
-      warningTitle: 'Folder Reset Confirmation',
-      warningDescription:
-        'Future downloads will save to the default folder instead of your current custom directory.',
-      requiresCheckbox: false,
-      checkboxLabel: 'Reset my default download folder to the standard location.',
-      confirmButtonText: 'Reset Folder',
-      confirmButtonLoading: 'Resetting...',
-      confirmButtonClass: 'bg-zinc-900 hover:bg-black dark:bg-zinc-700 dark:hover:bg-zinc-600 text-white',
-    },
-    repair: {
-      title: 'Repair App & Clear Cache?',
-      badge: 'APP REPAIR & MAINTENANCE',
-      badgeColor: 'bg-emerald-100 dark:bg-emerald-950/80 text-emerald-700 dark:text-emerald-300 border-emerald-300 dark:border-emerald-800',
-      icon: Wrench,
-      iconColor: 'text-emerald-600 dark:text-emerald-400',
-      iconBg: 'bg-emerald-50 dark:bg-emerald-950/40 border-emerald-200 dark:border-emerald-800/80',
-      description:
-        'This diagnostic routine will clear temporary cache files, release database locks, and restart Downex cleanly to resolve stuck tasks.',
-      bulletPoints: [
-        'Clears temporary cache and stale update containers',
-        'Releases active database locks and resets socket pools',
-        'Restarts Downex fresh in the background',
-        'Preserves all active downloads, files, and settings',
-      ],
-      warningTitle: 'App Restart Required',
-      warningDescription: 'Downex will briefly close and restart to complete the repair routine.',
-      requiresCheckbox: true,
-      checkboxLabel: 'I understand that Downex will restart immediately to complete the repair.',
-      confirmButtonText: 'Run Repair',
-      confirmButtonLoading: 'Repairing...',
-      confirmButtonClass: 'bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white',
-    },
-    'reset-base': {
-      title: 'Revert to Base Version (v0.0.1)?',
-      badge: 'VERSION ROLLBACK',
-      badgeColor: 'bg-amber-100 dark:bg-amber-950/80 text-amber-800 dark:text-amber-300 border-amber-300 dark:border-amber-800',
-      icon: RotateCcw,
-      iconColor: 'text-amber-600 dark:text-amber-400',
-      iconBg: 'bg-amber-50 dark:bg-amber-950/40 border-amber-200 dark:border-amber-800/80',
-      description:
-        'This will roll back your application executable to the clean original Base 0.0.1 installer. Use this if an update ever causes stability issues.',
-      bulletPoints: [
-        'Replaces current Downex executable with verified Base 0.0.1 installer',
-        'Clears dynamic update packages and resets app binaries',
-        'Your download history, files, and settings remain 100% intact',
-        'Downex will restart immediately with base binaries',
-      ],
-      warningTitle: 'Rollback Confirmation',
-      warningDescription: 'All recent OTA updates will be rolled back to the original base foundation.',
-      requiresCheckbox: true,
-      checkboxLabel: 'I acknowledge that this action will revert Downex to version 0.0.1 and restart.',
-      confirmButtonText: 'Revert to v0.0.1',
-      confirmButtonLoading: 'Reverting...',
-      confirmButtonClass: 'bg-amber-600 hover:bg-amber-700 active:bg-amber-800 text-white',
-    },
-    uninstall: {
-      title: 'Completely Uninstall Downex Desktop?',
-      badge: 'UNINSTALL DOWNEX',
-      badgeColor: 'bg-rose-100 dark:bg-rose-950/80 text-rose-800 dark:text-rose-300 border-rose-300 dark:border-rose-800',
-      icon: Trash2,
-      iconColor: 'text-rose-600 dark:text-rose-400',
-      iconBg: 'bg-rose-50 dark:bg-rose-950/40 border-rose-200 dark:border-rose-800/80',
-      description:
-        'This will close Downex, remove system startup services, and launch the Windows uninstallation wizard to remove the application.',
-      bulletPoints: [
-        'Pauses active downloads and disconnects browser extension',
-        'Removes Windows autostart entries and system tray services',
-        'Launches the official Windows uninstaller to remove app binaries',
-        'Files you already downloaded on your PC will NOT be deleted',
-      ],
-      warningTitle: 'Permanent Removal',
-      warningDescription: 'This will remove Downex from your system. Downloaded files are kept safely.',
-      requiresCheckbox: true,
-      checkboxLabel: 'I confirm that I want to exit and uninstall Downex from Windows.',
-      confirmButtonText: 'Uninstall Downex',
-      confirmButtonLoading: 'Launching...',
-      confirmButtonClass: 'bg-rose-600 hover:bg-rose-700 active:bg-rose-800 text-white',
-    },
-    'stop-engine': {
-      title: 'Exit Downex Completely?',
-      badge: 'EXIT APPLICATION',
-      badgeColor: 'bg-zinc-200 dark:bg-zinc-800 text-zinc-800 dark:text-zinc-200 border-zinc-300 dark:border-zinc-700',
-      icon: Power,
-      iconColor: 'text-rose-600 dark:text-rose-400',
-      iconBg: 'bg-rose-50 dark:bg-rose-950/40 border-rose-200 dark:border-rose-900/60',
-      description:
-        'This will close all Downex windows, remove the background system tray icon, and pause active downloads until you reopen the app.',
-      bulletPoints: [
-        'Pauses running downloads safely to prevent corrupted files',
-        'Removes Downex from the Windows system tray notification area',
-        'Disconnects browser extension download capture until reopened',
-        'Completely shuts down the application process',
-      ],
-      warningTitle: 'Background Service Termination',
-      warningDescription: 'Downex will not capture browser downloads while closed.',
-      requiresCheckbox: false,
-      checkboxLabel: 'I understand that Downex will exit completely.',
-      confirmButtonText: 'Exit App',
-      confirmButtonLoading: 'Exiting...',
-      confirmButtonClass: 'bg-zinc-900 hover:bg-black dark:bg-zinc-700 dark:hover:bg-zinc-600 text-white',
-    },
-  }[actionType];
-
+  const config = ACTION_CONFIGS[actionType];
+  const tone = TONE_CLASSES[config.tone];
   const IconComponent = config.icon;
-  const requiresCheckbox = config.requiresCheckbox === true;
+  const requiresCheckbox = config.requiresCheckbox;
+  const canConfirm = (!requiresCheckbox || hasAcknowledged) && !isLoading;
 
-  return (
+  const modalContent = (
     <div
-      className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4 select-none transition-opacity duration-100"
+      data-testid={`recovery-modal-${actionType}`}
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/45 backdrop-blur-xs select-none animate-in fade-in duration-100"
       onClick={() => {
         if (!isLoading) onClose();
       }}
     >
       <div
-        className="w-full max-w-lg rounded-2xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 shadow-2xl overflow-hidden modal-enter-instant"
+        data-testid="recovery-modal-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="recovery-modal-title"
+        className="w-[480px] max-w-[94vw] max-h-[calc(100vh-2rem)] bg-white dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 overflow-hidden select-none border border-zinc-200 dark:border-zinc-800 shadow-2xl modal-enter-instant flex flex-col"
         onClick={(e) => e.stopPropagation()}
       >
-        {/* Modal Header */}
-        <div className="p-5 border-b border-zinc-100 dark:border-zinc-800 flex items-start justify-between gap-4">
-          <div className="flex items-center gap-3">
-            <div className={`w-10 h-10 rounded-xl ${config.iconBg} border flex items-center justify-center shrink-0 shadow-xs`}>
-              <IconComponent className={`w-5 h-5 ${config.iconColor}`} />
-            </div>
-            <div>
-              <span className={`inline-block px-2 py-0.5 rounded-sm border text-[9px] font-mono font-bold tracking-wider mb-1 ${config.badgeColor}`}>
-                {config.badge}
-              </span>
-              <h3 className="text-base font-bold text-zinc-900 dark:text-zinc-100 leading-tight">
-                {config.title}
-              </h3>
-            </div>
+        {/* Title Bar Strip (1:1 Swiss Header matching NewDownloadModal & DeleteConfirmModal) */}
+        <div className="h-8 px-3.5 flex items-center justify-between border-b border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900 select-none shrink-0">
+          <div className="flex items-center gap-2 min-w-0">
+            <IconComponent className={`w-3.5 h-3.5 stroke-[2] shrink-0 ${tone.headerText}`} />
+            <span className={`font-mono-tabular text-[10.5px] uppercase tracking-wider font-semibold shrink-0 ${tone.headerText}`}>
+              {config.badge}
+            </span>
+            <span className="text-[10px] font-mono-tabular text-zinc-400 uppercase truncate">
+              {config.subtitle}
+            </span>
           </div>
-
           <button
             type="button"
             onClick={onClose}
             disabled={isLoading}
-            className="p-1.5 rounded-lg text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors disabled:opacity-50 cursor-pointer"
+            title="Close (Esc)"
+            data-testid="recovery-modal-close-btn"
+            className="p-1 text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 cursor-pointer focus:outline-none disabled:opacity-40"
           >
-            <X className="w-4 h-4" />
+            <X className="w-3.5 h-3.5 stroke-[1.8]" />
           </button>
         </div>
 
-        {/* Modal Body */}
-        <div className="p-5 space-y-4">
-          <p className="text-xs text-zinc-600 dark:text-zinc-300 leading-relaxed">
-            {config.description}
-          </p>
-
-          {/* Impact Bullet Points */}
-          <div className="rounded-xl bg-zinc-50 dark:bg-zinc-800/40 border border-zinc-200/80 dark:border-zinc-700/60 p-3.5 space-y-2">
-            <span className="text-[10px] font-mono font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400 block mb-1">
-              Changes & Impact:
+        {/* Form Body */}
+        <div className="p-3.5 space-y-2.5 overflow-y-auto no-scrollbar">
+          {/* Row 1: Action Title & Safety Badge */}
+          <div className="flex items-start justify-between gap-2.5">
+            <div className="min-w-0">
+              <h3
+                id="recovery-modal-title"
+                className="text-[13px] font-bold text-zinc-900 dark:text-zinc-100 tracking-tight leading-tight"
+              >
+                {config.title}
+              </h3>
+              <p className="text-[10.5px] text-zinc-500 dark:text-zinc-400 leading-snug mt-0.5">
+                {config.description}
+              </p>
+            </div>
+            <span className="text-[9.5px] font-mono-tabular font-semibold uppercase px-1.5 py-0.5 border border-emerald-500/40 text-emerald-700 dark:text-emerald-400 bg-emerald-500/5 shrink-0">
+              {config.statusPill}
             </span>
-            {config.bulletPoints.map((pt, idx) => (
-              <div key={idx} className="flex items-start gap-2 text-xs text-zinc-700 dark:text-zinc-300">
-                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500 shrink-0 mt-0.5" />
-                <span>{pt}</span>
-              </div>
-            ))}
           </div>
 
-          {/* Action Warning / Info Banner (Image 2 style) */}
-          <div className="px-3.5 py-2.5 rounded-xl bg-amber-500/[0.08] dark:bg-amber-950/30 border border-amber-500/25 flex items-start gap-2.5 text-xs text-amber-800 dark:text-amber-300">
-            <AlertTriangle className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
-            <div className="space-y-0.5">
-              <span className="font-bold text-[11px] font-mono uppercase tracking-wider block">
-                {config.warningTitle}
+          {/* Row 2: 2-Column Structured Scope Strip (matching NewDownloadModal) */}
+          <div className="grid grid-cols-2 gap-2">
+            <div className="border border-zinc-200 dark:border-zinc-800 bg-zinc-50/40 dark:bg-zinc-950/40 px-2.5 py-1.5 flex items-center justify-between gap-2">
+              <div className="min-w-0">
+                <div className="text-[9.5px] uppercase font-mono-tabular text-zinc-400 leading-tight">
+                  Operation
+                </div>
+                <div className="font-mono-tabular text-[11.5px] font-bold text-zinc-900 dark:text-zinc-100 leading-snug truncate">
+                  {config.operationValue}
+                </div>
+              </div>
+              <span className="text-[9px] font-mono-tabular px-1.5 py-0.5 border border-zinc-200 dark:border-zinc-700 text-zinc-500 dark:text-zinc-400 uppercase shrink-0">
+                {config.operationTag}
               </span>
-              <p className="text-[11px] text-zinc-600 dark:text-zinc-400 leading-normal">
-                {config.warningDescription}
-              </p>
+            </div>
+
+            <div className="border border-zinc-200 dark:border-zinc-800 bg-zinc-50/40 dark:bg-zinc-950/40 px-2.5 py-1.5 flex items-center justify-between gap-2">
+              <div className="min-w-0">
+                <div className="text-[9.5px] uppercase font-mono-tabular text-zinc-400 leading-tight">
+                  Your Downloads
+                </div>
+                <div className="font-mono-tabular text-[11.5px] font-bold text-zinc-900 dark:text-zinc-100 leading-snug truncate">
+                  {config.safetyValue}
+                </div>
+              </div>
+              <span className="text-[9px] font-mono-tabular px-1.5 py-0.5 border border-emerald-500/40 text-emerald-600 dark:text-emerald-400 bg-emerald-500/5 uppercase shrink-0">
+                {config.safetyTag}
+              </span>
             </div>
           </div>
 
-          {/* Optional Safety Checkbox (Before and After State) */}
-          {requiresCheckbox && (
+          {/* Row 3: Changes & Impact Matrix */}
+          <div className="border border-zinc-200 dark:border-zinc-800 bg-zinc-50/60 dark:bg-zinc-900/40 p-2 space-y-1.5">
+            <div className="flex items-center justify-between text-[9.5px] font-mono-tabular text-zinc-500 uppercase pb-1 border-b border-zinc-200/70 dark:border-zinc-800/70">
+              <span>Changes &amp; Impact</span>
+              <span>{config.bulletPoints.length} STEPS</span>
+            </div>
+            <div className="space-y-1">
+              {config.bulletPoints.map((pt, idx) => (
+                <div
+                  key={idx}
+                  className="flex items-center gap-2 text-[11px] font-mono-tabular text-zinc-700 dark:text-zinc-300 leading-snug"
+                >
+                  <Check className="w-3 h-3 text-emerald-600 dark:text-emerald-400 shrink-0 stroke-[2.5]" />
+                  <span>{pt}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Row 4: Interactive Confirmation Toggle + Compact Notice Strip */}
+          {requiresCheckbox ? (
             <div
+              data-testid="recovery-confirm-toggle"
               onClick={() => !isLoading && setHasAcknowledged(!hasAcknowledged)}
-              className={`p-3.5 rounded-xl border transition-all cursor-pointer select-none space-y-2 ${
+              className={`p-2 border transition-colors cursor-pointer select-none space-y-1.5 ${
                 hasAcknowledged
-                  ? 'border-emerald-500/40 dark:border-emerald-500/40 bg-emerald-500/[0.03] dark:bg-emerald-950/20 shadow-2xs'
-                  : 'border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900/60 hover:border-zinc-300 dark:hover:border-zinc-700'
+                  ? tone.activeBox
+                  : 'border-zinc-300 dark:border-zinc-700 bg-zinc-50/40 dark:bg-zinc-900/40 hover:border-zinc-400 dark:hover:border-zinc-600'
               }`}
             >
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2.5">
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2 min-w-0">
                   <div
-                    className={`w-4.5 h-4.5 rounded-sm flex items-center justify-center transition-colors ${
+                    className={`w-3.5 h-3.5 flex items-center justify-center border transition-colors shrink-0 ${
                       hasAcknowledged
-                        ? 'bg-emerald-600 border border-emerald-600 text-white shadow-2xs'
-                        : 'border border-zinc-300 dark:border-zinc-600 bg-white dark:bg-zinc-800'
+                        ? tone.activeCheck
+                        : 'border-zinc-300 dark:border-zinc-600 bg-white dark:bg-zinc-800'
                     }`}
                   >
-                    {hasAcknowledged && <Check className="w-3 h-3 stroke-[3]" />}
+                    {hasAcknowledged && <Check className="w-2.5 h-2.5 stroke-[3]" />}
                   </div>
-                  <span className="text-xs font-semibold text-zinc-800 dark:text-zinc-200 leading-snug">
+                  <span className="text-[11px] font-mono-tabular font-semibold text-zinc-900 dark:text-zinc-100 leading-tight">
                     {config.checkboxLabel}
                   </span>
                 </div>
                 <span
-                  className={`text-[9.5px] font-mono font-bold px-2 py-0.5 rounded border transition-colors ${
+                  className={`text-[9px] font-mono-tabular font-bold px-1.5 py-0.5 border shrink-0 uppercase ${
                     hasAcknowledged
-                      ? 'text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 border-emerald-500/20'
-                      : 'text-zinc-400 dark:text-zinc-500 bg-zinc-100 dark:bg-zinc-800/80 border-zinc-200/80 dark:border-zinc-700/80'
+                      ? tone.activePill
+                      : 'text-zinc-500 dark:text-zinc-400 bg-zinc-100 dark:bg-zinc-800 border-zinc-300 dark:border-zinc-700'
                   }`}
                 >
                   {hasAcknowledged ? 'CONFIRMED' : 'REQUIRED'}
                 </span>
               </div>
+
+              <div
+                className={`px-2 py-1 border flex items-center gap-1.5 ${
+                  hasAcknowledged
+                    ? tone.activeBanner
+                    : 'bg-amber-500/[0.08] dark:bg-amber-950/30 border-amber-500/25 text-amber-800 dark:text-amber-300'
+                }`}
+              >
+                <AlertTriangle className="w-3 h-3 shrink-0" />
+                <span className="text-[10px] leading-tight font-mono-tabular font-medium">
+                  {config.warningTitle}: {config.warningDescription}
+                </span>
+              </div>
+            </div>
+          ) : (
+            <div className="px-2.5 py-1.5 bg-zinc-50 dark:bg-zinc-900/60 border border-zinc-200 dark:border-zinc-800 flex items-center gap-1.5 text-zinc-600 dark:text-zinc-400">
+              <AlertTriangle className="w-3 h-3 text-amber-500 shrink-0" />
+              <span className="text-[10px] leading-tight font-mono-tabular font-medium">
+                {config.warningTitle}: {config.warningDescription}
+              </span>
             </div>
           )}
         </div>
 
-        {/* Modal Footer Actions (Image 2 style) */}
-        <div className="p-4 bg-zinc-50/80 dark:bg-zinc-950/60 border-t border-zinc-100 dark:border-zinc-800/80 flex items-center justify-end gap-3">
-          <button
-            type="button"
-            onClick={onClose}
-            disabled={isLoading}
-            className="h-9 px-4 rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 text-zinc-700 dark:text-zinc-300 text-xs font-semibold uppercase tracking-wider hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors cursor-pointer disabled:opacity-50"
-          >
-            Cancel
-          </button>
+        {/* Bottom Actions Strip */}
+        <div className="px-3.5 py-2.5 bg-zinc-50 dark:bg-zinc-950 border-t border-zinc-200 dark:border-zinc-800 flex items-center justify-between gap-2 shrink-0">
+          <span className="text-[10px] font-mono-tabular text-zinc-400 truncate">
+            {requiresCheckbox && !hasAcknowledged ? 'Confirm checkbox above' : config.footerHint}
+          </span>
 
-          <button
-            type="button"
-            onClick={onConfirm}
-            disabled={(requiresCheckbox && !hasAcknowledged) || isLoading}
-            className={`h-9 px-5 rounded-lg text-xs font-semibold uppercase tracking-wider flex items-center justify-center gap-2 shadow-xs transition-all cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed ${config.confirmButtonClass}`}
-          >
-            {isLoading ? (
-              <>
-                <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                <span>{config.confirmButtonLoading}</span>
-              </>
-            ) : (
-              <span>{config.confirmButtonText}</span>
-            )}
-          </button>
+          <div className="flex items-center gap-1.5 shrink-0">
+            <button
+              type="button"
+              onClick={onClose}
+              disabled={isLoading}
+              data-testid="recovery-modal-cancel-btn"
+              className="h-7.5 px-3 border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 hover:bg-zinc-100 dark:hover:bg-zinc-800 font-mono-tabular text-[10.5px] uppercase tracking-wider text-zinc-700 dark:text-zinc-300 cursor-pointer disabled:opacity-50"
+            >
+              Cancel
+            </button>
+
+            <button
+              type="button"
+              onClick={onConfirm}
+              disabled={!canConfirm}
+              data-testid="recovery-modal-confirm-btn"
+              className={`h-7.5 px-3.5 border font-mono-tabular text-[10.5px] uppercase tracking-wider font-semibold flex items-center justify-center gap-1.5 transition-colors ${
+                canConfirm
+                  ? `${tone.activeButton} cursor-pointer`
+                  : 'bg-zinc-400 dark:bg-zinc-700 border-zinc-400 dark:border-zinc-700 text-white/90 cursor-not-allowed'
+              }`}
+            >
+              {isLoading ? (
+                <>
+                  <Loader2 className="w-3 h-3 animate-spin" />
+                  <span>{config.confirmButtonLoading}</span>
+                </>
+              ) : (
+                <>
+                  <IconComponent className="w-3 h-3 stroke-[2.2]" />
+                  <span>{config.confirmButtonText}</span>
+                </>
+              )}
+            </button>
+          </div>
         </div>
       </div>
     </div>
   );
+
+  if (typeof document !== 'undefined') {
+    return createPortal(modalContent, document.body);
+  }
+  return modalContent;
 };
