@@ -29,6 +29,11 @@ export function isProductionEnvironment(): boolean {
     return !(window as any).__DOWNEX_FORCE_DEV__;
   }
 
+  // Compile-time production bundle flag takes strict precedence over host/port heuristics
+  if (import.meta.env.PROD) {
+    return true;
+  }
+
   // If running on Vite dev server port (1420, 5173, 3000), consider development mode
   try {
     if (window.location && window.location.port && ['1420', '5173', '3000'].includes(window.location.port)) {
@@ -38,18 +43,12 @@ export function isProductionEnvironment(): boolean {
     }
   } catch {}
 
-  const env = (import.meta as any).env;
-
-  // Vite compile-time environment flags
-  if (env?.PROD) {
-    return true;
-  }
-  if (env?.DEV) {
+  if (import.meta.env.DEV) {
     return false;
   }
 
   // Fallback checks: In desktop base app or production builds, defaults to true (locked)
-  return env?.MODE !== 'development';
+  return import.meta.env.MODE !== 'development';
 }
 
 export function isDevEnvironment(): boolean {

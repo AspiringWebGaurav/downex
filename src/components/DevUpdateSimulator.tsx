@@ -9,6 +9,7 @@ import {
 import { useDownloadStore } from '../stores/downloadStore';
 import { useAppVersionStore } from '../stores/appVersionStore';
 import { DownloadItem } from '../types/download';
+import { isDevEnvironment } from '../utils/reloadGuard';
 import { 
   FlaskConical,
   Play, 
@@ -38,10 +39,11 @@ import {
 type DevTab = 'downloads' | 'modals' | 'ota' | 'system';
 
 export const DevUpdateSimulator: React.FC = () => {
+  const isBuildDev = Boolean(import.meta.env.DEV) && !import.meta.env.PROD;
+
   const [isDev, setIsDev] = useState<boolean>(() => {
-    if (typeof window === 'undefined') return false;
-    if ((import.meta as any).env?.DEV) return true;
-    if (!(window as any).__TAURI_INTERNALS__) return true;
+    if (typeof window === 'undefined' || !isBuildDev) return false;
+    if (!isDevEnvironment()) return false;
     try {
       return localStorage.getItem('downex_dev_qa_enabled') !== 'false';
     } catch {
@@ -71,8 +73,10 @@ export const DevUpdateSimulator: React.FC = () => {
     }, duration);
   };
 
-  // Keyboard shortcut: Ctrl + Shift + D toggles QA panel anywhere
+  // Keyboard shortcut: Ctrl + Shift + D toggles QA panel anywhere (strictly dev-only)
   useEffect(() => {
+    if (!isBuildDev || !isDev) return;
+
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'd') {
         e.preventDefault();
@@ -90,7 +94,7 @@ export const DevUpdateSimulator: React.FC = () => {
       delete (window as any).__DOWNEX_TOGGLE_QA__;
       delete (window as any).__DOWNEX_ENABLE_QA__;
     };
-  }, []);
+  }, [isBuildDev, isDev]);
 
   // Live Speed Limiter Simulation Loop (Ticks every 500ms for active mock downloads)
   useEffect(() => {

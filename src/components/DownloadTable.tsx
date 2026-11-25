@@ -706,7 +706,7 @@ export const DownloadTable: React.FC = () => {
           </div>
         )}
 
-        {!isTauri && selectedView !== 'queues' && (
+        {import.meta.env.DEV && !isTauri && selectedView !== 'queues' && (
           <button
               onClick={() => {
                 const sample: DownloadItem = {

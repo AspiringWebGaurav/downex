@@ -10,7 +10,15 @@ import { NewDownloadModal } from './components/NewDownloadModal';
 import { useDownloadStore } from './stores/downloadStore';
 import { useAppVersionStore } from './stores/appVersionStore';
 import { useHardwareBanStore } from './stores/hardwareBanStore';
-import { DevUpdateSimulator } from './components/DevUpdateSimulator';
+import { isDevEnvironment } from './utils/reloadGuard';
+
+const DevUpdateSimulatorLazy = import.meta.env.DEV
+  ? React.lazy(() =>
+      import('./components/DevUpdateSimulator').then((m) => ({
+        default: m.DevUpdateSimulator,
+      }))
+    )
+  : null;
 import { ShutdownCountdownModal } from './components/Modals/ShutdownCountdownModal';
 import { QueueGuideModal } from './components/Modals/QueueGuideModal';
 import { SettingsView } from './components/SettingsView';
@@ -377,7 +385,11 @@ export const App: React.FC = () => {
         <NewDownloadModal />
         <ShutdownCountdownModal />
         <QueueGuideModal />
-        <DevUpdateSimulator />
+        {import.meta.env.DEV && DevUpdateSimulatorLazy && isDevEnvironment() && (
+          <React.Suspense fallback={null}>
+            <DevUpdateSimulatorLazy />
+          </React.Suspense>
+        )}
       </div>
     </>
   );

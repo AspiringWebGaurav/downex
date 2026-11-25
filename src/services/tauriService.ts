@@ -315,6 +315,9 @@ export async function queueDownload(id: string): Promise<boolean> {
 }
 
 export async function getDownloads(): Promise<DownloadItem[]> {
+  if (!import.meta.env.DEV && isTauri) {
+    return await invoke<DownloadItem[]>('cmd_get_downloads');
+  }
   const mocks = loadMockDownloads();
   if (!isTauri) return mocks;
   try {
