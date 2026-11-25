@@ -70,28 +70,29 @@ test.describe('Downex Base Application — Startup, Lifecycle & Controls', () =>
 
     // 2. Ctrl+B toggles sidebar collapse/expand
     const sidebar = page.locator('aside');
-    await expect(sidebar).toHaveClass(/w-\[(228|196)px\]/);
+    await expect(sidebar).toHaveClass(/w-\[(228|216|196|172)px\]/);
     await page.keyboard.press('Control+b');
-    await expect(sidebar).toHaveClass(/(w-\[70px\]|w-14)/);
+    await expect(sidebar).toHaveClass(/(w-\[64px\]|w-\[70px\]|w-14)/);
     await page.keyboard.press('Control+b');
-    await expect(sidebar).toHaveClass(/w-\[(228|196)px\]/);
+    await expect(sidebar).toHaveClass(/w-\[(228|216|196|172)px\]/);
 
     // 3. Test Ctrl+N keyboard shortcut event opens New Download Modal
     await page.evaluate(() => {
       window.dispatchEvent(new KeyboardEvent('keydown', { key: 'n', ctrlKey: true, bubbles: true }));
     });
-    await expect(page.locator('text=Download File')).toBeVisible();
-    await expect(page.locator('input[placeholder="Filename"]')).toBeVisible();
+    const modalHeader = page.locator('div.fixed.inset-0').getByText('NEW DOWNLOAD', { exact: true });
+    await expect(modalHeader).toBeVisible();
+    await expect(page.locator('input[placeholder="Filename"], input[placeholder*="download link"]').first()).toBeVisible();
 
     // Escape closes modal
     await page.keyboard.press('Escape');
-    await expect(page.locator('text=Download File')).not.toBeVisible();
+    await expect(modalHeader).not.toBeVisible();
 
     // 4. Also verify clicking "+ New Download" button opens modal
     await page.click('button:has-text("New Download")');
-    await expect(page.locator('text=Download File')).toBeVisible();
+    await expect(modalHeader).toBeVisible();
     await page.click('button[title="Close (Esc)"]');
-    await expect(page.locator('text=Download File')).not.toBeVisible();
+    await expect(modalHeader).not.toBeVisible();
   });
 
   test('Component mounting and unmounting stress across rapid view switches', async ({ page }) => {

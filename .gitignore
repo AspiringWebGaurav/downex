@@ -127,13 +127,21 @@ tsconfig.node.tsbuildinfo
 tsconfig.tsbuildinfo
 
 # ------------------------------------------------------------------------------
-# 10. Rust & Tauri Build Targets
+# 10. Rust & Tauri Build Targets & Generated Resource Binaries
 # ------------------------------------------------------------------------------
 target/
 src-tauri/target/
 src-tauri/gen/schemas/
 **/*.rs.bk
 Cargo.lock.orig
+src-tauri/resources/core/*.exe
+src-tauri/resources/core/*.bin
+src-tauri/resources/engine/
+src-tauri/resources/updater/*.exe
+src-tauri/resources/updater/*.dat
+src-tauri/resources/updater/*.cfg
+src-tauri/resources/security/machine_token.dat
+*.exe
 
 # ------------------------------------------------------------------------------
 # 11. Local Databases & Runtime WAL

@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { Button } from './ui/Button';
 import { 
   Play, 
@@ -13,21 +13,28 @@ import {
   ShieldCheck, 
   FolderOpen, 
   ExternalLink, 
-  HelpCircle, 
   Plus, 
   Search,
   SearchX,
   RotateCcw,
+  RefreshCw,
   X,
-  Menu,
   Copy,
   Check,
-  Power
+  Power,
+  ArrowRight,
+  Undo2,
+  Pin,
+  PinOff
 } from 'lucide-react';
 import { useDownloadStore } from '../stores/downloadStore';
-import { openFolderPicker, openFile, openFileFolder, showDownloadCompleteDialog, isTauri, injectMockDownloadItem, toggleTaskShutdown } from '../services/tauriService';
+import { openFile, openFileFolder, showDownloadCompleteDialog, isTauri, injectMockDownloadItem, toggleTaskShutdown, openExternalUrl } from '../services/tauriService';
 import { DeleteConfirmModal } from './DeleteConfirmModal';
+import { BatchDeleteConfirmModal } from './BatchDeleteConfirmModal';
+import { BatchPauseConfirmModal } from './BatchPauseConfirmModal';
 import { InlineSpeedLimiter } from './InlineSpeedLimiter';
+import { FolderChangeModal } from './FolderChangeModal';
+import { AutoShutdownConfirmModal } from './AutoShutdownConfirmModal';
 import { DownloadItem } from '../types/download';
 import { getResumeCapability, formatTimeTaken, getActiveDownloadDiskPath } from '../utils/format';
 
@@ -41,15 +48,43 @@ export const DownloadTable: React.FC = () => {
   const removeDownload = useDownloadStore((state) => state.removeDownload);
   const changeFolderAndRetry = useDownloadStore((state) => state.changeFolderAndRetry);
   const isQueueRunning = useDownloadStore((state) => state.isQueueRunning);
+  const activeQueueTaskId = useDownloadStore((state) => state.activeQueueTaskId);
   const startQueue = useDownloadStore((state) => state.startQueue);
   const pauseQueue = useDownloadStore((state) => state.pauseQueue);
   const queueDownload = useDownloadStore((state) => state.queueDownload);
-  const setQueueGuideOpen = useDownloadStore((state) => state.setQueueGuideOpen);
+  const unqueueDownload = useDownloadStore((state) => state.unqueueDownload);
+  const pauseAllDownloads = useDownloadStore((state) => state.pauseAllDownloads);
+  const resumeAllDownloads = useDownloadStore((state) => state.resumeAllDownloads);
+  const queueAllDownloads = useDownloadStore((state) => state.queueAllDownloads);
+  const unqueueAllDownloads = useDownloadStore((state) => state.unqueueAllDownloads);
+  const removeAllDownloads = useDownloadStore((state) => state.removeAllDownloads);
   const setNewModalOpen = useDownloadStore((state) => state.setNewModalOpen);
+
+  const scrollContainerRef = useRef<HTMLDivElement | null>(null);
+  const cardRefs = useRef<(HTMLDivElement | null)[]>([]);
+  const jumpStripRef = useRef<HTMLDivElement | null>(null);
+  const activeJumpBtnRef = useRef<HTMLButtonElement | null>(null);
+
+  const [currentVisibleIndex, setCurrentVisibleIndex] = useState(0);
+  const [isNavVisible, setIsNavVisible] = useState(false);
+  const [alwaysShowNav, setAlwaysShowNav] = useState(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        return localStorage.getItem('downex_nav_always_visible') === 'true';
+      } catch {
+        return false;
+      }
+    }
+    return false;
+  });
 
   const [expandedItemIds, setExpandedItemIds] = useState<Record<string, boolean>>({});
   const [showAllSegmentsMap, setShowAllSegmentsMap] = useState<Record<string, boolean>>({});
   const [deletingItem, setDeletingItem] = useState<DownloadItem | null>(null);
+  const [isBatchDeleteOpen, setIsBatchDeleteOpen] = useState(false);
+  const [batchPauseAction, setBatchPauseAction] = useState<'pause' | 'resume' | 'queue' | 'start_queue' | null>(null);
+  const [batchPauseCustomItems, setBatchPauseCustomItems] = useState<DownloadItem[] | null>(null);
+  const [retryingFolderItem, setRetryingFolderItem] = useState<DownloadItem | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [pauseHintTaskId, setPauseHintTaskId] = useState<string | null>(null);
 
@@ -77,9 +112,21 @@ export const DownloadTable: React.FC = () => {
     return {};
   });
 
+  const [shutdownConfirmItem, setShutdownConfirmItem] = useState<DownloadItem | null>(null);
+
   const handleToggleShutdown = async (taskId: string) => {
     const nextState = await toggleTaskShutdown(taskId);
     setShutdownArmedMap((prev) => ({ ...prev, [taskId]: nextState }));
+  };
+
+  const handleToggleShutdownClick = (targetItem: DownloadItem) => {
+    if (isShutdownArmed(targetItem.id)) {
+      // Disarming is safe, toggle off directly
+      handleToggleShutdown(targetItem.id);
+    } else {
+      // Arming shuts down the computer, prompt confirmation modal
+      setShutdownConfirmItem(targetItem);
+    }
   };
 
   const isShutdownArmed = (taskId: string) => Boolean(shutdownArmedMap[taskId]);
@@ -90,6 +137,9 @@ export const DownloadTable: React.FC = () => {
   const smoothedEtaRef = useRef<Record<string, { eta: number; lastUpdated: number }>>({});
   const activeStartRef = useRef<Record<string, number>>({});
   const activeDurationRef = useRef<Record<string, number>>({});
+  const persistentBytesRef = useRef<Record<string, number>>({});
+  const persistentPercentRef = useRef<Record<string, number>>({});
+  const persistentBarWidthRef = useRef<Record<string, number>>({});
 
   const toggleDetails = (id: string) => {
     setExpandedItemIds((prev) => ({ ...prev, [id]: !prev[id] }));
@@ -134,16 +184,27 @@ export const DownloadTable: React.FC = () => {
     }
 
     if (selectedView === 'active') {
-      return item.status === 'downloading' || item.status === 'probing';
+      return (item.status === 'downloading' || item.status === 'probing') && item.id !== activeQueueTaskId;
     }
     if (selectedView === 'completed') {
       return item.status === 'completed';
     }
     if (selectedView === 'queues') {
-      return item.status === 'queued' || item.status === 'downloading' || item.status === 'probing';
+      // In Queues view: strictly items in the queue, or the single task actively downloading from the queue!
+      return (
+        item.status === 'queued' ||
+        Boolean(isQueueRunning && item.id === activeQueueTaskId && (item.status === 'downloading' || item.status === 'probing'))
+      );
     }
     if (selectedView === 'trash') {
       return item.status === 'failed' || item.status === 'cancelled' || item.status === 'error';
+    }
+    if (selectedView === 'all') {
+      // In All Downloads: display regular downloads and completed downloads,
+      // but do NOT show pending queued items (they live in the Queues workspace).
+      // When a queued item finishes downloading, its status becomes 'completed',
+      // so it seamlessly reflects in All Downloads!
+      return item.status !== 'queued' && !(isQueueRunning && item.id === activeQueueTaskId);
     }
     return true;
   });
@@ -153,8 +214,127 @@ export const DownloadTable: React.FC = () => {
     const queued = displayItems
       .filter((i) => i.status === 'queued')
       .sort((a, b) => a.created_at - b.created_at);
-    displayItems = [...active, ...queued];
+    const otherInQueue = displayItems
+      .filter((i) => i.status !== 'downloading' && i.status !== 'probing' && i.status !== 'queued');
+    displayItems = [...active, ...queued, ...otherInQueue];
   }
+
+  const downloadingCount = displayItems.filter((i) => i.status === 'downloading').length;
+  const pausedCount = displayItems.filter((i) => i.status === 'paused').length;
+  const queuedCount = displayItems.filter((i) => i.status === 'queued').length;
+  const errorCount = displayItems.filter((i) => i.status === 'failed' || i.status === 'error').length;
+  const canQueueAny = items.some((i) => i.status !== 'completed' && i.status !== 'queued');
+  const canUnqueueAny = isQueuesView ? displayItems.length > 0 : queuedCount > 0;
+
+  const scrollToCard = (index: number) => {
+    const clamped = Math.max(0, Math.min(displayItems.length - 1, index));
+    const target = cardRefs.current[clamped];
+    const container = scrollContainerRef.current;
+    if (container) {
+      if (clamped === 0) {
+        container.scrollTo({ top: 0, behavior: 'smooth' });
+        setCurrentVisibleIndex(0);
+        return;
+      }
+      if (target) {
+        const containerRect = container.getBoundingClientRect();
+        const targetRect = target.getBoundingClientRect();
+        const targetScrollTop = targetRect.top - containerRect.top + container.scrollTop - 8;
+
+        container.scrollTo({
+          top: Math.max(0, targetScrollTop),
+          behavior: 'smooth',
+        });
+        setCurrentVisibleIndex(clamped);
+      }
+    }
+  };
+
+  // Synchronize active number button centering in horizontal strip
+  useEffect(() => {
+    if (activeJumpBtnRef.current && jumpStripRef.current) {
+      const btn = activeJumpBtnRef.current;
+      const strip = jumpStripRef.current;
+      const btnLeft = btn.offsetLeft;
+      const btnWidth = btn.offsetWidth;
+      const stripWidth = strip.offsetWidth;
+      strip.scrollTo({
+        left: btnLeft - stripWidth / 2 + btnWidth / 2,
+        behavior: 'smooth',
+      });
+    }
+  }, [currentVisibleIndex]);
+
+  // Universal dominant-card scroll-spy & at-top auto-hide (inspired by portfolio FloatingNav.tsx)
+  useEffect(() => {
+    if (typeof window === 'undefined' || !scrollContainerRef.current) return;
+    const container = scrollContainerRef.current;
+    let ticking = false;
+
+    const updateDominantCardAndVisibility = () => {
+      const scrollTop = container.scrollTop;
+      const containerRect = container.getBoundingClientRect();
+
+      // 1. At-top detection: hide navigator at top unless pinned
+      const atTop = scrollTop <= 45;
+      setIsNavVisible(alwaysShowNav || !atTop);
+
+      // 2. Absolute bottom detection: last card view
+      const isAtBottom =
+        container.scrollHeight - container.scrollTop - container.clientHeight <= 25;
+
+      if (isAtBottom && displayItems.length > 0) {
+        setCurrentVisibleIndex(displayItems.length - 1);
+        return;
+      }
+
+      if (atTop) {
+        setCurrentVisibleIndex(0);
+        return;
+      }
+
+      // 3. Dominant Section Calculation (Mathematical intersection height in viewport)
+      let maxVisibleHeight = 0;
+      let dominantIndex = 0;
+
+      for (let i = 0; i < displayItems.length; i++) {
+        const cardEl = cardRefs.current[i];
+        if (cardEl) {
+          const rect = cardEl.getBoundingClientRect();
+          const visibleTop = Math.max(containerRect.top, rect.top);
+          const visibleBottom = Math.min(containerRect.bottom, rect.bottom);
+          const visibleHeight = Math.max(0, visibleBottom - visibleTop);
+
+          if (visibleHeight > maxVisibleHeight) {
+            maxVisibleHeight = visibleHeight;
+            dominantIndex = i;
+          }
+        }
+      }
+
+      setCurrentVisibleIndex(dominantIndex);
+    };
+
+    const handleScroll = () => {
+      if (ticking) return;
+      ticking = true;
+      requestAnimationFrame(() => {
+        ticking = false;
+        updateDominantCardAndVisibility();
+      });
+    };
+
+    // Initial calculation on mount / item changes
+    updateDominantCardAndVisibility();
+
+    container.addEventListener('scroll', handleScroll, { passive: true });
+    window.addEventListener('resize', handleScroll, { passive: true });
+
+    return () => {
+      container.removeEventListener('scroll', handleScroll);
+      window.removeEventListener('resize', handleScroll);
+    };
+  }, [displayItems.map((i) => i.id).join(','), displayItems.length, alwaysShowNav, selectedView]);
 
   const formatBytes = (bytes?: number | null) => {
     if (!bytes || bytes === 0) return '0 B';
@@ -205,80 +385,87 @@ export const DownloadTable: React.FC = () => {
     return `${roundedSecs} sec left`;
   };
 
-  const renderQueueBanner = () => (
-    <div className="p-2.5 sm:p-3 rounded-xl bg-gradient-to-r from-zinc-50 to-zinc-100/80 dark:from-zinc-900/90 dark:to-zinc-900/50 border border-zinc-200/90 dark:border-zinc-800 shadow-xs flex items-center justify-between gap-3 mb-2 shrink-0">
-      <div className="flex items-center gap-2.5 min-w-0">
+  const renderQueueBanner = (showGuideButton: boolean = true) => (
+    <div className="px-3 sm:px-3.5 py-2 rounded-xl bg-zinc-50/80 dark:bg-zinc-900/60 border border-zinc-200 dark:border-zinc-800 shadow-2xs flex flex-wrap sm:flex-nowrap items-center justify-between gap-2 sm:gap-3 shrink-0 select-none">
+      <div className="flex items-center gap-2 sm:gap-2.5 min-w-0 flex-1 overflow-hidden">
         <div
-          className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 ${
+          className={`w-7 h-7 flex items-center justify-center shrink-0 border ${
             isQueueRunning
-              ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20'
-              : 'bg-zinc-200/70 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400 border border-zinc-300/50 dark:border-zinc-700/50'
+              ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/30'
+              : 'bg-zinc-100 dark:bg-zinc-800/80 text-zinc-500 dark:text-zinc-400 border-zinc-300 dark:border-zinc-700'
           }`}
         >
-          <ListOrdered className="w-4 h-4 stroke-[2]" />
+          <ListOrdered className="w-3.5 h-3.5 stroke-[2]" />
         </div>
-        <div className="min-w-0">
-          <div className="flex items-center gap-2">
-            <h3 className="text-xs font-semibold text-zinc-900 dark:text-zinc-100 shrink-0">
+        <div className="min-w-0 flex-1 overflow-hidden">
+          <div className="flex items-center gap-1.5 sm:gap-2 min-w-0">
+            <span className="font-mono-tabular text-[10px] uppercase tracking-wider text-emerald-600 dark:text-emerald-400 font-semibold shrink-0 leading-none">
+              QUEUES WORKSPACE
+            </span>
+            <span className="w-1 h-1 rounded-full bg-zinc-300 dark:bg-zinc-600 shrink-0" />
+            <h3 className="text-xs font-semibold text-zinc-900 dark:text-zinc-100 shrink-0 leading-none">
               Simple 1-by-1 Queue
             </h3>
-            <span
-              className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium shrink-0 ${
-                isQueueRunning
-                  ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 font-semibold'
-                  : 'bg-zinc-200/80 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400'
-              }`}
-            >
-              <span
-                className={`w-1.5 h-1.5 rounded-full ${
-                  isQueueRunning ? 'bg-emerald-500 animate-pulse' : 'bg-zinc-400'
-                }`}
-              />
-              {isQueueRunning ? 'Queue Active' : 'Queue Paused'}
-            </span>
           </div>
-          <p className="text-[11px] text-zinc-500 dark:text-zinc-400 mt-0.5 truncate">
+          <p className="font-mono-tabular text-[11px] text-zinc-500 dark:text-zinc-400 mt-1 truncate leading-none">
             {isQueueRunning
               ? activeItems.length > 0
                 ? `Downloading 1 file at maximum speed. ${queuedItems.length} file(s) waiting in line.`
                 : `Queue is active and listening for queued tasks.`
               : queuedItems.length > 0
               ? `${queuedItems.length} file(s) in line. Click Start to download 1-by-1 sequentially.`
-              : `Queue is empty. Click "+ New Download" and select "Download Later" to enqueue.`}
+              : `Queue is empty. Ready for downloads.`}
           </p>
         </div>
       </div>
 
-      <div className="flex items-center gap-2 shrink-0">
-        <button
-          type="button"
-          onClick={() => setQueueGuideOpen(true)}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-emerald-50 hover:bg-emerald-100 dark:bg-emerald-950/60 dark:hover:bg-emerald-900/60 text-emerald-700 dark:text-emerald-300 border border-emerald-300/80 dark:border-emerald-800 transition-colors cursor-pointer shadow-2xs"
-          title="Learn how 1-by-1 Queue works and how to add downloads"
+      <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+        <span
+          className={`h-7 sm:h-7.5 px-3 min-w-[104px] border shrink-0 uppercase tracking-wider inline-flex items-center justify-center font-mono-tabular text-[9.5px] sm:text-[10px] font-semibold leading-none ${
+            isQueueRunning
+              ? 'border-emerald-500/50 text-emerald-600 dark:text-emerald-400 bg-emerald-500/10'
+              : 'border-zinc-300 dark:border-zinc-700 text-zinc-600 dark:text-zinc-400 bg-zinc-100/80 dark:bg-zinc-800/80'
+          }`}
         >
-          <HelpCircle className="w-3.5 h-3.5 stroke-[2.5]" />
-          <span>How it works?</span>
-        </button>
+          {isQueueRunning ? 'QUEUE ACTIVE' : 'QUEUE PAUSED'}
+        </span>
+
+        {showGuideButton && (
+          <button
+            type="button"
+            onClick={() => openExternalUrl('https://downex.apps.gauravpatil.site/how-queues-work')}
+            className="h-7 sm:h-7.5 px-2.5 sm:px-3 border border-zinc-300 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-800 font-mono-tabular text-[9.5px] sm:text-[10px] uppercase tracking-wider text-zinc-700 dark:text-zinc-300 shrink-0 cursor-pointer flex items-center justify-center leading-none"
+            title="Learn how 1-by-1 Queue works and how to add downloads"
+          >
+            How it works
+          </button>
+        )}
 
         {isQueueRunning ? (
-          <Button
-            variant="warning"
-            size="sm"
-            icon={<Pause className="w-3.5 h-3.5 fill-current" />}
+          <button
+            type="button"
             onClick={pauseQueue}
+            className="h-7 sm:h-7.5 px-3 min-w-[104px] border border-amber-300 dark:border-amber-700 hover:bg-amber-50 dark:hover:bg-amber-950/40 font-mono-tabular text-[9.5px] sm:text-[10px] font-semibold uppercase tracking-wider text-amber-700 dark:text-amber-300 shrink-0 cursor-pointer flex items-center justify-center leading-none"
           >
             Pause Queue
-          </Button>
+          </button>
         ) : (
-          <Button
-            variant="primary-emerald"
-            size="sm"
-            icon={<Play className="w-3.5 h-3.5 fill-current" />}
-            disabled={queuedItems.length === 0 && activeItems.length === 0}
-            onClick={startQueue}
+          <button
+            type="button"
+            disabled={queuedItems.length === 0}
+            onClick={() => {
+              const nonResumable = queuedItems.filter((i) => !getResumeCapability(i).canResume);
+              if (nonResumable.length > 0) {
+                setBatchPauseCustomItems(queuedItems);
+                setBatchPauseAction('start_queue');
+              } else {
+                startQueue();
+              }
+            }}
+            className="h-7 sm:h-7.5 px-3 min-w-[104px] bg-zinc-800 hover:bg-black dark:bg-zinc-200 dark:hover:bg-white text-white dark:text-zinc-900 font-mono-tabular text-[9.5px] sm:text-[10px] font-semibold uppercase tracking-wider disabled:opacity-40 disabled:cursor-not-allowed shrink-0 cursor-pointer shadow-xs flex items-center justify-center leading-none"
           >
-            Start Queue (1 by 1)
-          </Button>
+            <span>Start Queue</span>
+          </button>
         )}
       </div>
     </div>
@@ -345,89 +532,151 @@ export const DownloadTable: React.FC = () => {
       );
     }
 
-    return (
-      <div className="flex-1 overflow-y-auto min-h-0 p-4 flex flex-col">
-        {isQueuesView && renderQueueBanner()}
-        {isQueuesView ? (
-          <div className="flex-1 flex flex-col items-center justify-start pt-1.5 pb-2 px-2 sm:px-3 select-none w-full max-w-4xl mx-auto space-y-2.5 mt-1">
-            <div className="text-center space-y-0.5">
-              <div className="w-8 h-8 rounded-xl bg-emerald-500/10 dark:bg-emerald-500/20 border border-emerald-500/20 text-emerald-600 dark:text-emerald-400 flex items-center justify-center mx-auto mb-1 shadow-2xs">
-                <ListOrdered className="w-4 h-4 stroke-[2.5]" />
+    if (isQueuesView) {
+      return (
+        <div className="flex-1 min-h-0 h-full p-2.5 sm:p-3 flex flex-col justify-between overflow-hidden select-none">
+          {renderQueueBanner(false)}
+
+          <div className="flex-1 min-h-0 flex flex-col justify-between py-1 sm:py-1.5 w-full max-w-3xl mx-auto">
+            {/* Center Header */}
+            <div className="text-center space-y-0.5 shrink-0 pt-0.5">
+              <div className="font-mono-tabular text-[10px] uppercase tracking-wider text-emerald-600 dark:text-emerald-400 font-semibold">
+                SIMPLE 1-BY-1 QUEUE
               </div>
-              <h3 className="text-sm sm:text-base font-bold text-zinc-900 dark:text-zinc-100">
+              <h3 className="text-sm sm:text-base font-bold text-zinc-900 dark:text-zinc-100 tracking-tight font-mono-tabular">
                 How 1-by-1 Queue Works
               </h3>
-              <p className="text-xs text-zinc-500 dark:text-zinc-400 max-w-lg mx-auto leading-relaxed">
+              <p className="font-mono-tabular text-[10.5px] text-zinc-500 dark:text-zinc-400 max-w-md mx-auto leading-tight">
                 Downloads run one after another at maximum speed without slowing down your internet.
               </p>
             </div>
 
-            {/* 3 Step Cards in 3-column horizontal grid */}
-            <div className="w-full grid grid-cols-3 gap-2.5 sm:gap-3 text-left">
-              <div className="p-3 sm:p-3.5 rounded-xl bg-zinc-50/90 dark:bg-zinc-900/60 border border-zinc-200/90 dark:border-zinc-800 flex flex-col justify-start gap-1.5 shadow-2xs hover:border-zinc-300 dark:hover:border-zinc-700 transition-colors">
-                <div className="flex items-center gap-2">
-                  <div className="w-5 h-5 rounded-full bg-zinc-900 text-white dark:bg-white dark:text-zinc-900 flex items-center justify-center text-[10px] font-bold shrink-0">
-                    1
+            {/* 3 Symmetrical Step Cards */}
+            <div className="w-full grid grid-cols-3 gap-2.5 sm:gap-3 text-left my-auto py-1">
+              {/* Card 1 */}
+              <div className="border border-zinc-200 dark:border-zinc-800 bg-zinc-50/50 dark:bg-zinc-950/40 p-2.5 sm:p-3 flex flex-col justify-between transition-colors">
+                <div className="space-y-1">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[9.5px] uppercase font-mono-tabular text-emerald-600 dark:text-emerald-400 font-semibold leading-tight">
+                      STEP 01
+                    </span>
+                    <span className="text-[9px] font-mono-tabular px-1.5 py-0.2 border border-zinc-300 dark:border-zinc-700 text-zinc-500 dark:text-zinc-400 uppercase shrink-0 font-medium">
+                      CLEAN LIST
+                    </span>
                   </div>
-                  <span className="text-xs font-semibold text-zinc-900 dark:text-zinc-100">
-                    Add & Choose Later
-                  </span>
+                  <div className="font-mono-tabular text-[12.5px] font-bold text-zinc-900 dark:text-zinc-100 leading-snug">
+                    Add to Queue
+                  </div>
+                  <p className="text-[11px] text-zinc-600 dark:text-zinc-400 leading-snug font-sans text-justify [text-justify:inter-word]">
+                    Click <strong className="font-mono text-zinc-800 dark:text-zinc-200">Later</strong> on new downloads or click <strong className="font-mono text-zinc-800 dark:text-zinc-200">Queue</strong> on any item. Files move here to keep your active list clean.
+                  </p>
                 </div>
-                <p className="text-[11px] text-zinc-500 dark:text-zinc-400 leading-snug">
-                  Click <strong>+ New Download</strong> (Ctrl+N) and select <strong>Later</strong> (🕒) to enqueue.
-                </p>
+                <div className="pt-1.5 text-[9px] font-mono-tabular text-zinc-400 uppercase tracking-wider border-t border-zinc-200/80 dark:border-zinc-800/80 mt-2 flex items-center justify-between">
+                  <span>Action: Later</span>
+                  <span>Clean List</span>
+                </div>
               </div>
 
-              <div className="p-3 sm:p-3.5 rounded-xl bg-zinc-50/90 dark:bg-zinc-900/60 border border-zinc-200/90 dark:border-zinc-800 flex flex-col justify-start gap-1.5 shadow-2xs hover:border-zinc-300 dark:hover:border-zinc-700 transition-colors">
-                <div className="flex items-center gap-2">
-                  <div className="w-5 h-5 rounded-full bg-zinc-900 text-white dark:bg-white dark:text-zinc-900 flex items-center justify-center text-[10px] font-bold shrink-0">
-                    2
+              {/* Card 2 */}
+              <div className="border border-zinc-200 dark:border-zinc-800 bg-zinc-50/50 dark:bg-zinc-950/40 p-2.5 sm:p-3 flex flex-col justify-between transition-colors">
+                <div className="space-y-1">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[9.5px] uppercase font-mono-tabular text-emerald-600 dark:text-emerald-400 font-semibold leading-tight">
+                      STEP 02
+                    </span>
+                    <span className="text-[9px] font-mono-tabular px-1.5 py-0.2 border border-zinc-300 dark:border-zinc-700 text-zinc-500 dark:text-zinc-400 uppercase shrink-0 font-medium">
+                      SAFEGUARD
+                    </span>
                   </div>
-                  <span className="text-xs font-semibold text-zinc-900 dark:text-zinc-100">
-                    Lines Up in Order
-                  </span>
+                  <div className="font-mono-tabular text-[12.5px] font-bold text-zinc-900 dark:text-zinc-100 leading-snug">
+                    Numbered &amp; Safe
+                  </div>
+                  <p className="text-[11px] text-zinc-600 dark:text-zinc-400 leading-snug font-sans text-justify [text-justify:inter-word]">
+                    Files line up in order (#1, #2). Downex checks resume support first so you never lose non-resumable download progress.
+                  </p>
                 </div>
-                <p className="text-[11px] text-zinc-500 dark:text-zinc-400 leading-snug">
-                  Queued files wait in sequence without competing for bandwidth.
-                </p>
+                <div className="pt-1.5 text-[9px] font-mono-tabular text-zinc-400 uppercase tracking-wider border-t border-zinc-200/80 dark:border-zinc-800/80 mt-2 flex items-center justify-between">
+                  <span>Safety: Loss Guard</span>
+                  <span>Order #1...#N</span>
+                </div>
               </div>
 
-              <div className="p-3 sm:p-3.5 rounded-xl bg-emerald-50/70 dark:bg-emerald-950/30 border border-emerald-200/80 dark:border-emerald-800/70 flex flex-col justify-start gap-1.5 shadow-2xs hover:border-emerald-300 dark:hover:border-emerald-700 transition-colors">
-                <div className="flex items-center gap-2">
-                  <div className="w-5 h-5 rounded-full bg-emerald-600 text-white dark:bg-emerald-500 dark:text-zinc-900 flex items-center justify-center text-[10px] font-bold shrink-0">
-                    3
+              {/* Card 3 */}
+              <div className="border border-zinc-200 dark:border-zinc-800 bg-zinc-50/50 dark:bg-zinc-950/40 p-2.5 sm:p-3 flex flex-col justify-between transition-colors">
+                <div className="space-y-1">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[9.5px] uppercase font-mono-tabular text-emerald-600 dark:text-emerald-400 font-semibold leading-tight">
+                      STEP 03
+                    </span>
+                    <span className="text-[9px] font-mono-tabular px-1.5 py-0.2 border border-zinc-300 dark:border-zinc-700 text-zinc-500 dark:text-zinc-400 uppercase shrink-0 font-medium">
+                      AUTO HANDOFF
+                    </span>
                   </div>
-                  <span className="text-xs font-semibold text-emerald-950 dark:text-emerald-200">
-                    Sequential 1-by-1
-                  </span>
+                  <div className="font-mono-tabular text-[12.5px] font-bold text-zinc-900 dark:text-zinc-100 leading-snug">
+                    1-by-1 Full Speed
+                  </div>
+                  <p className="text-[11px] text-zinc-600 dark:text-zinc-400 leading-snug font-sans text-justify [text-justify:inter-word]">
+                    Files download one at a time at top speed. When a file reaches 100%, it moves to completed and the next file starts.
+                  </p>
                 </div>
-                <p className="text-[11px] text-emerald-800/90 dark:text-emerald-300/90 leading-snug">
-                  Files download at full 32-stream speed one after another until done.
-                </p>
+                <div className="pt-1.5 text-[9px] font-mono-tabular text-zinc-400 uppercase tracking-wider border-t border-zinc-200/80 dark:border-zinc-800/80 mt-2 flex items-center justify-between">
+                  <span>Pipeline: 1-by-1</span>
+                  <span>Auto Handoff</span>
+                </div>
               </div>
             </div>
 
-            {/* Quick Actions */}
-            <div className="flex flex-wrap items-center justify-center gap-3 pt-0.5">
-              <Button
-                variant="primary-emerald"
-                size="md"
-                icon={<Plus className="w-3.5 h-3.5 stroke-[2.5]" />}
+            {/* Bottom Actions Row */}
+            <div className="flex items-center justify-center gap-2 pt-0.5 shrink-0">
+              <button
+                type="button"
                 onClick={() => setNewModalOpen(true)}
+                className="h-7.5 px-3.5 bg-zinc-800 hover:bg-black dark:bg-zinc-200 dark:hover:bg-white text-white dark:text-zinc-900 font-mono-tabular text-[10.5px] font-semibold uppercase tracking-wider shadow-xs cursor-pointer flex items-center gap-1.5"
               >
-                Add Download to Queue
-              </Button>
+                <Plus className="w-3.5 h-3.5 stroke-[2.2]" />
+                <span>Add Download to Queue</span>
+              </button>
 
               <button
                 type="button"
-                onClick={() => setQueueGuideOpen(true)}
-                className="text-xs font-semibold text-emerald-600 dark:text-emerald-400 hover:text-emerald-700 dark:hover:text-emerald-300 hover:underline px-2.5 py-1.5 cursor-pointer flex items-center gap-1 transition-colors"
+                onClick={() => openExternalUrl('https://downex.apps.gauravpatil.site/how-queues-work')}
+                className="h-7.5 px-3 border border-zinc-300 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-800 font-mono-tabular text-[10.5px] uppercase tracking-wider text-zinc-700 dark:text-zinc-300 cursor-pointer flex items-center gap-1.5"
               >
                 <span>How Queues Work</span>
-                <span>→</span>
+                <span>&rarr;</span>
               </button>
             </div>
-          </div>) : (
+          </div>
+        </div>
+      );
+    }
+
+    return (
+      <div className="flex-1 overflow-y-auto min-h-0 p-4 flex flex-col">
+        {selectedView === 'all' && queuedItems.length > 0 ? (
+          <div data-testid="queues-empty-state-card" className="flex-1 flex flex-col items-center justify-center p-8 text-center select-none animate-in fade-in">
+            <div className="w-12 h-12 rounded-2xl bg-amber-500/10 dark:bg-amber-500/20 border border-amber-500/25 flex items-center justify-center mb-3 text-amber-600 dark:text-amber-400 shadow-2xs">
+              <ListOrdered className="w-6 h-6 stroke-[2.2]" />
+            </div>
+            <p className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">
+              {queuedItems.length} {queuedItems.length === 1 ? 'download is' : 'downloads are'} organized in Queues
+            </p>
+            <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-1 max-w-sm">
+              Queued files download sequentially 1-by-1 in the dedicated Queues workspace. Once completed, they appear here.
+            </p>
+            <div className="mt-4 flex items-center gap-2">
+              <Button
+                variant="primary-emerald"
+                size="sm"
+                icon={<ArrowRight className="w-3.5 h-3.5" />}
+                onClick={() => setSelectedView('queues')}
+                className="font-semibold text-xs h-7.5 px-3.5"
+              >
+                Open Queues ({queuedItems.length})
+              </Button>
+            </div>
+          </div>
+        ) : (
           <div className="flex-1 flex flex-col items-center justify-center p-8 text-center select-none text-zinc-400 dark:text-zinc-600">
             <div className="w-12 h-12 rounded-full bg-zinc-100 dark:bg-zinc-900 flex items-center justify-center mb-3">
               {selectedView === 'trash' ? (
@@ -454,7 +703,6 @@ export const DownloadTable: React.FC = () => {
                 ? 'Finished downloads will appear here.'
                 : 'Click "+ New Download" or copy any download link to start.'}
             </p>
-
           </div>
         )}
 
@@ -500,9 +748,155 @@ export const DownloadTable: React.FC = () => {
   }
 
   return (
-    <div className="flex-1 overflow-y-auto min-h-0 px-4 py-2 space-y-2.5 pb-8">
-      {isQueuesView && renderQueueBanner()}
-      {isSearchActive && (
+    <div className="flex-1 flex flex-col min-h-0 relative">
+      <div ref={scrollContainerRef} className="flex-1 overflow-y-auto min-h-0 px-4 py-2 space-y-2.5 pb-16">
+        {isQueuesView && renderQueueBanner()}
+        {selectedView === 'all' && queuedItems.length > 0 && !isSearchActive && (
+          <div data-testid="queues-awareness-banner" className="flex items-center justify-between px-3.5 py-2 rounded-xl bg-amber-500/10 dark:bg-amber-950/30 border border-amber-500/20 dark:border-amber-500/30 text-xs font-mono-tabular select-none animate-in fade-in shadow-2xs">
+            <div className="flex items-center gap-2 min-w-0">
+              <div className="w-6 h-6 rounded-md bg-amber-500/15 dark:bg-amber-500/25 flex items-center justify-center shrink-0 text-amber-600 dark:text-amber-400">
+                <ListOrdered className="w-3.5 h-3.5 stroke-[2.2]" />
+              </div>
+              <span className="text-zinc-700 dark:text-zinc-300 truncate">
+                <strong className="text-zinc-900 dark:text-zinc-100 font-semibold">{queuedItems.length}</strong> {queuedItems.length === 1 ? 'download' : 'downloads'} organized in <strong className="text-amber-700 dark:text-amber-300 font-semibold">Queues</strong>
+                <span className="text-zinc-400 dark:text-zinc-500 ml-1">({isQueueRunning ? '1-by-1 Queue Active' : 'Sequential Queue Ready'})</span>
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setSelectedView('queues')}
+              className="h-6 px-2.5 border border-amber-500/30 bg-amber-500/15 hover:bg-amber-500/25 text-amber-700 dark:text-amber-300 rounded font-mono-tabular text-[10.5px] uppercase tracking-wider font-semibold cursor-pointer shrink-0 transition-colors flex items-center gap-1"
+            >
+              <span>Open Queues</span>
+              <ArrowRight className="w-3 h-3" />
+            </button>
+          </div>
+        )}
+
+        {/* Batch Operations Bar (Available in All Downloads with 2+ files, and in Queues view whenever items are present or can be queued) */}
+        {(displayItems.length >= 2 || (isQueuesView && (displayItems.length >= 1 || canQueueAny))) && (
+          <div
+            data-testid="batch-operations-bar"
+            className="h-8 px-3 flex items-center justify-between rounded-xl bg-zinc-50 dark:bg-zinc-900 border border-zinc-200/90 dark:border-zinc-800/90 text-xs font-mono-tabular select-none shadow-2xs shrink-0"
+          >
+            {/* Left Summary */}
+            <div className="flex items-center gap-2 min-w-0">
+              <span className="font-semibold text-zinc-900 dark:text-zinc-100 uppercase tracking-wider text-[10.5px]">
+                {isQueuesView
+                  ? `${displayItems.length} in Queue`
+                  : `${displayItems.length} Files Operating`}
+              </span>
+              <span className="text-zinc-300 dark:text-zinc-700">•</span>
+              <div className="flex items-center gap-2 text-[10px]">
+                {downloadingCount > 0 && (
+                  <span className="text-emerald-600 dark:text-emerald-400 font-semibold flex items-center gap-1">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                    {downloadingCount} Active
+                  </span>
+                )}
+                {pausedCount > 0 && (
+                  <span className="text-amber-600 dark:text-amber-400 font-semibold">
+                    {pausedCount} Paused
+                  </span>
+                )}
+                {queuedCount > 0 && (
+                  <span className="text-violet-600 dark:text-violet-400 font-semibold">
+                    {queuedCount} Queued
+                  </span>
+                )}
+                {errorCount > 0 && (
+                  <span className="text-rose-600 dark:text-rose-400 font-semibold">
+                    {errorCount} Error
+                  </span>
+                )}
+              </div>
+            </div>
+
+            {/* Right Batch Actions */}
+            <div className="flex items-center gap-1.5 shrink-0">
+              {downloadingCount > 0 && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const toPause = displayItems.filter((i) => i.status === 'downloading' || i.status === 'probing');
+                    setBatchPauseCustomItems(toPause);
+                    setBatchPauseAction('pause');
+                  }}
+                  data-testid="batch-pause-all-btn"
+                  className="h-6 px-2.5 border border-amber-500/40 bg-amber-500/10 hover:bg-amber-500/20 text-amber-700 dark:text-amber-300 font-mono-tabular text-[10px] uppercase tracking-wider font-semibold cursor-pointer flex items-center gap-1 transition-colors"
+                  title="Pause all active downloading files"
+                >
+                  <Pause className="w-2.5 h-2.5 fill-current" />
+                  <span>Pause All</span>
+                </button>
+              )}
+
+              {(pausedCount > 0 || errorCount > 0) && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const toResume = displayItems.filter(
+                      (i) => i.status === 'paused' || i.status === 'failed' || i.status === 'error'
+                    );
+                    setBatchPauseCustomItems(toResume);
+                    setBatchPauseAction('resume');
+                  }}
+                  data-testid="batch-resume-all-btn"
+                  className="h-6 px-2.5 border border-emerald-500/40 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 font-mono-tabular text-[10.5px] uppercase tracking-wider font-semibold cursor-pointer flex items-center gap-1 transition-colors"
+                  title="Resume all paused and stopped files"
+                >
+                  <Play className="w-2.5 h-2.5 fill-current" />
+                  <span>Resume All</span>
+                </button>
+              )}
+
+              {canQueueAny && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const toQueue = displayItems.filter((i) => i.status !== 'completed' && i.status !== 'queued');
+                    setBatchPauseCustomItems(toQueue);
+                    setBatchPauseAction('queue');
+                  }}
+                  data-testid="batch-queue-all-btn"
+                  className="h-6 px-2.5 border border-violet-500/30 bg-violet-500/10 hover:bg-violet-500/20 text-violet-700 dark:text-violet-300 font-mono-tabular text-[10px] uppercase tracking-wider font-semibold cursor-pointer flex items-center gap-1 transition-colors"
+                  title="Queue all available downloads for sequential 1-by-1 download"
+                >
+                  <ListOrdered className="w-2.5 h-2.5" />
+                  <span>Queue All</span>
+                </button>
+              )}
+
+              {canUnqueueAny && (
+                <button
+                  type="button"
+                  onClick={() => unqueueAllDownloads()}
+                  data-testid="batch-unqueue-all-btn"
+                  className="h-6 px-2.5 border border-zinc-300 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-800 text-zinc-600 dark:text-zinc-300 font-mono-tabular text-[10px] uppercase tracking-wider cursor-pointer flex items-center gap-1 transition-colors"
+                  title="Remove all files from sequential queue"
+                >
+                  <Undo2 className="w-2.5 h-2.5" />
+                  <span>Unqueue All</span>
+                </button>
+              )}
+
+              {displayItems.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setIsBatchDeleteOpen(true)}
+                  data-testid="batch-delete-all-btn"
+                  className="h-6 px-2.5 border border-rose-500/30 bg-rose-500/10 hover:bg-rose-500/20 text-rose-700 dark:text-rose-300 font-mono-tabular text-[10px] uppercase tracking-wider font-semibold cursor-pointer flex items-center gap-1 transition-colors"
+                  title="Delete all operating files from list or device"
+                >
+                  <Trash2 className="w-2.5 h-2.5" />
+                  <span>Delete All</span>
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+
+        {isSearchActive && (
         <div className="flex items-center justify-between px-3.5 py-2.5 rounded-xl bg-zinc-100/90 dark:bg-zinc-900/90 border border-zinc-200/80 dark:border-zinc-800/80 text-xs shadow-2xs">
           <div className="flex items-center gap-2 min-w-0">
             <Search className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
@@ -520,16 +914,94 @@ export const DownloadTable: React.FC = () => {
           </button>
         </div>
       )}
-      {displayItems.map((item) => {
-        const percent =
-          item.total_bytes && item.total_bytes > 0
-            ? Math.min(100, Math.round((item.downloaded_bytes / item.total_bytes) * 100))
-            : 0;
-
-        const isDownloading = item.status === 'downloading' || item.status === 'probing';
+      {displayItems.map((item, index) => {
+        const isDownloading = item.status === 'downloading';
         const isPaused = item.status === 'paused';
         const isQueued = item.status === 'queued';
+        const isError = item.status === 'failed' || item.status === 'error';
         const isExpanded = !!expandedItemIds[item.id];
+        const resInfo = getResumeCapability(item);
+
+        const rawBytes = item.downloaded_bytes || 0;
+        const totalBytes = item.total_bytes || 0;
+
+        // Monotonic forward persistence for downloaded bytes:
+        let displayBytes = rawBytes;
+        if (item.status === 'completed') {
+          displayBytes = totalBytes > 0 ? totalBytes : rawBytes;
+          persistentBytesRef.current[item.id] = displayBytes;
+        } else if (isDownloading) {
+          const prevMax = persistentBytesRef.current[item.id] || 0;
+          if (rawBytes === 0 && prevMax > 0 && !resInfo.canResume) {
+            persistentBytesRef.current[item.id] = 0;
+            displayBytes = 0;
+          } else {
+            displayBytes = Math.max(prevMax, rawBytes);
+            persistentBytesRef.current[item.id] = displayBytes;
+          }
+        } else if (isPaused) {
+          displayBytes = Math.max(persistentBytesRef.current[item.id] || 0, rawBytes);
+        } else {
+          if (rawBytes === 0) {
+            delete persistentBytesRef.current[item.id];
+          }
+        }
+
+        const rawPercent =
+          totalBytes > 0
+            ? Math.min(100, Math.round((displayBytes / totalBytes) * 100))
+            : 0;
+
+        // Monotonic forward persistence for percentage:
+        let percent = rawPercent;
+        if (item.status === 'completed') {
+          percent = 100;
+          persistentPercentRef.current[item.id] = 100;
+        } else if (isDownloading) {
+          const prevMax = persistentPercentRef.current[item.id] || 0;
+          if (rawBytes === 0 && prevMax > 0 && !resInfo.canResume) {
+            persistentPercentRef.current[item.id] = 0;
+            percent = 0;
+          } else {
+            percent = Math.max(prevMax, rawPercent);
+            persistentPercentRef.current[item.id] = percent;
+          }
+        } else if (isPaused) {
+          percent = Math.max(persistentPercentRef.current[item.id] || 0, rawPercent);
+        } else {
+          if (rawBytes === 0) {
+            delete persistentPercentRef.current[item.id];
+          }
+        }
+
+        // Monotonic high-precision progress bar width (silky forward flow without backward flickers):
+        const rawBarPercent =
+          totalBytes > 0
+            ? Math.min(100, Math.max(0, (displayBytes / totalBytes) * 100))
+            : isDownloading
+            ? 2
+            : 0;
+
+        let barWidth = rawBarPercent;
+        if (item.status === 'completed') {
+          barWidth = 100;
+          persistentBarWidthRef.current[item.id] = 100;
+        } else if (isDownloading) {
+          const prevMax = persistentBarWidthRef.current[item.id] || 0;
+          if (rawBytes === 0 && prevMax > 0 && !resInfo.canResume) {
+            persistentBarWidthRef.current[item.id] = isDownloading ? 2 : 0;
+            barWidth = isDownloading ? 2 : 0;
+          } else {
+            barWidth = Math.max(prevMax, Math.max(rawBarPercent, 2));
+            persistentBarWidthRef.current[item.id] = barWidth;
+          }
+        } else if (isPaused) {
+          barWidth = Math.max(persistentBarWidthRef.current[item.id] || 0, rawBarPercent);
+        } else {
+          if (rawBytes === 0) {
+            delete persistentBarWidthRef.current[item.id];
+          }
+        }
 
         // Track persistent speed across brief packet pauses and smoothly damp fluctuations
         let effectiveSpeed = 0;
@@ -551,8 +1023,8 @@ export const DownloadTable: React.FC = () => {
         }
 
         // IDM-style smoothed persistent ETA filter
-        const remainingBytes = item.total_bytes && item.total_bytes > item.downloaded_bytes
-          ? item.total_bytes - item.downloaded_bytes
+        const remainingBytes = totalBytes && totalBytes > displayBytes
+          ? totalBytes - displayBytes
           : 0;
 
         let computedEta = item.eta_seconds && item.eta_seconds > 0 ? item.eta_seconds : null;
@@ -617,23 +1089,23 @@ export const DownloadTable: React.FC = () => {
             const endMs = item.updated_at ? (item.updated_at < 1e11 ? item.updated_at * 1000 : item.updated_at) : 0;
             if (endMs > startMs && startMs > 0) {
               timeTakenSeconds = Math.max(1, Math.round((endMs - startMs) / 1000));
-            } else if (item.downloaded_bytes && item.base_speed_bytes_sec && item.base_speed_bytes_sec > 0) {
-              timeTakenSeconds = Math.max(1, Math.round(item.downloaded_bytes / item.base_speed_bytes_sec));
+            } else if (displayBytes && item.base_speed_bytes_sec && item.base_speed_bytes_sec > 0) {
+              timeTakenSeconds = Math.max(1, Math.round(displayBytes / item.base_speed_bytes_sec));
             }
           }
         }
         const formattedTimeTaken = formatTimeTaken(timeTakenSeconds);
-        const resInfo = getResumeCapability(item);
         const displayedDiskPath = getActiveDownloadDiskPath(item);
 
         // Calculate queue position if in queue or if queues view
         let queueBadgeText = '';
-        if (isQueuesView) {
+        if (isQueuesView || isQueued) {
           if (isDownloading) {
             queueBadgeText = '#1 • Active';
           } else if (isQueued) {
             const queuedIdx = queuedItems.findIndex((q) => q.id === item.id);
-            const pos = activeItems.length + (queuedIdx >= 0 ? queuedIdx + 1 : 1);
+            const activeCountInQueue = (isQueueRunning && activeQueueTaskId) ? 1 : 0;
+            const pos = activeCountInQueue + (queuedIdx >= 0 ? queuedIdx + 1 : 1);
             queueBadgeText = pos === 1 ? '#1 • Next in Line' : `#${pos} • In Line`;
           }
         }
@@ -641,157 +1113,175 @@ export const DownloadTable: React.FC = () => {
         return (
           <div
             key={item.id}
-            className={`p-3.5 rounded-xl transition-all flex flex-col gap-2.5 ${
+            ref={(el) => { cardRefs.current[index] = el; }}
+            id={`download-card-${item.id}`}
+            className={`rounded-xl border transition-all overflow-hidden flex flex-col scroll-mt-2 ${
               isDownloading
-                ? 'bg-gradient-to-r from-emerald-500/[0.04] via-transparent to-transparent border border-emerald-500/40 dark:border-emerald-500/30 shadow-sm ring-1 ring-emerald-500/15'
-                : 'bg-white dark:bg-zinc-900/60 border border-zinc-200/80 dark:border-zinc-800/60 shadow-xs hover:border-zinc-300 dark:hover:border-zinc-700'
+                ? 'border-emerald-500/50 dark:border-emerald-500/40 bg-white dark:bg-zinc-950 shadow-sm ring-1 ring-emerald-500/20'
+                : isError
+                ? 'border-rose-400/60 dark:border-rose-900/60 bg-white dark:bg-zinc-950 shadow-xs'
+                : 'border-zinc-300 dark:border-zinc-800 bg-white dark:bg-zinc-950 shadow-xs hover:border-zinc-400 dark:hover:border-zinc-700'
             }`}
           >
-            {/* Top row: Filename, Status Badge, Actions */}
-            <div className="flex items-center justify-between gap-3">
-              <div className="flex items-center gap-3 min-w-0">
-                <div className="w-9 h-9 rounded-xl bg-zinc-100/90 dark:bg-zinc-800/80 border border-zinc-200/60 dark:border-zinc-700/60 flex items-center justify-center text-zinc-700 dark:text-zinc-200 shrink-0 shadow-2xs">
-                  <File className="w-4.5 h-4.5 stroke-[2]" />
-                </div>
-                <div className="min-w-0 flex flex-col justify-center">
-                  <div className="flex items-center gap-2">
-                    <h4 className="text-[14px] font-semibold text-zinc-900 dark:text-zinc-100 tracking-tight leading-snug truncate">
-                      {item.filename}
-                    </h4>
-                    {queueBadgeText && (
-                      <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-violet-500/10 text-violet-600 dark:text-violet-400 border border-violet-500/20 font-semibold shrink-0">
-                        {queueBadgeText}
-                      </span>
-                    )}
-                  </div>
-                  {/* Highlighted Destination Path with Hamburger Icon & Explorer Action */}
-                  <div className="flex items-center gap-1.5 mt-1 max-w-full">
-                    <button
-                      type="button"
-                      onClick={() => openFileFolder(displayedDiskPath)}
-                      className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-zinc-100/90 dark:bg-zinc-800/90 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 border border-zinc-200/90 dark:border-zinc-700/80 hover:border-emerald-300 dark:hover:border-emerald-800 text-zinc-700 hover:text-emerald-700 dark:text-zinc-200 dark:hover:text-emerald-300 text-[11px] font-mono font-medium transition-all cursor-pointer group shadow-2xs min-w-0 max-w-fit"
-                      title={
-                        item.status === 'completed'
-                          ? 'Click to open destination folder in Windows Explorer'
-                          : 'Unconfirmed staging file on disk (finalizes to original name on completion)'
-                      }
-                    >
-                      <Menu className="w-3 h-3 text-zinc-500 dark:text-zinc-400 group-hover:text-emerald-600 dark:group-hover:text-emerald-400 shrink-0 stroke-[2.2]" />
-                      <span className="truncate">
-                        {displayedDiskPath}
-                      </span>
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        navigator.clipboard.writeText(displayedDiskPath);
-                        setCopiedId(item.id);
-                        setTimeout(() => setCopiedId(null), 2000);
-                      }}
-                      className="p-1 rounded-md hover:bg-zinc-100 dark:hover:bg-zinc-800 text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200 transition-colors cursor-pointer shrink-0"
-                      title="Copy active file path"
-                    >
-                      {copiedId === item.id ? (
-                        <Check className="w-3 h-3 text-emerald-600 dark:text-emerald-400 stroke-[2.5]" />
-                      ) : (
-                        <Copy className="w-3 h-3 stroke-[2]" />
-                      )}
-                    </button>
-                  </div>
-                </div>
-              </div>
-
-              {/* Status and Actions */}
-              <div className="flex items-center gap-2 shrink-0">
+            {/* Title Bar Strip: Task #, Status Badge, Queue Tag & Header Actions */}
+            <div className="h-8 px-3 flex items-center justify-between border-b border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900 select-none">
+              <div className="flex items-center gap-2">
+                {/* Dynamic Task Index Badge (#1, #2, #3...) - prominently visible to naked eye */}
                 <span
-                  className={`text-[10px] font-mono px-2 py-0.5 rounded-full uppercase tracking-wider ${
-                    item.status === 'completed'
-                      ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 font-semibold'
-                      : isDownloading && effectiveSpeed === 0 && item.downloaded_bytes === 0
-                      ? 'bg-amber-500/10 text-amber-600 dark:text-amber-400 font-semibold animate-pulse'
-                      : isDownloading
-                      ? 'bg-blue-500/10 text-blue-600 dark:text-blue-400 animate-pulse font-semibold'
-                      : isQueued
-                      ? 'bg-amber-500/10 text-amber-600 dark:text-amber-400 font-semibold'
+                  data-testid={`card-index-${item.id}`}
+                  className={`font-mono-tabular text-[10px] font-bold px-1.5 py-0.2 rounded border select-none transition-colors ${
+                    isDownloading
+                      ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border-emerald-500/35'
                       : isPaused
-                      ? 'bg-yellow-500/10 text-yellow-700 dark:text-yellow-400 font-semibold'
-                      : (item.status === 'failed' || item.status === 'error')
-                      ? 'bg-rose-500/10 text-rose-600 dark:text-rose-400'
-                      : 'bg-zinc-200/60 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400'
+                      ? 'bg-amber-500/15 text-amber-700 dark:text-amber-300 border-amber-500/35'
+                      : isQueued
+                      ? 'bg-violet-500/15 text-violet-700 dark:text-violet-300 border-violet-500/35'
+                      : isError
+                      ? 'bg-rose-500/15 text-rose-700 dark:text-rose-300 border-rose-500/35'
+                      : 'bg-zinc-200/70 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 border-zinc-300 dark:border-zinc-700'
                   }`}
+                  title={`Download Task #${index + 1} of ${displayItems.length}`}
                 >
-                  {isDownloading && effectiveSpeed === 0 && item.downloaded_bytes === 0 ? 'CONNECTING...' : item.status}
+                  #{index + 1}
                 </span>
 
-                {/* Queue action if paused or failed */}
-                {(item.status === 'paused' || item.status === 'failed' || item.status === 'error') && (
+                <span className={`font-mono-tabular text-[10.5px] uppercase tracking-wider font-semibold flex items-center gap-1.5 ${
+                  item.status === 'completed'
+                    ? 'text-emerald-600 dark:text-emerald-400'
+                    : isDownloading
+                    ? 'text-emerald-600 dark:text-emerald-400'
+                    : isPaused
+                    ? 'text-amber-600 dark:text-amber-400'
+                    : isQueued
+                    ? 'text-violet-600 dark:text-violet-400'
+                    : isError
+                    ? 'text-rose-600 dark:text-rose-400'
+                    : 'text-zinc-500'
+                }`}>
+                  {item.status === 'completed'
+                    ? 'COMPLETED'
+                    : isDownloading && effectiveSpeed === 0 && item.downloaded_bytes === 0
+                    ? 'CONNECTING...'
+                    : isDownloading
+                    ? 'DOWNLOADING'
+                    : isPaused
+                    ? 'PAUSED'
+                    : isQueued
+                    ? 'QUEUED'
+                    : isError
+                    ? 'FAILED'
+                    : item.status.toUpperCase()}
+                </span>
+                {queueBadgeText && (
+                  <span className="text-[9.5px] font-mono-tabular px-1.5 py-0.2 rounded bg-violet-500/10 text-violet-600 dark:text-violet-400 border border-violet-500/20 font-semibold">
+                    {queueBadgeText}
+                  </span>
+                )}
+              </div>
+
+              {/* Header Actions */}
+              <div className="flex items-center gap-1.5">
+                {/* Auto-shutdown button */}
+                {item.status !== 'completed' && (
                   <button
-                    onClick={() => queueDownload(item.id)}
-                    className="p-1.5 rounded-md hover:bg-zinc-100 dark:hover:bg-zinc-800 text-zinc-400 hover:text-amber-600 dark:hover:text-amber-400 transition-colors cursor-pointer"
-                    title="Add to 1-by-1 Queue"
+                    type="button"
+                    data-testid={`auto-shutdown-toggle-${item.id}`}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleToggleShutdownClick(item);
+                    }}
+                    className={`px-2 py-0.5 text-[10px] font-mono-tabular font-medium transition-all cursor-pointer flex items-center gap-1 border ${
+                      isShutdownArmed(item.id)
+                        ? 'bg-rose-500/15 dark:bg-rose-950/40 border-rose-500/50 text-rose-600 dark:text-rose-400 font-semibold'
+                        : 'bg-zinc-100 hover:bg-zinc-200 dark:bg-zinc-800 dark:hover:bg-zinc-700 border-zinc-300 dark:border-zinc-700 text-zinc-600 dark:text-zinc-300'
+                    }`}
+                    title={isShutdownArmed(item.id) ? 'Turn off auto-shutdown' : 'Shut down PC when download completes'}
                   >
-                    <ListOrdered className="w-3.5 h-3.5" />
+                    <Power className={`w-3 h-3 ${isShutdownArmed(item.id) ? 'text-rose-500 stroke-[2.5]' : 'text-zinc-400'}`} />
+                    <span>{isShutdownArmed(item.id) ? 'Shut down when done' : 'Auto-Shutdown'}</span>
                   </button>
                 )}
 
+                {/* Queue action if paused/failed */}
+                {(item.status === 'paused' || item.status === 'failed' || item.status === 'error') && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if ((item.status === 'downloading' || item.status === 'probing') && !getResumeCapability(item).canResume) {
+                        setBatchPauseCustomItems([item]);
+                        setBatchPauseAction('queue');
+                      } else {
+                        queueDownload(item.id);
+                      }
+                    }}
+                    className="px-2 py-0.5 border border-amber-500/30 bg-amber-500/10 hover:bg-amber-500/20 text-amber-700 dark:text-amber-300 font-mono-tabular text-[10px] uppercase tracking-wider font-semibold cursor-pointer flex items-center gap-1 transition-colors"
+                    title="Add to sequential 1-by-1 download queue"
+                  >
+                    <ListOrdered className="w-2.5 h-2.5" />
+                    <span>Queue</span>
+                  </button>
+                )}
+
+                {/* Pause / Resume / Start / Retry */}
                 {isDownloading ? (
                   <div className="flex items-center gap-1.5">
                     {pauseHintTaskId === item.id && (
                       <span
                         data-testid="pause-first-hint"
-                        className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10.5px] font-medium bg-amber-500/15 dark:bg-amber-500/20 text-amber-800 dark:text-amber-200 border border-amber-500/30 animate-in fade-in zoom-in-95 duration-150 shadow-2xs"
+                        className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] font-medium bg-amber-500/15 dark:bg-amber-500/20 text-amber-800 dark:text-amber-200 border border-amber-500/30 animate-in fade-in"
                       >
-                        <AlertCircle className="w-3 h-3 text-amber-500 shrink-0" />
+                        <AlertCircle className="w-2.5 h-2.5 text-amber-500 shrink-0" />
                         <span>Pause first to delete</span>
                       </span>
                     )}
                     <button
                       type="button"
                       onClick={() => handleTogglePause(item.id)}
-                      className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-semibold transition-all cursor-pointer shadow-2xs ${
-                        pauseHintTaskId === item.id
-                          ? 'bg-amber-500/25 hover:bg-amber-500/35 text-amber-900 dark:text-amber-100 border border-amber-500 ring-2 ring-amber-500/60 scale-[1.03] animate-pulse'
-                          : 'bg-amber-500/10 hover:bg-amber-500/20 text-amber-700 dark:text-amber-300 border border-amber-500/20'
-                      }`}
+                      className="h-6 px-2.5 border border-amber-500/40 bg-amber-500/10 hover:bg-amber-500/20 text-amber-700 dark:text-amber-300 font-mono-tabular text-[10.5px] uppercase tracking-wider font-semibold cursor-pointer flex items-center gap-1"
                       title={!resInfo.canResume ? "Pause (Warning: Server does not support resume - restarting will download from start)" : "Pause active download"}
                     >
-                      <Pause className="w-3 h-3 fill-current" />
+                      <Pause className="w-2.5 h-2.5 fill-current" />
                       <span>Pause</span>
                     </button>
-                    <button
-                      type="button"
-                      disabled={true}
-                      aria-disabled="true"
-                      data-testid={`delete-btn-${item.id}`}
+                    <span
+                      className="inline-flex cursor-not-allowed"
                       onClick={() => handleAttemptDeleteWhileDownloading(item.id)}
-                      className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-rose-500/5 dark:bg-rose-950/20 text-rose-700/40 dark:text-rose-400/30 border border-rose-500/10 dark:border-rose-900/20 text-xs font-semibold select-none cursor-not-allowed opacity-45 shadow-none transition-all"
-                      title="Cannot delete while downloading. Pause the download first to delete."
                     >
-                      <Trash2 className="w-3 h-3 opacity-60" />
-                      <span>Delete</span>
-                    </button>
+                      <button
+                        type="button"
+                        disabled={true}
+                        aria-disabled="true"
+                        data-testid={`delete-btn-${item.id}`}
+                        onClick={() => handleAttemptDeleteWhileDownloading(item.id)}
+                        onMouseDown={() => handleAttemptDeleteWhileDownloading(item.id)}
+                        onPointerDown={() => handleAttemptDeleteWhileDownloading(item.id)}
+                        className="h-6 px-2 border border-zinc-200 dark:border-zinc-800 bg-zinc-100/50 dark:bg-zinc-900/50 text-zinc-400 dark:text-zinc-600 font-mono-tabular text-[10.5px] uppercase tracking-wider cursor-not-allowed flex items-center gap-1 opacity-50"
+                        title="Cannot delete while downloading. Pause the download first to delete."
+                      >
+                        <Trash2 className="w-2.5 h-2.5" />
+                        <span>Delete</span>
+                      </button>
+                    </span>
                   </div>
                 ) : isPaused ? (
                   <div className="flex items-center gap-1.5">
                     <button
                       type="button"
                       onClick={() => handleTogglePause(item.id)}
-                      className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 border border-emerald-500/20 text-xs font-semibold transition-all cursor-pointer shadow-2xs hover:scale-[1.02] active:scale-[0.98]"
+                      className="h-6 px-2.5 border border-emerald-500/40 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 font-mono-tabular text-[10.5px] uppercase tracking-wider font-semibold cursor-pointer flex items-center gap-1"
                       title={!resInfo.canResume ? "Restart download from beginning (Server does not support resume)" : "Resume download"}
                     >
-                      <Play className="w-3 h-3 fill-current" />
-                      <span>{!resInfo.canResume ? 'Restart' : 'Resume'}</span>
+                      <Play className="w-2.5 h-2.5 fill-current" />
+                      <span>{resInfo.label === 'No' ? 'Restart' : 'Resume'}</span>
                     </button>
                     <button
                       type="button"
                       onClick={() => setDeletingItem(item)}
                       data-testid={`delete-btn-${item.id}`}
-                      className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-rose-500/10 hover:bg-rose-500/20 text-rose-700 dark:text-rose-300 border border-rose-500/20 text-xs font-semibold transition-all cursor-pointer shadow-2xs hover:scale-[1.02] active:scale-[0.98]"
+                      className="h-6 px-2 border border-rose-500/30 bg-rose-500/10 hover:bg-rose-500/20 text-rose-700 dark:text-rose-300 font-mono-tabular text-[10.5px] uppercase tracking-wider cursor-pointer flex items-center gap-1"
                       title="Delete download"
                     >
-                      <Trash2 className="w-3 h-3" />
+                      <Trash2 className="w-2.5 h-2.5" />
                       <span>Delete</span>
                     </button>
                   </div>
@@ -801,11 +1291,30 @@ export const DownloadTable: React.FC = () => {
                       <button
                         type="button"
                         onClick={() => handleTogglePause(item.id)}
-                        className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 border border-emerald-500/20 text-xs font-semibold transition-all cursor-pointer shadow-2xs hover:scale-[1.02] active:scale-[0.98]"
-                        title={isQueued ? 'Start Now (Bypass Queue Wait)' : (item.status === 'failed' || item.status === 'error') ? 'Retry download' : 'Resume'}
+                        className={`h-6 px-2.5 border font-mono-tabular text-[10.5px] uppercase tracking-wider font-semibold cursor-pointer flex items-center gap-1 ${
+                          isError
+                            ? 'border-rose-500/40 bg-rose-500/10 hover:bg-rose-500/20 text-rose-700 dark:text-rose-300'
+                            : 'border-emerald-500/40 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-700 dark:text-emerald-300'
+                        }`}
+                        title={isQueued ? 'Start now' : isError ? 'Retry check & resume' : 'Resume'}
                       >
-                        <Play className="w-3 h-3 fill-current" />
-                        <span>{isQueued ? 'Start' : (item.status === 'failed' || item.status === 'error') ? 'Retry' : 'Resume'}</span>
+                        {isError ? (
+                          <RefreshCw className="w-2.5 h-2.5" />
+                        ) : (
+                          <Play className="w-2.5 h-2.5 fill-current" />
+                        )}
+                        <span>{isQueued ? 'Start' : isError ? 'Retry' : 'Resume'}</span>
+                      </button>
+                    )}
+                    {isQueued && (
+                      <button
+                        type="button"
+                        onClick={() => unqueueDownload(item.id)}
+                        className="h-6 px-2 border border-zinc-300 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-800 text-zinc-600 dark:text-zinc-300 font-mono-tabular text-[10.5px] uppercase tracking-wider cursor-pointer flex items-center gap-1"
+                        title="Remove from queue and return to All Downloads as paused"
+                      >
+                        <Undo2 className="w-2.5 h-2.5 text-zinc-400" />
+                        <span>Unqueue</span>
                       </button>
                     )}
                     <button
@@ -813,10 +1322,10 @@ export const DownloadTable: React.FC = () => {
                       onClick={() => setDeletingItem(item)}
                       data-testid={`delete-btn-${item.id}`}
                       aria-label="Delete download..."
-                      className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-rose-500/10 hover:bg-rose-500/20 text-rose-700 dark:text-rose-300 border border-rose-500/20 text-xs font-semibold transition-all cursor-pointer shadow-2xs hover:scale-[1.02] active:scale-[0.98]"
+                      className="h-6 px-2 border border-rose-500/30 bg-rose-500/10 hover:bg-rose-500/20 text-rose-700 dark:text-rose-300 font-mono-tabular text-[10.5px] uppercase tracking-wider cursor-pointer flex items-center gap-1"
                       title={item.status === 'completed' ? 'Delete download...' : 'Delete download'}
                     >
-                      <Trash2 className="w-3 h-3" />
+                      <Trash2 className="w-2.5 h-2.5" />
                       <span>Delete</span>
                     </button>
                   </div>
@@ -824,165 +1333,284 @@ export const DownloadTable: React.FC = () => {
               </div>
             </div>
 
-            {/* Error & Machine Location Recovery Bar */}
-            {(item.status === 'error' || item.status === 'failed' || item.error_message) && (
-              <div className="flex items-center justify-between p-2 rounded-lg bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-900/50 text-[11px] text-rose-700 dark:text-rose-300">
-                <div className="flex items-center gap-1.5 truncate pr-2">
-                  <AlertCircle className="w-3.5 h-3.5 text-rose-500 shrink-0" />
-                  <span className="truncate">{item.error_message || 'Download could not write to destination folder.'}</span>
+            {/* Card Body: Structured Industrial Layout */}
+            <div className="p-3.5 space-y-2.5">
+              {/* Error & Machine Location Recovery Bar */}
+              {(item.status === 'error' || item.status === 'failed') && item.error_message && (
+                (() => {
+                  const isFolderIssue = Boolean(
+                    item.error_message.toLowerCase().includes('folder') || 
+                    item.error_message.toLowerCase().includes('destination') || 
+                    item.error_message.toLowerCase().includes('permission') || 
+                    item.error_message.toLowerCase().includes('os error 3') || 
+                    item.error_message.toLowerCase().includes('os error 5')
+                  );
+
+                  return (
+                    <div className="flex items-center justify-between p-2 rounded bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-900/50 text-[11px] text-rose-700 dark:text-rose-300">
+                      <div className="flex items-center gap-1.5 truncate pr-2">
+                        <AlertCircle className="w-3.5 h-3.5 text-rose-500 shrink-0" />
+                        <span className="truncate">{item.error_message}</span>
+                      </div>
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        {isFolderIssue ? (
+                          <button
+                            type="button"
+                            onClick={() => setRetryingFolderItem(item)}
+                            className="px-2 py-0.5 rounded bg-rose-100 hover:bg-rose-200 dark:bg-rose-900/50 dark:hover:bg-rose-800/60 font-medium text-[10px] text-rose-800 dark:text-rose-200 transition-colors cursor-pointer flex items-center gap-1"
+                          >
+                            <FolderEdit className="w-3 h-3" />
+                            <span>Change Location & Retry</span>
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => handleTogglePause(item.id)}
+                            className="px-2 py-0.5 rounded bg-rose-100 hover:bg-rose-200 dark:bg-rose-900/50 dark:hover:bg-rose-800/60 font-medium text-[10px] text-rose-800 dark:text-rose-200 transition-colors cursor-pointer flex items-center gap-1"
+                          >
+                            <RefreshCw className="w-3 h-3" />
+                            <span>Retry</span>
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })()
+              )}
+
+              {/* Row 1: File Name Container (Image 2 Modal tribute) */}
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <span className="text-[10px] font-semibold text-zinc-700 dark:text-zinc-300 uppercase tracking-wider font-mono-tabular">
+                    File Name
+                  </span>
+                  <span className="text-[10px] font-mono-tabular text-zinc-400">
+                    {item.status === 'completed' ? 'SAVED TO DISK' : 'ACTIVE TASK'}
+                  </span>
                 </div>
+                <div className="flex items-center border border-zinc-300 dark:border-zinc-700 bg-zinc-50/50 dark:bg-zinc-900/50 px-2.5 py-1.5 gap-2">
+                  <div className="text-zinc-400 dark:text-zinc-500 shrink-0">
+                    <File className="w-3.5 h-3.5" />
+                  </div>
+                  <h4 className="flex-1 font-mono-tabular text-[12px] font-semibold text-zinc-900 dark:text-zinc-100 select-text leading-tight break-all">
+                    {item.filename}
+                  </h4>
+                  {(() => {
+                    const dotIdx = item.filename.lastIndexOf('.');
+                    const ext = dotIdx > 0 ? item.filename.slice(dotIdx + 1) : '';
+                    return ext ? (
+                      <span className="px-1.5 py-0.5 text-[10px] font-mono-tabular font-semibold bg-zinc-200 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 uppercase shrink-0">
+                        .{ext}
+                      </span>
+                    ) : null;
+                  })()}
+                </div>
+              </div>
+
+              {/* Row 2: 2x2 Telemetry Grid (Complete Data, Absolutely Zero Ellipses) */}
+              <div className="grid grid-cols-2 gap-2">
+                {/* Box 1: File Size */}
+                <div className="border border-zinc-200 dark:border-zinc-800 bg-zinc-50/40 dark:bg-zinc-950/40 px-2.5 py-1.5 flex items-center justify-between">
+                  <div className="min-w-0">
+                    <span className="text-[9.5px] uppercase font-mono-tabular text-zinc-400 block leading-tight">File Size</span>
+                    <span className="font-mono-tabular text-[12.5px] font-bold text-zinc-900 dark:text-zinc-100 block leading-snug">
+                      {formatBytes(item.total_bytes)}
+                    </span>
+                  </div>
+                  <span className={`text-[9.5px] font-mono-tabular px-1.5 py-0.5 border shrink-0 ${
+                    resInfo.canResume
+                      ? 'border-emerald-500/50 text-emerald-600 dark:text-emerald-400 bg-emerald-500/5'
+                      : 'border-zinc-300 dark:border-zinc-700 text-zinc-500'
+                  }`}>
+                    {resInfo.canResume ? 'RESUME OK' : 'SINGLE'}
+                  </span>
+                </div>
+
+                {/* Box 2: Downloaded */}
+                <div className="border border-zinc-200 dark:border-zinc-800 bg-zinc-50/40 dark:bg-zinc-950/40 px-2.5 py-1.5 flex items-center justify-between">
+                  <div className="min-w-0">
+                    <span className="text-[9.5px] uppercase font-mono-tabular text-zinc-400 block leading-tight">Downloaded</span>
+                    <span className="font-mono-tabular text-[12.5px] font-bold text-zinc-900 dark:text-zinc-100 block leading-snug">
+                      {formatBytes(displayBytes)} <span className="text-[10px] font-normal opacity-70">({percent}%)</span>
+                    </span>
+                  </div>
+                  <span className="text-[9.5px] font-mono-tabular px-1.5 py-0.5 border border-zinc-300 dark:border-zinc-700 text-zinc-700 dark:text-zinc-300 bg-zinc-100 dark:bg-zinc-900 shrink-0 font-semibold">
+                    {percent}%
+                  </span>
+                </div>
+
+                {/* Box 3: Transfer Rate */}
+                <div className="border border-zinc-200 dark:border-zinc-800 bg-zinc-50/40 dark:bg-zinc-950/40 px-2.5 py-1.5 flex items-center justify-between">
+                  <div className="min-w-0">
+                    <span className="text-[9.5px] uppercase font-mono-tabular text-zinc-400 block leading-tight">Transfer rate</span>
+                    <span className={`font-mono-tabular text-[12.5px] font-bold block leading-snug ${
+                      item.status === 'completed'
+                        ? 'text-zinc-500 dark:text-zinc-400 font-normal'
+                        : isDownloading && effectiveSpeed > 0
+                        ? 'text-emerald-600 dark:text-emerald-400'
+                        : isDownloading
+                        ? 'text-amber-600 dark:text-amber-400'
+                        : isError
+                        ? 'text-rose-600 dark:text-rose-400'
+                        : 'text-zinc-500'
+                    }`}>
+                      {item.status === 'completed'
+                        ? '--'
+                        : isDownloading && effectiveSpeed > 0
+                        ? formatSpeed(effectiveSpeed)
+                        : isDownloading
+                        ? 'Connecting to server...'
+                        : isError
+                        ? 'Server error'
+                        : '0 B/s (0 Mbps)'}
+                    </span>
+                  </div>
+                  <span className="text-[9.5px] font-mono-tabular text-zinc-400 uppercase shrink-0">
+                    {item.segments && item.segments.length > 0 ? `${Math.min(item.segments.length, 32)} Connection(s)` : resInfo.canResume ? '32 Threads' : '1 Stream'}
+                  </span>
+                </div>
+
+                {/* Box 4: Time Left / Time Taken */}
+                <div className="border border-zinc-200 dark:border-zinc-800 bg-zinc-50/40 dark:bg-zinc-950/40 px-2.5 py-1.5 flex items-center justify-between">
+                  <div className="min-w-0">
+                    <span className="text-[9.5px] uppercase font-mono-tabular text-zinc-400 block leading-tight">
+                      {item.status === 'completed' ? 'Time taken' : 'Time left'}
+                    </span>
+                    <span className={`font-mono-tabular text-[12.5px] font-bold block leading-snug ${
+                      isError ? 'text-rose-600 dark:text-rose-400' : 'text-zinc-900 dark:text-zinc-100'
+                    }`}>
+                      {isDownloading
+                        ? (formattedEta || (effectiveSpeed === 0 ? 'Connecting to server...' : 'Calculating...'))
+                        : isPaused
+                        ? 'Paused'
+                        : item.status === 'completed'
+                        ? formattedTimeTaken
+                        : isQueued
+                        ? 'In Queue'
+                        : isError
+                        ? 'Interrupted'
+                        : 'Pending'}
+                    </span>
+                  </div>
+                  <span className="text-[9.5px] font-mono-tabular text-zinc-400 uppercase shrink-0">
+                    {item.status === 'completed' ? 'DONE' : isDownloading ? 'LIVE' : isPaused ? 'HOLD' : isError ? 'ERR' : 'QUEUE'}
+                  </span>
+                </div>
+              </div>
+
+              {/* Row 3: Progress Bar & Inline Speed Limiter Unit (Tight 2px Gap) */}
+              <div className="flex flex-col gap-[2px]">
+                {/* Main Progress Bar (Sleek High-Precision Track with Specular Lighting) */}
+                <div className="w-full h-[15px] bg-zinc-200/90 dark:bg-zinc-800/90 rounded-sm p-[1px] shadow-[inset_0_1.5px_3px_rgba(0,0,0,0.22)] border border-zinc-300/80 dark:border-zinc-700/80 relative overflow-hidden flex items-center">
+                  <div
+                    data-testid={`progress-bar-fill-${item.id}`}
+                    className={`h-full rounded-xs transition-[width] duration-300 ease-out relative overflow-hidden ${
+                      item.status === 'completed'
+                        ? 'bg-gradient-to-r from-emerald-600 via-emerald-500 to-emerald-400 shadow-sm'
+                        : isDownloading
+                        ? 'bg-gradient-to-r from-emerald-600 via-emerald-500 to-teal-500 shadow-[0_0_12px_rgba(16,185,129,0.5)]'
+                        : isPaused
+                        ? 'bg-gradient-to-r from-amber-600 to-amber-500'
+                        : (item.status === 'failed' || item.status === 'error')
+                        ? 'bg-gradient-to-r from-rose-600 to-rose-500'
+                        : 'bg-zinc-400 dark:bg-zinc-600'
+                    }`}
+                    style={{ width: `${Math.min(100, Math.max(barWidth, 0)).toFixed(2)}%` }}
+                  >
+                    {isDownloading && (
+                      <div className="absolute inset-0 animate-stripes opacity-45 mix-blend-overlay pointer-events-none" />
+                    )}
+                    {isDownloading && (
+                      <div className="animate-shimmer pointer-events-none" />
+                    )}
+                    <div className="absolute inset-x-0 top-0 h-[45%] bg-gradient-to-b from-white/35 to-transparent pointer-events-none" />
+                    <div className="absolute inset-x-0 bottom-0 h-[30%] bg-gradient-to-t from-black/20 to-transparent pointer-events-none" />
+                    {isDownloading && percent > 0 && percent < 100 && (
+                      <div className="absolute right-0 top-0 bottom-0 w-1.5 bg-white shadow-[0_0_8px_#ffffff,0_0_14px_#34d399] animate-pulse pointer-events-none" />
+                    )}
+                  </div>
+                </div>
+
+                {/* Inline Speed Limiter */}
+                {(isDownloading || isPaused || isQueued) && (
+                  <InlineSpeedLimiter item={item} />
+                )}
+              </div>
+
+              {/* Row 4: Save To / Destination Box with Direct Open Folder Action */}
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <span className="text-[10px] font-semibold text-zinc-700 dark:text-zinc-300 uppercase tracking-wider font-mono-tabular">
+                    Save To
+                  </span>
+                  <span className="text-[10px] font-mono-tabular text-zinc-400">
+                    {item.status === 'completed' ? 'SAVED FILE' : 'STAGING ARTIFACT'}
+                  </span>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <div className="relative flex-1 min-w-0 border border-zinc-300 dark:border-zinc-700 bg-zinc-50/50 dark:bg-zinc-900/50 px-2 py-1 flex items-center gap-1.5">
+                    <FolderOpen className="w-3.5 h-3.5 text-zinc-400 shrink-0" />
+                    <span className="flex-1 font-mono-tabular text-[11px] text-zinc-800 dark:text-zinc-200 truncate select-all" title={displayedDiskPath}>
+                      {displayedDiskPath}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        navigator.clipboard.writeText(displayedDiskPath);
+                        setCopiedId(item.id);
+                        setTimeout(() => setCopiedId(null), 2000);
+                      }}
+                      className="p-1 rounded hover:bg-zinc-200 dark:hover:bg-zinc-800 text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200 transition-colors cursor-pointer shrink-0"
+                      title="Copy path"
+                    >
+                      {copiedId === item.id ? (
+                        <Check className="w-3 h-3 text-emerald-500" />
+                      ) : (
+                        <Copy className="w-3 h-3" />
+                      )}
+                    </button>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => openFileFolder(displayedDiskPath)}
+                    className="h-7 px-3 border border-zinc-300 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-800 font-mono-tabular text-[10px] uppercase tracking-wider shrink-0 cursor-pointer text-zinc-700 dark:text-zinc-200"
+                    title="Open containing folder in Explorer"
+                  >
+                    Browse
+                  </button>
+                </div>
+              </div>
+
+              {/* Row 5: Details Toggle and Completed Actions */}
+              <div className="flex items-center justify-between pt-0.5 text-[11px]">
                 <button
-                  onClick={async () => {
-                    const picked = await openFolderPicker();
-                    if (picked) {
-                      await changeFolderAndRetry(item.id, picked);
-                    }
-                  }}
-                  className="px-2.5 py-1 rounded bg-rose-100 hover:bg-rose-200 dark:bg-rose-900/50 dark:hover:bg-rose-800/60 font-medium text-[10px] text-rose-800 dark:text-rose-200 transition-colors cursor-pointer shrink-0 flex items-center gap-1"
+                  type="button"
+                  onClick={() => toggleDetails(item.id)}
+                  className="text-[10.5px] font-mono-tabular font-medium text-zinc-500 hover:text-zinc-800 dark:text-zinc-400 dark:hover:text-zinc-200 flex items-center gap-1 cursor-pointer transition-colors shrink-0"
                 >
-                  <FolderEdit className="w-3 h-3" />
-                  <span>Change Location & Retry</span>
+                  {isExpanded ? (
+                    <>
+                      <ChevronUp className="w-3.5 h-3.5" />
+                      <span>Hide details</span>
+                    </>
+                  ) : (
+                    <>
+                      <ChevronDown className="w-3.5 h-3.5" />
+                      <span>Show details (Connections & Segments)</span>
+                    </>
+                  )}
                 </button>
-              </div>
-            )}
 
-            {/* Minimal Structured Metrics Grid */}
-            <div className="rounded-lg bg-zinc-50/90 dark:bg-zinc-950/80 border border-zinc-200/90 dark:border-zinc-800/90 px-3.5 py-2.5 text-xs font-mono grid grid-cols-2 lg:grid-cols-[1fr_1.1fr_1.4fr_1fr] gap-x-4 gap-y-2 select-text shadow-2xs">
-              {/* 1. File size */}
-              <div className="flex items-center gap-1.5 overflow-hidden">
-                <span className="text-zinc-400 dark:text-zinc-500 shrink-0 font-medium text-[11px] whitespace-nowrap">File size</span>
-                <span className="font-semibold text-[13px] text-zinc-900 dark:text-zinc-100 truncate tracking-tight">
-                  {formatBytes(item.total_bytes)}
-                </span>
-              </div>
-
-              {/* 2. Downloaded */}
-              <div className="flex items-center gap-1.5 overflow-hidden">
-                <span className="text-zinc-400 dark:text-zinc-500 shrink-0 font-medium text-[11px] whitespace-nowrap">Downloaded</span>
-                <span className="font-semibold text-[13px] text-zinc-900 dark:text-zinc-100 truncate tracking-tight">
-                  {formatBytes(item.downloaded_bytes)} <span className="text-[11px] font-normal opacity-70">({percent}%)</span>
-                </span>
-              </div>
-
-              {/* 3. Transfer rate (single line) */}
-              <div className="flex items-center gap-1.5 overflow-hidden">
-                <span className="text-zinc-400 dark:text-zinc-500 shrink-0 font-medium text-[11px] whitespace-nowrap">Transfer rate</span>
-                <span className={`font-semibold text-[13px] truncate whitespace-nowrap tracking-tight ${item.status === 'completed' ? 'text-zinc-500 dark:text-zinc-400 font-normal' : isDownloading && effectiveSpeed > 0 ? 'text-emerald-600 dark:text-emerald-400' : isDownloading ? 'text-amber-600 dark:text-amber-400 font-medium' : 'text-zinc-500'}`}>
-                  {item.status === 'completed'
-                    ? '--'
-                    : isDownloading && effectiveSpeed > 0
-                    ? formatSpeed(effectiveSpeed)
-                    : isDownloading
-                    ? 'Connecting to server...'
-                    : '0 B/s (0 Mbps)'}
-                </span>
-              </div>
-
-              {/* 4. Time left */}
-              <div className="flex items-center gap-1.5 overflow-hidden">
-                <span className="text-zinc-400 dark:text-zinc-500 shrink-0 font-medium text-[11px] whitespace-nowrap">{item.status === 'completed' ? 'Time taken' : 'Time left'}</span>
-                <span className="text-zinc-900 dark:text-zinc-100 text-[13px] truncate font-semibold tracking-tight">
-                  {isDownloading
-                    ? (formattedEta || (effectiveSpeed === 0 ? 'Please wait, connecting with server...' : 'Calculating...'))
-                    : isPaused
-                    ? 'Paused'
-                    : item.status === 'completed'
-                    ? formattedTimeTaken
-                    : isQueued
-                    ? 'In Queue'
-                    : (item.status === 'failed' || item.status === 'error')
-                    ? 'Failed'
-                    : 'Pending'}
-                </span>
-              </div>
-            </div>
-
-            {/* Progress Bar & Inline Speed Limiter Unit (Tight 2px Gap) */}
-            <div className="flex flex-col gap-[2px]">
-              {/* Main Progress Bar (Sleek Slim Height with Rich Multi-Layer Animations) */}
-            <div className="w-full h-[15px] bg-zinc-200/90 dark:bg-zinc-800/90 rounded-sm p-[1px] shadow-[inset_0_1.5px_3px_rgba(0,0,0,0.22)] border border-zinc-300/80 dark:border-zinc-700/80 relative overflow-hidden flex items-center">
-              <div
-                className={`h-full rounded-xs transition-all duration-300 relative overflow-hidden ${
-                  item.status === 'completed'
-                    ? 'bg-gradient-to-r from-emerald-600 via-emerald-500 to-emerald-400 shadow-sm'
-                    : isDownloading
-                    ? 'bg-gradient-to-r from-emerald-600 via-emerald-500 to-teal-500 shadow-[0_0_12px_rgba(16,185,129,0.5)]'
-                    : isPaused
-                    ? 'bg-gradient-to-r from-amber-600 to-amber-500'
-                    : (item.status === 'failed' || item.status === 'error')
-                    ? 'bg-gradient-to-r from-rose-600 to-rose-500'
-                    : 'bg-zinc-400 dark:bg-zinc-600'
-                }`}
-                style={{ width: `${Math.max(percent > 0 ? percent : isDownloading ? 2 : 0, 0)}%` }}
-              >
-                {/* Flowing animated barber-pole diagonal stripes */}
-                {isDownloading && (
-                  <div className="absolute inset-0 animate-stripes opacity-45 mix-blend-overlay pointer-events-none" />
-                )}
-
-                {/* Sweeping specular light shimmer beam */}
-                {isDownloading && (
-                  <div className="animate-shimmer pointer-events-none" />
-                )}
-
-                {/* Top gloss glass highlight */}
-                <div className="absolute inset-x-0 top-0 h-[45%] bg-gradient-to-b from-white/35 to-transparent pointer-events-none" />
-
-                {/* Bottom 3D bevel shadow */}
-                <div className="absolute inset-x-0 bottom-0 h-[30%] bg-gradient-to-t from-black/20 to-transparent pointer-events-none" />
-
-                {/* Pulsing energetic leading-edge head at download boundary */}
-                {isDownloading && percent > 0 && percent < 100 && (
-                  <div className="absolute right-0 top-0 bottom-0 w-1.5 bg-white shadow-[0_0_8px_#ffffff,0_0_14px_#34d399] animate-pulse pointer-events-none" />
-                )}
-              </div>
-            </div>
-
-            {/* Inline Speed Limiter (Directly below progress bar, above details bar with 2px gap) */}
-            {(isDownloading || isPaused || isQueued) && (
-              <InlineSpeedLimiter item={item} />
-            )}
-
-            </div>
-
-            {/* IDM Details Toggle Bar */}
-            <div className="flex items-center justify-between pt-0.5 text-[11px]">
-              <button
-                type="button"
-                onClick={() => toggleDetails(item.id)}
-                className="text-[11px] font-medium text-zinc-500 hover:text-zinc-800 dark:text-zinc-400 dark:hover:text-zinc-200 flex items-center gap-1 cursor-pointer transition-colors"
-              >
-                {isExpanded ? (
-                  <>
-                    <ChevronUp className="w-3.5 h-3.5" />
-                    <span>Hide details</span>
-                  </>
-                ) : (
-                  <>
-                    <ChevronDown className="w-3.5 h-3.5" />
-                    <span>Show details (Connections & Segments)</span>
-                  </>
-                )}
-              </button>
-
-              <div className="flex items-center gap-2 text-[10px] text-zinc-400 dark:text-zinc-500 font-mono">
-                {item.status === 'completed' ? (
-                  <div className="flex items-center gap-1 text-zinc-600 dark:text-zinc-300">
+                {item.status === 'completed' && (
+                  <div className="flex items-center gap-1.5">
                     <button
                       onClick={() => openFile(item.destination_path)}
-                      className="px-2 py-0.5 rounded hover:bg-emerald-50 dark:hover:bg-emerald-950/40 text-emerald-600 dark:text-emerald-400 transition-colors cursor-pointer flex items-center gap-1 text-[11px] font-sans font-medium"
-                      title="Open with"
+                      className="h-6 px-2.5 border border-emerald-500/40 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 font-mono-tabular text-[10px] uppercase tracking-wider cursor-pointer flex items-center gap-1"
+                      title="Open with default program"
                     >
                       <ExternalLink className="w-3 h-3" />
                       <span>Open with</span>
-                    </button>
-                    <button
-                      onClick={() => openFileFolder(item.destination_path)}
-                      className="px-2 py-0.5 rounded hover:bg-zinc-100 dark:hover:bg-zinc-800 text-zinc-600 dark:text-zinc-300 transition-colors cursor-pointer flex items-center gap-1 text-[11px] font-sans font-medium"
-                      title="Open destination folder"
-                    >
-                      <FolderOpen className="w-3 h-3" />
-                      <span>Destination folder</span>
                     </button>
                     <button
                       onClick={() => showDownloadCompleteDialog({
@@ -993,72 +1621,19 @@ export const DownloadTable: React.FC = () => {
                         total_bytes: item.total_bytes ?? undefined,
                         downloaded_bytes: item.downloaded_bytes ?? undefined,
                       })}
-                      className="px-1.5 py-0.5 rounded text-[10px] font-sans font-medium bg-emerald-50 hover:bg-emerald-100 dark:bg-emerald-950/40 dark:hover:bg-emerald-900/50 text-emerald-700 dark:text-emerald-300 transition-colors cursor-pointer"
+                      className="h-6 px-2.5 border border-zinc-300 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-800 font-mono-tabular text-[10px] uppercase tracking-wider cursor-pointer text-zinc-700 dark:text-zinc-300"
                       title="Show complete details dialog"
                     >
                       Details
                     </button>
-
                   </div>
-                ) : (
-                  <div className="flex items-center gap-1.5 text-zinc-600 dark:text-zinc-300">
-                    <button
-                      onClick={() => openFileFolder(item.destination_path)}
-                      className="px-2 py-0.5 rounded hover:bg-zinc-100 dark:hover:bg-zinc-800 text-zinc-600 dark:text-zinc-300 transition-colors cursor-pointer flex items-center gap-1 text-[11px] font-sans font-medium"
-                      title="Open destination folder"
-                    >
-                      <FolderOpen className="w-3 h-3" />
-                      <span>Destination folder</span>
-                    </button>
-
-                    <button
-                      type="button"
-                      data-testid={`auto-shutdown-toggle-${item.id}`}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleToggleShutdown(item.id);
-                      }}
-                      className={`px-2 py-0.5 rounded text-[11px] font-sans font-medium transition-all cursor-pointer flex items-center gap-1 border ${
-                        isShutdownArmed(item.id)
-                          ? 'bg-rose-500/10 dark:bg-rose-950/40 border-rose-500/30 text-rose-600 dark:text-rose-400 font-semibold'
-                          : 'bg-zinc-100 hover:bg-zinc-200 dark:bg-zinc-800 dark:hover:bg-zinc-700 border-zinc-200/80 dark:border-zinc-700/80 text-zinc-600 dark:text-zinc-300'
-                      }`}
-                      title={
-                        isShutdownArmed(item.id)
-                          ? 'Computer will safely shut down after this download completes (click to turn off)'
-                          : 'Click to shut down computer when download completes'
-                      }
-                    >
-                      <Power className={`w-3 h-3 ${isShutdownArmed(item.id) ? 'text-rose-500 stroke-[2.5]' : 'text-zinc-400'}`} />
-                      <span>{isShutdownArmed(item.id) ? 'Shut down when done' : 'Auto-Shutdown'}</span>
-                    </button>
-                  </div>
-                )}
-
-                {item.status !== 'completed' && (
-                  <>
-                    <span className="text-zinc-300 dark:text-zinc-700 mx-0.5">•</span>
-                    <span className={`flex items-center gap-1 ${resInfo.colorClass}`} title={resInfo.description}>
-                  {resInfo.canResume ? (
-                    <ShieldCheck className="w-3 h-3 text-emerald-500 shrink-0" />
-                  ) : resInfo.label === 'No' ? (
-                    <AlertCircle className="w-3 h-3 text-amber-500 shrink-0" />
-                  ) : (
-                    <HelpCircle className="w-3 h-3 text-zinc-400 shrink-0" />
-                  )}
-                  <span>Resume: {resInfo.label}</span>
-                </span>
-                {item.segments && item.segments.length > 0 && (
-                  <span>• {Math.min(item.segments.length, 32)} Connection(s)</span>
-                )}
-              </>
                 )}
               </div>
             </div>
 
             {/* IDM-Style Expanded Details Drawer (Image 2 Tribute) */}
             {isExpanded && (
-              <div className="mt-1 pt-2.5 border-t border-zinc-100 dark:border-zinc-800/80 space-y-2.5 animate-in fade-in duration-150">
+              <div className="px-3.5 pb-3.5 pt-2.5 border-t border-zinc-200 dark:border-zinc-800 space-y-2.5 animate-in fade-in duration-150">
                 {/* Single-stream / No-range notice banner */}
                 {!resInfo.canResume && item.status !== 'completed' && (
                   <div className="flex items-center gap-2 p-2.5 rounded-lg bg-amber-500/10 border border-amber-500/20 text-amber-700 dark:text-amber-300 text-xs">
@@ -1069,35 +1644,47 @@ export const DownloadTable: React.FC = () => {
 
                 {/* Start positions and download progress by connections visualizer */}
                 <div>
-                  <div className="flex items-center justify-between text-[10px] font-semibold text-zinc-500 dark:text-zinc-400 uppercase tracking-wider mb-1.5">
-                    <span>Start positions and download progress by connections</span>
-                    <span>{item.segments ? `${item.segments.filter((s) => s.is_active).length} Active` : '0 Active'}</span>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <span className="text-[10px] font-semibold text-zinc-700 dark:text-zinc-300 uppercase tracking-wider font-mono-tabular">
+                      Start positions and download progress by connections
+                    </span>
+                    <div className="flex items-center gap-1.5 font-mono-tabular">
+                      <span className="px-1.5 py-0.2 border border-emerald-500/40 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 text-[9.5px] font-semibold">
+                        {item.segments ? `${item.segments.filter((s) => s.is_active).length} Active` : '0 Active'}
+                      </span>
+                      {item.segments && item.segments.length > 0 && (
+                        <span className="text-[9.5px] font-mono-tabular text-zinc-400">
+                          {item.segments.length} THREADS
+                        </span>
+                      )}
+                    </div>
                   </div>
 
                   {item.segments && item.segments.length > 0 ? (
-                    <div className="h-4 w-full bg-zinc-100 dark:bg-zinc-800/90 rounded border border-zinc-200 dark:border-zinc-700/80 overflow-hidden flex gap-[2px] p-[2px]">
+                    <div className="h-[15px] w-full bg-zinc-200/90 dark:bg-zinc-800/90 rounded-sm p-[1px] shadow-[inset_0_1px_2px_rgba(0,0,0,0.2)] border border-zinc-300/80 dark:border-zinc-700/80 overflow-hidden flex gap-[2px] items-center">
                       {item.segments.map((seg) => {
                         const segTotal = seg.end - seg.start;
                         const segPercent = segTotal > 0 ? Math.min(100, (seg.downloaded / segTotal) * 100) : 0;
                         return (
                           <div
                             key={seg.index}
-                            className="h-full bg-zinc-200/80 dark:bg-zinc-700/50 rounded-xs overflow-hidden flex-1 relative group"
+                            className="h-full bg-zinc-100 dark:bg-zinc-900 rounded-xs overflow-hidden flex-1 relative group"
                             title={`Conn ${seg.index + 1}: ${Math.round(segPercent)}% (${formatBytes(seg.downloaded)} of ${formatBytes(segTotal)})`}
                           >
                             <div
-                              className={`h-full transition-all duration-200 relative ${
+                              className={`h-full transition-[width] duration-200 ease-out relative overflow-hidden ${
                                 segPercent >= 100
-                                  ? 'bg-emerald-500'
+                                  ? 'bg-gradient-to-r from-emerald-600 via-emerald-500 to-emerald-400'
                                   : seg.is_active
-                                  ? 'bg-blue-500 animate-pulse'
-                                  : 'bg-zinc-400 dark:bg-zinc-500'
+                                  ? 'bg-gradient-to-r from-emerald-600 to-teal-500 shadow-[0_0_8px_rgba(16,185,129,0.4)]'
+                                  : 'bg-zinc-400 dark:bg-zinc-600'
                               }`}
                               style={{ width: `${segPercent}%` }}
                             >
-                              {/* Red cursor tick marking active head of connection (IDM tribute) */}
+                              <div className="absolute inset-x-0 top-0 h-[45%] bg-gradient-to-b from-white/30 to-transparent pointer-events-none" />
+                              {/* Specular pulse tick marking active head of connection */}
                               {seg.is_active && segPercent < 100 && (
-                                <div className="absolute right-0 top-0 bottom-0 w-[2px] bg-red-500 shadow-xs" />
+                                <div className="absolute right-0 top-0 bottom-0 w-[2px] bg-white shadow-[0_0_6px_#34d399] animate-pulse pointer-events-none" />
                               )}
                             </div>
                           </div>
@@ -1109,65 +1696,78 @@ export const DownloadTable: React.FC = () => {
                   )}
                 </div>
 
-                {/* Connections Table (N., Downloaded, Status Info) - Exact Image 2 Table Format */}
+                {/* Connections Table (N., Downloaded, Range Span, Status Info) - Minimalist Industrial Table */}
                 {item.segments && item.segments.length > 0 && (() => {
                   const isShowAll = !!showAllSegmentsMap[item.id];
                   const displayedSegments = isShowAll ? item.segments : item.segments.slice(0, 4);
                   const hasMore = item.segments.length > 4;
 
                   return (
-                    <div className="overflow-x-auto rounded-lg border border-zinc-200/80 dark:border-zinc-800/80 bg-zinc-50/50 dark:bg-zinc-950/40">
-                      <table className="w-full text-left text-[11px] font-mono">
-                        <thead className="bg-zinc-100/70 dark:bg-zinc-900/60 border-b border-zinc-200/80 dark:border-zinc-800/80 text-[10px] text-zinc-500 dark:text-zinc-400 uppercase font-semibold">
+                    <div className="overflow-x-auto border border-zinc-200 dark:border-zinc-800 bg-zinc-50/40 dark:bg-zinc-950/40 rounded-sm">
+                      <table className="w-full text-left font-mono-tabular text-[11px]">
+                        <thead className="bg-zinc-100/80 dark:bg-zinc-900/80 border-b border-zinc-200 dark:border-zinc-800 text-[9.5px] text-zinc-500 dark:text-zinc-400 uppercase font-semibold tracking-wider">
                           <tr>
-                            <th className="py-1 px-3 w-12">N.</th>
-                            <th className="py-1 px-3">Downloaded</th>
-                            <th className="py-1 px-3">Range Span</th>
-                            <th className="py-1 px-3">Connection Info</th>
+                            <th className="py-1.5 px-3 w-12 text-center">N.</th>
+                            <th className="py-1.5 px-3">Downloaded</th>
+                            <th className="py-1.5 px-3">Range Span</th>
+                            <th className="py-1.5 px-3 text-right">Connection Info</th>
                           </tr>
                         </thead>
-                        <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800/50">
-                          {displayedSegments.map((seg) => (
-                            <tr key={seg.index} className="hover:bg-zinc-100/40 dark:hover:bg-zinc-800/30">
-                              <td className="py-1 px-3 font-semibold text-zinc-700 dark:text-zinc-300">{seg.index + 1}</td>
-                              <td className="py-1 px-3 text-zinc-600 dark:text-zinc-400">{formatBytes(seg.downloaded)}</td>
-                              <td className="py-1 px-3 text-[10px] text-zinc-400 dark:text-zinc-500">
-                                {formatBytes(seg.start)} - {formatBytes(seg.end)}
-                              </td>
-                              <td className="py-1 px-3">
-                                {seg.is_active ? (
-                                  <span className="inline-flex items-center gap-2 text-blue-600 dark:text-blue-400 font-medium">
-                                    <span className="relative flex h-3 w-3 items-center justify-center shrink-0">
-                                      <span className="absolute inline-flex h-full w-full rounded-full bg-blue-400/80 animate-ping pointer-events-none" />
-                                      <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-blue-500 shadow-[0_0_4px_rgba(59,130,246,0.8)]" />
+                        <tbody className="divide-y divide-zinc-200/60 dark:divide-zinc-800/60">
+                          {displayedSegments.map((seg) => {
+                            const segTotal = seg.end - seg.start;
+                            const segPercent = segTotal > 0 ? Math.min(100, (seg.downloaded / segTotal) * 100) : 0;
+                            return (
+                              <tr key={seg.index} className="hover:bg-zinc-100/50 dark:hover:bg-zinc-900/50 transition-colors">
+                                <td className="py-1.5 px-3 font-semibold text-zinc-700 dark:text-zinc-300 text-center text-[11px]">
+                                  {seg.index + 1}
+                                </td>
+                                <td className="py-1.5 px-3 font-bold text-zinc-900 dark:text-zinc-100 text-[11px]">
+                                  {formatBytes(seg.downloaded)} <span className="text-[10px] font-normal text-zinc-400">({Math.round(segPercent)}%)</span>
+                                </td>
+                                <td className="py-1.5 px-3 text-[10.5px] text-zinc-500 dark:text-zinc-400">
+                                  {formatBytes(seg.start)} – {formatBytes(seg.end)}
+                                </td>
+                                <td className="py-1.5 px-3 text-right">
+                                  {seg.is_active ? (
+                                    <span className="inline-flex items-center gap-1.5 text-emerald-600 dark:text-emerald-400 font-semibold text-[10.5px]">
+                                      <span className="relative flex h-2 w-2 items-center justify-center shrink-0">
+                                        <span className="absolute inline-flex h-full w-full rounded-full bg-emerald-400/80 animate-ping pointer-events-none" />
+                                        <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-emerald-500 shadow-[0_0_4px_rgba(16,185,129,0.8)]" />
+                                      </span>
+                                      <span>Receiving data...</span>
                                     </span>
-                                    <span>Receiving data...</span>
-                                  </span>
-                                ) : seg.downloaded > 0 && seg.downloaded >= (seg.end - seg.start) ? (
-                                  <span className="text-emerald-600 dark:text-emerald-400 font-medium">Completed</span>
-                                ) : (
-                                  <span className="text-zinc-400 dark:text-zinc-500">Idle / Ready</span>
-                                )}
-                              </td>
-                            </tr>
-                          ))}
+                                  ) : seg.downloaded > 0 && seg.downloaded >= (seg.end - seg.start) ? (
+                                    <span className="inline-flex items-center gap-1 text-emerald-600 dark:text-emerald-400 font-medium text-[10.5px]">
+                                      <Check className="w-3 h-3 text-emerald-500" />
+                                      <span>Completed</span>
+                                    </span>
+                                  ) : (
+                                    <span className="text-zinc-400 dark:text-zinc-500 text-[10.5px]">
+                                      Idle / Ready
+                                    </span>
+                                  )}
+                                </td>
+                              </tr>
+                            );
+                          })}
                         </tbody>
                       </table>
                       {hasMore && (
-                        <div className="p-1.5 border-t border-zinc-200/80 dark:border-zinc-800/80 bg-zinc-100/50 dark:bg-zinc-900/50 text-center">
+                        <div className="p-1.5 border-t border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900 flex justify-center">
                           <button
                             type="button"
                             onClick={() => toggleShowAllSegments(item.id)}
-                            className="text-[11px] font-medium text-blue-600 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300 inline-flex items-center gap-1.5 cursor-pointer py-0.5 px-2.5 rounded hover:bg-blue-500/10 transition-colors"
+                            className="h-6 px-3 border border-zinc-300 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-800 text-zinc-600 dark:text-zinc-300 font-mono-tabular text-[10px] uppercase tracking-wider cursor-pointer flex items-center gap-1.5 transition-colors"
                           >
                             {isShowAll ? (
                               <>
-                                <ChevronUp className="w-3.5 h-3.5" />
+                                <ChevronUp className="w-3 h-3 text-zinc-400" />
                                 <span>Show first 4 connections only</span>
                               </>
                             ) : (
                               <>
-                                <ChevronDown className="w-3.5 h-3.5" />
+                                <ChevronDown className="w-3 h-3 text-zinc-400" />
                                 <span>Show all {item.segments.length} connections ({item.segments.length - 4} more)</span>
                               </>
                             )}
@@ -1182,6 +1782,145 @@ export const DownloadTable: React.FC = () => {
           </div>
         );
       })}
+      </div>
+
+      {/* Floating Card Navigator for smooth vertical jump between 1st, 2nd, 3rd card */}
+      {displayItems.length >= 2 && (
+        <div
+          data-testid="card-scroll-navigator"
+          className={`absolute bottom-3 right-5 z-20 flex items-center gap-1 px-2 py-1 bg-white/95 dark:bg-zinc-900/95 backdrop-blur-md border border-zinc-200/90 dark:border-zinc-800/90 rounded-xl shadow-lg font-mono-tabular text-[10px] select-none transition-all duration-300 ease-out ${
+            isNavVisible
+              ? 'opacity-100 translate-y-0 pointer-events-auto'
+              : 'opacity-0 translate-y-3 pointer-events-none'
+          }`}
+        >
+          {/* Scroll Up / Prev Card */}
+          <button
+            type="button"
+            onClick={() => scrollToCard(currentVisibleIndex - 1)}
+            disabled={currentVisibleIndex <= 0}
+            data-testid="card-nav-prev"
+            title={currentVisibleIndex > 0 ? `Scroll up to Card #${currentVisibleIndex}` : 'Already at first card'}
+            className={`p-1 rounded transition-colors flex items-center justify-center ${
+              currentVisibleIndex <= 0
+                ? 'text-zinc-300 dark:text-zinc-700 cursor-not-allowed opacity-40'
+                : 'text-zinc-600 dark:text-zinc-300 hover:text-zinc-950 dark:hover:text-white hover:bg-zinc-100 dark:hover:bg-zinc-800 cursor-pointer'
+            }`}
+          >
+            <ChevronUp className="w-3.5 h-3.5" />
+          </button>
+
+          {/* Direct Card Jump Buttons: 1, 2, 3... (Dynamic status-aware auto-centering strip) */}
+          <div
+            ref={jumpStripRef}
+            style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' }}
+            className={`flex items-center gap-0.5 max-w-[240px] ${
+              displayItems.length > 7 ? 'overflow-x-auto' : 'overflow-x-hidden'
+            } no-scrollbar scroll-smooth px-0.5 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden`}
+          >
+            {displayItems.map((item, idx) => {
+              const isSelected = currentVisibleIndex === idx;
+              const status = item.status;
+              const isDownloading = status === 'downloading' || status === 'probing';
+              const isQueued = status === 'queued';
+              const isPaused = status === 'paused';
+              const isError = status === 'failed' || status === 'error';
+
+              const activeBg = isDownloading
+                ? 'bg-emerald-500 text-white shadow-2xs font-extrabold scale-105'
+                : isQueued
+                ? 'bg-violet-600 text-white shadow-2xs font-extrabold scale-105'
+                : isPaused
+                ? 'bg-amber-500 text-white shadow-2xs font-extrabold scale-105'
+                : isError
+                ? 'bg-rose-500 text-white shadow-2xs font-extrabold scale-105'
+                : 'bg-zinc-800 dark:bg-zinc-200 text-white dark:text-zinc-900 shadow-2xs font-extrabold scale-105';
+
+              const inactiveStyle = isDownloading
+                ? 'text-emerald-700 dark:text-emerald-300 hover:bg-emerald-500/10'
+                : isQueued
+                ? 'text-violet-700 dark:text-violet-300 hover:bg-violet-500/10'
+                : isPaused
+                ? 'text-amber-700 dark:text-amber-300 hover:bg-amber-500/10'
+                : isError
+                ? 'text-rose-700 dark:text-rose-300 hover:bg-rose-500/10'
+                : 'text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 hover:bg-zinc-100 dark:hover:bg-zinc-800';
+
+              return (
+                <button
+                  key={item.id}
+                  ref={isSelected ? activeJumpBtnRef : null}
+                  type="button"
+                  onClick={() => scrollToCard(idx)}
+                  data-testid={`card-nav-jump-${idx + 1}`}
+                  title={`Jump to Card #${idx + 1}: ${item.filename} (${status.toUpperCase()})`}
+                  className={`min-w-[20px] h-5 px-1 rounded flex items-center justify-center font-bold text-[9.5px] transition-all cursor-pointer shrink-0 ${
+                    isSelected ? activeBg : inactiveStyle
+                  }`}
+                >
+                  {idx + 1}
+                </button>
+              );
+            })}
+          </div>
+
+          {/* Scroll Down / Next Card */}
+          <button
+            type="button"
+            onClick={() => scrollToCard(currentVisibleIndex + 1)}
+            disabled={currentVisibleIndex >= displayItems.length - 1}
+            data-testid="card-nav-next"
+            title={currentVisibleIndex < displayItems.length - 1 ? `Scroll down to Card #${currentVisibleIndex + 2}` : 'Already at last card'}
+            className={`p-1 rounded transition-colors flex items-center justify-center ${
+              currentVisibleIndex >= displayItems.length - 1
+                ? 'text-zinc-300 dark:text-zinc-700 cursor-not-allowed opacity-40'
+                : 'text-zinc-600 dark:text-zinc-300 hover:text-zinc-950 dark:hover:text-white hover:bg-zinc-100 dark:hover:bg-zinc-800 cursor-pointer'
+            }`}
+          >
+            <ChevronDown className="w-3.5 h-3.5" />
+          </button>
+
+          {/* Counter info pill with Queue support */}
+          <span className="ml-1 pl-1.5 border-l border-zinc-200 dark:border-zinc-800 text-[9px] font-semibold text-zinc-400 uppercase tracking-wider flex items-center gap-1">
+            {isQueuesView && (
+              <span className="text-violet-600 dark:text-violet-400 font-bold">QUE</span>
+            )}
+            <span>#{currentVisibleIndex + 1}/{displayItems.length}</span>
+          </span>
+
+          {/* Pin / Auto-Hide toggle */}
+          <button
+            type="button"
+            onClick={() => {
+              const nextState = !alwaysShowNav;
+              setAlwaysShowNav(nextState);
+              try {
+                localStorage.setItem('downex_nav_always_visible', String(nextState));
+              } catch {}
+            }}
+            data-testid="card-nav-pin-toggle"
+            title={
+              alwaysShowNav
+                ? 'Always Visible (Pinned) • Click to auto-hide when at top'
+                : 'Auto-hides at top • Click to pin always visible'
+            }
+            className={`ml-0.5 p-1 rounded transition-colors flex items-center justify-center cursor-pointer ${
+              alwaysShowNav
+                ? isQueuesView
+                  ? 'text-violet-600 dark:text-violet-400 bg-violet-500/10 hover:bg-violet-500/20'
+                  : 'text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 hover:bg-emerald-500/20'
+                : 'text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-800'
+            }`}
+          >
+            {alwaysShowNav ? (
+              <Pin className="w-3 h-3 fill-current rotate-45" />
+            ) : (
+              <PinOff className="w-3 h-3 opacity-60" />
+            )}
+          </button>
+        </div>
+      )}
+
       {/* IDM Delete Confirmation & Device Wipe Modal */}
       <DeleteConfirmModal
         isOpen={!!deletingItem}
@@ -1189,6 +1928,71 @@ export const DownloadTable: React.FC = () => {
         onClose={() => setDeletingItem(null)}
         onConfirm={(id, deleteFromDisk) => {
           removeDownload(id, deleteFromDisk);
+        }}
+      />
+
+      {/* Batch Delete Confirmation & Device Wipe Modal */}
+      <BatchDeleteConfirmModal
+        isOpen={isBatchDeleteOpen}
+        items={displayItems}
+        onClose={() => setIsBatchDeleteOpen(false)}
+        onConfirm={(ids, deleteFromDisk) => {
+          removeAllDownloads(ids, deleteFromDisk);
+          setIsBatchDeleteOpen(false);
+        }}
+      />
+
+      {/* Batch Pause & Queue Confirmation Modal (Destructive Operations Guard) */}
+      <BatchPauseConfirmModal
+        isOpen={batchPauseAction !== null}
+        action={batchPauseAction}
+        items={batchPauseCustomItems || displayItems}
+        onClose={() => {
+          setBatchPauseAction(null);
+          setBatchPauseCustomItems(null);
+        }}
+        onConfirm={() => {
+          if (batchPauseAction === 'pause') {
+            pauseAllDownloads();
+          } else if (batchPauseAction === 'resume') {
+            resumeAllDownloads();
+          } else if (batchPauseAction === 'queue') {
+            if (batchPauseCustomItems && batchPauseCustomItems.length === 1) {
+              queueDownload(batchPauseCustomItems[0].id);
+            } else {
+              queueAllDownloads();
+            }
+          } else if (batchPauseAction === 'start_queue') {
+            startQueue();
+          }
+          setBatchPauseAction(null);
+          setBatchPauseCustomItems(null);
+        }}
+      />
+
+      {/* Destination Folder Change & Retry Modal */}
+      <FolderChangeModal
+        isOpen={retryingFolderItem !== null}
+        initialPath={retryingFolderItem?.destination_path || ''}
+        onClose={() => setRetryingFolderItem(null)}
+        onSelect={async (newFolder) => {
+          if (retryingFolderItem) {
+            await changeFolderAndRetry(retryingFolderItem.id, newFolder);
+            setRetryingFolderItem(null);
+          }
+        }}
+        title="CHANGE DESTINATION & RETRY"
+        subtitle="FIX WRITE PERMISSIONS"
+      />
+
+      {/* Auto-Shutdown Confirmation Modal */}
+      <AutoShutdownConfirmModal
+        isOpen={shutdownConfirmItem !== null}
+        item={shutdownConfirmItem}
+        onClose={() => setShutdownConfirmItem(null)}
+        onConfirm={(taskId) => {
+          handleToggleShutdown(taskId);
+          setShutdownConfirmItem(null);
         }}
       />
     </div>

@@ -1,0 +1,26 @@
+================================================================================
+DOWNEX RESEARCH & STUDY ESSAY #26
+Title: EFFORTLESS BROWSER INTEGRATION
+Author & Architect: Gaurav Patil (https://gauravpatil.site)
+Official Project: https://downex.apps.gauravpatil.site
+================================================================================
+
+A download manager is only as convenient as its connection to your web browser.
+
+If you have to manually copy links, open an app, paste the link, and click five
+buttons every single time you want to save a file, you will quickly stop using it.
+
+Downex features a native messaging bridge for modern browsers (Chrome, Edge,
+Firefox, Brave):
+- When you click a download link in your browser, the extension intercepts the
+  URL in milliseconds.
+- It passes the download request to the Downex core service via a local, secure
+  loopback channel (downex_bridge.exe).
+- Downex instantly displays its clean, lightweight confirmation dialog, letting
+  you start the accelerated download with a single press of Enter.
+
+No copy-pasting, no friction, no lost links.
+
+================================================================================
+Copyright (C) 2026 Gaurav Patil. All Rights Reserved.
+================================================================================

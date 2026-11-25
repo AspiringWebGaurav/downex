@@ -1,0 +1,26 @@
+================================================================================
+DOWNEX RESEARCH & STUDY ESSAY #25
+Title: WHY WE COMBINED RUST AND REACT IN DOWNEX
+Author & Architect: Gaurav Patil (https://gauravpatil.site)
+Official Project: https://downex.apps.gauravpatil.site
+================================================================================
+
+Every programming language has its unique superpower:
+- Rust is the gold standard for systems programming: it offers blistering C++-level
+  speed, memory safety without garbage collection pauses, and rock-solid multi-
+  threading.
+- React and modern web standards provide the most flexible, expressive, and
+  beautiful toolset for crafting responsive user interfaces.
+
+Downex brings the best of both worlds together:
+- The heavy lifting—multi-segment socket streaming, disk I/O, atomic file swapping,
+  and cryptographic verification—is handled in pure Rust.
+- The user interface—smooth animations, search filtering, dark/light themes, and
+  interactive graphs—is rendered with modern React.
+
+This architecture gives you the speed of a native C++ engine with the beauty of
+a modern web interface, all while consuming a fraction of traditional memory.
+
+================================================================================
+Copyright (C) 2026 Gaurav Patil. All Rights Reserved.
+================================================================================

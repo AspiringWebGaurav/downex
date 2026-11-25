@@ -2,8 +2,10 @@ pub mod autostart;
 pub mod bridge;
 pub mod commands;
 pub mod db;
+pub mod doc_sync;
 pub mod engine;
 pub mod extension;
+pub mod hardware;
 pub mod ota;
 pub mod scheduler;
 pub mod tray;
@@ -231,7 +233,7 @@ pub fn run() {
                         } else {
                             consecutive_failures += 1;
                             if consecutive_failures >= 2 {
-                                eprintln!("[Downex Dev Watchdog] Dev server (127.0.0.1:1420) closed. Terminal closed. Exiting dev instance now.");
+                                println!("[Downex Dev Watchdog] Dev server (127.0.0.1:1420) closed. Terminal closed. Exiting dev instance now.");
                                 spawn_dev_restore_installed_service();
                                 app_handle.exit(0);
                                 std::process::exit(0);
@@ -241,8 +243,13 @@ pub fn run() {
                 });
             }
 
-            // Spawn autonomous native background update supervisor
-            crate::ota::supervisor::spawn_update_supervisor(app.handle().clone(), client.clone());
+            // Zero background OTA supervisor: Updates detect strictly on UI open (user interaction)
+
+            // Confirm boot health 3 seconds after successful startup
+            tauri::async_runtime::spawn(async move {
+                tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+                crate::ota::mark_boot_healthy();
+            });
 
             // Setup system tray AFTER AppState is managed so dynamic stats are accessible
             if let Ok(tray) = tray::setup_system_tray(app.handle()) {
@@ -292,7 +299,7 @@ pub fn run() {
                 #[cfg(target_os = "windows")]
                 crate::commands::set_process_priority_background(false);
             } else {
-                eprintln!("[Downex Setup] Started silently in background mode: running lightweight background engine in system tray with minimal RAM.");
+                println!("[Downex Setup] Started silently in background mode: running lightweight background engine in system tray with minimal RAM.");
                 #[cfg(target_os = "windows")]
                 {
                     crate::commands::set_process_priority_background(true);
@@ -380,7 +387,7 @@ pub fn run() {
             // Self-Healing Rollback Recovery Handler: If watchdog rolled back bad update
             let is_rollback_recovery = std::env::args().any(|arg| arg == "--rollback-recovery");
             if is_rollback_recovery {
-                eprintln!("[Downex OTA Recovery] Started in SELF-HEALING RECOVERY MODE (--rollback-recovery). Previous version safely preserved!");
+                println!("[Downex OTA Recovery] Started in SELF-HEALING RECOVERY MODE (--rollback-recovery). Previous version safely preserved!");
                 let current_exe = std::env::current_exe().unwrap_or_default();
                 let actual_ver = crate::version::extract_pe_version(&current_exe)
                     .unwrap_or_else(|| app.package_info().version.to_string());
@@ -404,16 +411,21 @@ pub fn run() {
 
             // Dynamically resolve and persist runtime installed version (GPN 1:1 REA pattern)
             let resolved_version = crate::version::resolve_installed_version(&app.handle(), Some(&db));
-            eprintln!("[Downex Version] Dynamically resolved installed version: {}", resolved_version);
+            println!("[Downex Version] Dynamically resolved installed version: {}", resolved_version);
             commands::sync_windows_installed_version(&resolved_version);
 
-            // Delay clean up of superseded .exe.old by 60 seconds of healthy uptime so watchdog can roll back if needed
+            // Mark boot healthy after 10 seconds of stable uptime and clean old binaries
             if !is_rollback_recovery {
                 std::thread::spawn(|| {
-                    std::thread::sleep(std::time::Duration::from_secs(60));
-                    let _ = commands::cmd_clean_superseded_old_binaries();
+                    std::thread::sleep(std::time::Duration::from_secs(10));
+                    crate::ota::mark_boot_healthy();
                 });
             }
+
+            // Silently keep $INSTDIR README.txt, license/, and research_and_study/ in sync with the binary
+            std::thread::spawn(|| {
+                crate::doc_sync::sync_installed_docs_to_disk();
+            });
 
             Ok(())
         })
@@ -423,13 +435,23 @@ pub fn run() {
             cmd_resume_download,
             cmd_cancel_download,
             cmd_set_download_speed_limit,
+            cmd_save_custom_speed_limit,
+            cmd_get_saved_custom_speed_limit,
             cmd_get_downloads,
             cmd_fetch_update_manifest,
             cmd_download_update_binary,
+            cmd_download_and_stage_update,
+            cmd_launch_updater_and_exit,
+            cmd_preview_external_updater,
+            cmd_mark_boot_healthy,
             cmd_check_updates,
             cmd_download_update_container,
             cmd_get_resolved_version,
             cmd_get_installation_id,
+            cmd_get_silicon_hardware_id,
+            cmd_check_is_hardware_banned,
+            cmd_enforce_hardware_ban,
+            cmd_lift_hardware_ban,
             cmd_get_clipboard_text,
             cmd_sync_windows_installed_version,
             cmd_write_update_staging_file,
@@ -463,6 +485,7 @@ pub fn run() {
             cmd_close_download_dialog,
             cmd_get_download_dialog_payload,
             cmd_get_disk_free_space,
+            cmd_get_available_disks,
             cmd_open_file,
             cmd_open_file_with,
             cmd_open_file_folder,

@@ -63,11 +63,11 @@ test.describe('Downex Base Application — Performance, Stress, Edge Cases & Dat
 
     const views = [
       'All Downloads',
-      'Active',
       'Queues',
-      'Completed',
-      'Trash',
+      'Speed & Stats',
       'Settings',
+      'Speed Test',
+      'Trash',
     ];
 
     // Rapidly cycle through all views 3 times
@@ -91,7 +91,8 @@ test.describe('Downex Base Application — Performance, Stress, Edge Cases & Dat
     // 1. Explicitly disable clipboard watch so modal opens with clean empty URL
     await page.evaluate(() => localStorage.setItem('downex_clipboard_watch', 'false'));
     await page.click('button:has-text("New Download")');
-    await expect(page.locator('text=Download File')).toBeVisible();
+    const modalHeader = page.locator('div.fixed.inset-0').getByText('NEW DOWNLOAD', { exact: true });
+    await expect(modalHeader).toBeVisible();
 
     // 2. Submit with empty URL — Start Download button should be disabled
     const startDownloadBtn = page.locator('button:has-text("Start Download")');
@@ -109,7 +110,7 @@ test.describe('Downex Base Application — Performance, Stress, Edge Cases & Dat
 
     // Close modal via Escape
     await page.keyboard.press('Escape');
-    await expect(page.locator('text=Download File')).not.toBeVisible();
+    await expect(modalHeader).not.toBeVisible();
 
     expect(errors).toEqual([]);
   });

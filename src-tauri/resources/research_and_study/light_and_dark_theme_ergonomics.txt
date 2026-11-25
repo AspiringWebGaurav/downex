@@ -1,0 +1,26 @@
+================================================================================
+DOWNEX RESEARCH & STUDY ESSAY #22
+Title: DESIGN ERGONOMICS: LIGHT & DARK MODES
+Author & Architect: Gaurav Patil (https://gauravpatil.site)
+Official Project: https://downex.apps.gauravpatil.site
+================================================================================
+
+Color in software is not just an aesthetic choice; it is an ergonomic one.
+
+When you are working in a brightly lit office, a high-contrast Light Theme with
+crisp white backgrounds and deep zinc typography reduces eye strain and makes
+text effortlessly legible.
+
+Conversely, when you are downloading files late at night in a dim room, a blinding
+white screen causes pupil constriction and visual fatigue. A carefully balanced
+Dark Theme—using deep zinc (#18181B) rather than pitch black, paired with soft
+gray text and emerald accents—protects your eyes and feels relaxing.
+
+Downex is 100% theme-aware:
+- You can switch between Light and Dark mode with a single click.
+- Even the standalone updater window dynamically adapts to your theme, matching
+  your chosen palette so your desktop always looks unified.
+
+================================================================================
+Copyright (C) 2026 Gaurav Patil. All Rights Reserved.
+================================================================================

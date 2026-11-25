@@ -15,28 +15,71 @@
         }
       } catch (e) {}
 
-      // Early synchronous reload & context menu lockdown for production runtime
+      // Early synchronous reload & context menu lockdown for production runtime (blocks Ctrl+F5, Ctrl+Shift+R, F5, Ctrl+R before bundle loads)
       try {
         (function() {
-          var isProd = window.location.protocol === 'tauri:' || 
-                       window.location.protocol === 'asset:' || 
-                       (window.location.origin && window.location.origin.indexOf('tauri.localhost') !== -1);
-          if (isProd) {
-            window.addEventListener('keydown', function(e) {
-              var isF5 = e.key === 'F5' || e.code === 'F5' || e.keyCode === 116;
-              var isR = (e.ctrlKey || e.metaKey) && !e.altKey && (e.key === 'r' || e.key === 'R' || e.code === 'KeyR' || e.keyCode === 82);
-              var isRefresh = e.key === 'BrowserRefresh' || e.key === 'Refresh';
-              if (isF5 || isR || isRefresh) {
+          var isDev = false;
+          try {
+            if (window.location && window.location.port && (window.location.port === '1420' || window.location.port === '5173' || window.location.port === '3000')) {
+              if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
+                isDev = true;
+              }
+            }
+          } catch (e) {}
+
+          // Allow test override
+          if (typeof window !== 'undefined' && window.__DOWNEX_FORCE_PRODUCTION__ === true) {
+            isDev = false;
+          }
+          if (typeof window !== 'undefined' && window.__DOWNEX_FORCE_DEV__ === true) {
+            isDev = true;
+          }
+
+          if (!isDev) {
+            var blockKey = function(e) {
+              var key = (e.key || '').toLowerCase();
+              var code = e.code || '';
+              var keyCode = e.keyCode || (e.which || 0);
+              var isCtrlOrMeta = (e.ctrlKey || e.metaKey) && !e.altKey;
+
+              var isF5 = key === 'f5' || code === 'F5' || keyCode === 116;
+              var isRefresh = key === 'browserrefresh' || key === 'refresh';
+              var isReloadR = isCtrlOrMeta && (key === 'r' || code === 'KeyR' || keyCode === 82);
+              var isDevTools = key === 'f12' || code === 'F12' || (isCtrlOrMeta && e.shiftKey && (key === 'i' || key === 'j' || key === 'c' || code === 'KeyI' || code === 'KeyJ' || code === 'KeyC'));
+              var isBrowserAction = isCtrlOrMeta && !e.shiftKey && (key === 'p' || key === 's' || key === 'u' || code === 'KeyP' || code === 'KeyS' || code === 'KeyU');
+              var isCaretOrFind = key === 'f7' || key === 'f3';
+              var isHistoryNav = e.altKey && (key === 'arrowleft' || key === 'arrowright' || code === 'ArrowLeft' || code === 'ArrowRight');
+
+              if (isF5 || isRefresh || isReloadR || isDevTools || isBrowserAction || isCaretOrFind || isHistoryNav) {
                 e.preventDefault();
                 e.stopPropagation();
+                if (typeof e.stopImmediatePropagation === 'function') {
+                  e.stopImmediatePropagation();
+                }
+                return false;
               }
-            }, true);
-            window.addEventListener('contextmenu', function(e) {
-              var tag = e.target && e.target.tagName ? e.target.tagName.toUpperCase() : '';
-              if (tag !== 'INPUT' && tag !== 'TEXTAREA') {
+            };
+
+            var blockContext = function(e) {
+              var target = e.target;
+              var tag = target && target.tagName ? target.tagName.toUpperCase() : '';
+              var isEditable = tag === 'INPUT' || tag === 'TEXTAREA' || (target && target.isContentEditable) || (target && typeof target.closest === 'function' && target.closest('[contenteditable="true"]'));
+              if (!isEditable) {
                 e.preventDefault();
+                e.stopPropagation();
+                if (typeof e.stopImmediatePropagation === 'function') {
+                  e.stopImmediatePropagation();
+                }
+                return false;
               }
-            }, true);
+            };
+
+            window.addEventListener('keydown', blockKey, { capture: true, passive: false });
+            window.addEventListener('keyup', blockKey, { capture: true, passive: false });
+            document.addEventListener('keydown', blockKey, { capture: true, passive: false });
+            document.addEventListener('keyup', blockKey, { capture: true, passive: false });
+            window.addEventListener('contextmenu', blockContext, { capture: true, passive: false });
+            document.addEventListener('contextmenu', blockContext, { capture: true, passive: false });
           }
         })();
       } catch (e) {}

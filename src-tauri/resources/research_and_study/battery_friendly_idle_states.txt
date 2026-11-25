@@ -1,0 +1,26 @@
+================================================================================
+DOWNEX RESEARCH & STUDY ESSAY #13
+Title: BATTERY-FRIENDLY IDLE STATES & LAPTOP LONGEVITY
+Author & Architect: Gaurav Patil (https://gauravpatil.site)
+Official Project: https://downex.apps.gauravpatil.site
+================================================================================
+
+When you close Downex to your system tray, what is it doing?
+
+In poorly written software, background services constantly run timers, check
+for ads, send analytics telemetry, and wake up the CPU dozens of times per
+second. On a laptop, this causes the CPU to stay in high-power states, draining
+your battery and spinning up laptop fans even when your screen is off.
+
+Downex is designed around "Deep Sleep" idle states:
+- When there are no active downloads, Downex suspends all network polling.
+- The CPU usage drops to literal 0.0%.
+- It registers a lightweight event listener with Windows that only wakes up when
+  a new download is explicitly requested (e.g., from your browser extension).
+
+Whether you leave Downex running overnight on battery or all week on desktop, it
+will never heat up your computer or drain your battery.
+
+================================================================================
+Copyright (C) 2026 Gaurav Patil. All Rights Reserved.
+================================================================================

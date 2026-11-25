@@ -1,0 +1,28 @@
+================================================================================
+DOWNEX RESEARCH & STUDY ESSAY #08
+Title: HOW AUTOMATIC PAUSE AND RESUME SAVES YOUR TIME
+Author & Architect: Gaurav Patil (https://gauravpatil.site)
+Official Project: https://downex.apps.gauravpatil.site
+================================================================================
+
+There is nothing more frustrating than downloading a 10 GB file, reaching 95%,
+and then having your internet disconnect for two seconds—only for the browser
+to say "Download Failed" and make you start over from 0%!
+
+Why did that happen? Because traditional browsers often treat a download as a
+single continuous stream. If the stream breaks, they don't know where they left
+off.
+
+Downex is built around byte-level tracking:
+- Every byte written to your drive is tracked with a precise offset index.
+- If your laptop goes to sleep, your Wi-Fi drops, or you click Pause to join a
+  Zoom meeting, Downex remembers the exact byte count saved.
+- When you reconnect or click Resume, Downex sends a "Range: bytes=X-" header to
+  the server.
+- The download resumes instantly from the exact millisecond it paused!
+
+You never lose progress, and you never waste your time or bandwidth.
+
+================================================================================
+Copyright (C) 2026 Gaurav Patil. All Rights Reserved.
+================================================================================

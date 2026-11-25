@@ -1,36 +1,10 @@
 import React, { useState, useEffect } from 'react';
-import { Button } from './ui/Button';
-import { 
-  Puzzle,
-  Copy,
-  Settings, 
-  Eye, 
-  HardDrive, 
-  FolderOpen, 
-  Check, 
-  Link2, 
-  Zap, 
-  Minimize2, 
-  Power, 
-  FileText, 
-  Wrench, 
-  RotateCcw, 
-  Trash2, 
-  Loader2, 
-  Shield, 
-  ExternalLink, 
-  ArrowUpRight,
-  Activity,
-  Sliders
-} from 'lucide-react';
 import { useDownloadStore } from '../stores/downloadStore';
 import { 
   getExtensionInfo,
   openExtensionFolder,
   ExtensionInfo,
   getDefaultDownloadDir, 
-  getMaxSegments, 
-  openFolderPicker, 
   setDefaultDownloadDir, 
   setMaxSegments as apiSetMaxSegments, 
   isAutostartEnabled, 
@@ -40,22 +14,20 @@ import {
   triggerUninstall, 
   repairApplication, 
   resetToBaseVersion, 
-  openExternalUrl, 
-  quitApp 
+  openExternalUrl,
+  getSiliconHardwareId
 } from '../services/tauriService';
-import { useAppVersionStore } from '../stores/appVersionStore';
 import { RecoveryActionModal, RecoveryActionType } from './RecoveryActionModal';
+import { FolderChangeModal } from './FolderChangeModal';
 
 interface SettingsViewProps {
   darkMode?: boolean;
   setDarkMode?: (val: boolean) => void;
 }
 
-export const SettingsView: React.FC<SettingsViewProps> = () => {
+export const SettingsView: React.FC<SettingsViewProps> = ({ darkMode = false }) => {
   const showTelemetryOnHome = useDownloadStore((state) => state.showTelemetryOnHome);
   const setShowTelemetryOnHome = useDownloadStore((state) => state.setShowTelemetryOnHome);
-  const setSelectedView = useDownloadStore((state) => state.setSelectedView);
-  const formattedVersion = useAppVersionStore((state) => state.formattedVersion);
 
   const [defaultDir, setDefaultDir] = useState<string>('Downloads\\Downex');
   const [folderFeedback, setFolderFeedback] = useState<string | null>(null);
@@ -78,21 +50,42 @@ export const SettingsView: React.FC<SettingsViewProps> = () => {
   const [closeToTray, setCloseToTray] = useState<boolean>(() => {
     try {
       const saved = localStorage.getItem('downex_close_to_tray');
-      return saved !== 'false'; // Default: true (minimize to tray)
+      return saved !== 'false';
     } catch {
       return true;
     }
   });
   const [autostart, setAutostart] = useState<boolean>(true);
-  const [savedFeedback, setSavedFeedback] = useState(false);
-  const [resetFeedback, setResetFeedback] = useState(false);
+  const [confirmReset, setConfirmReset] = useState<boolean>(false);
 
   const [extInfo, setExtInfo] = useState<ExtensionInfo | null>(null);
   const [copiedExtPath, setCopiedExtPath] = useState(false);
+  const [hardwareId, setHardwareId] = useState<string>('');
+  const [copiedHwid, setCopiedHwid] = useState(false);
+
+  // Maintenance states
+  const [isRepairing, setIsRepairing] = useState(false);
+  const [isResettingBase, setIsResettingBase] = useState(false);
+  const [isUninstalling, setIsUninstalling] = useState(false);
+  const [maintenanceMessage, setMaintenanceMessage] = useState<string | null>(null);
+  const [pendingAction, setPendingAction] = useState<RecoveryActionType>(null);
+  const [isFolderModalOpen, setIsFolderModalOpen] = useState(false);
 
   useEffect(() => {
     getExtensionInfo().then(setExtInfo).catch(console.warn);
+    getSiliconHardwareId().then(setHardwareId).catch(console.warn);
+    getDefaultDownloadDir().then((d) => {
+      if (d) setDefaultDir(d);
+    }).catch(console.warn);
+    isAutostartEnabled().then(setAutostart).catch(console.warn);
+    getCloseToTray().then(setCloseToTray).catch(console.warn);
   }, []);
+
+  useEffect(() => {
+    if (!confirmReset) return;
+    const t = window.setTimeout(() => setConfirmReset(false), 3500);
+    return () => window.clearTimeout(t);
+  }, [confirmReset]);
 
   const handleOpenExtensionFolder = async () => {
     try {
@@ -112,32 +105,100 @@ export const SettingsView: React.FC<SettingsViewProps> = () => {
     }
   };
 
+  const handleChooseFolder = () => {
+    setIsFolderModalOpen(true);
+  };
 
-  // Maintenance & Lifecycle states
-  const [isRepairing, setIsRepairing] = useState(false);
-  const [isResettingBase, setIsResettingBase] = useState(false);
-  const [isUninstalling, setIsUninstalling] = useState(false);
-  const [maintenanceMessage, setMaintenanceMessage] = useState<string | null>(null);
-  const [pendingAction, setPendingAction] = useState<RecoveryActionType>(null);
+  const handleFolderSelected = async (chosenPath: string) => {
+    setIsFolderModalOpen(false);
+    try {
+      const updated = await setDefaultDownloadDir(chosenPath);
+      setDefaultDir(updated);
+      setFolderFeedback(`Saved: ${updated}`);
+      setTimeout(() => setFolderFeedback(null), 4000);
+    } catch (e) {
+      console.warn('Failed to update download folder:', e);
+    }
+  };
+
+  const handleToggleAutostart = async () => {
+    const next = !autostart;
+    setAutostart(next);
+    try {
+      await setAutostartEnabled(next);
+    } catch (e) {
+      console.warn(e);
+      setAutostart(!next);
+    }
+  };
+
+  const handleToggleCloseToTray = async () => {
+    const next = !closeToTray;
+    setCloseToTray(next);
+    try {
+      localStorage.setItem('downex_close_to_tray', String(next));
+      await apiSetCloseToTray(next);
+    } catch (e) {
+      console.warn(e);
+      setCloseToTray(!next);
+    }
+  };
+
+  const handleToggleClipboardWatch = () => {
+    const next = !clipboardWatch;
+    setClipboardWatch(next);
+    try {
+      localStorage.setItem('downex_clipboard_watch', String(next));
+    } catch (e) {
+      console.warn(e);
+    }
+  };
+
+  const handleToggleTelemetryOnHome = () => {
+    setShowTelemetryOnHome(!showTelemetryOnHome);
+  };
+
+  const handleUpdateMaxSegments = async (val: number) => {
+    setMaxSegments(val);
+    try {
+      localStorage.setItem('downex_max_segments', String(val));
+      await apiSetMaxSegments(val);
+    } catch (e) {
+      console.warn(e);
+    }
+  };
+
+  const handleResetToDefaults = async () => {
+    try {
+      setMaxSegments(32);
+      localStorage.setItem('downex_max_segments', '32');
+      await apiSetMaxSegments(32);
+
+      setClipboardWatch(true);
+      localStorage.setItem('downex_clipboard_watch', 'true');
+
+      setCloseToTray(true);
+      localStorage.setItem('downex_close_to_tray', 'true');
+      await apiSetCloseToTray(true);
+
+      setAutostart(true);
+      await setAutostartEnabled(true);
+
+      setShowTelemetryOnHome(false);
+
+      setMaintenanceMessage('All preferences reset to recommended defaults.');
+      setTimeout(() => setMaintenanceMessage(null), 4000);
+    } catch (e: any) {
+      setMaintenanceMessage(`Reset error: ${e?.message || e}`);
+    }
+  };
 
   const executeConfirmedAction = async () => {
     if (!pendingAction) return;
     const action = pendingAction;
     setPendingAction(null);
 
-    if (action === 'reset-defaults') {
-      await handleResetToDefaults();
-    } else if (action === 'reset-folder') {
-      try {
-        const res = await setDefaultDownloadDir('');
-        setDefaultDir(res);
-        setFolderFeedback(`Reset to default Downex folder: ${res}`);
-        triggerSaved();
-        setTimeout(() => setFolderFeedback(null), 5000);
-      } catch (e) {
-        console.warn(e);
-      }
-    } else if (action === 'repair') {
+    if (action === 'repair') {
       setIsRepairing(true);
       setMaintenanceMessage('Sweeping legacy artifacts and restarting supervisor...');
       try {
@@ -148,698 +209,400 @@ export const SettingsView: React.FC<SettingsViewProps> = () => {
       }
     } else if (action === 'reset-base') {
       setIsResettingBase(true);
-      setMaintenanceMessage('Fetching verified Base 0.0.1 installer from GPHost...');
+      setMaintenanceMessage('Reverting to verified base installer binary v0.0.1...');
       try {
-        const res = await resetToBaseVersion();
-        setMaintenanceMessage(res || 'Base reset initiated. Restarting...');
+        await resetToBaseVersion();
       } catch (err: any) {
         setIsResettingBase(false);
-        setMaintenanceMessage(`Reset failed: ${err?.message || err}`);
+        setMaintenanceMessage(`Revert error: ${err?.message || err}`);
       }
     } else if (action === 'uninstall') {
       setIsUninstalling(true);
-      setMaintenanceMessage('Launching native Windows uninstaller wizard...');
+      setMaintenanceMessage('Launching Windows uninstaller...');
       try {
         await triggerUninstall();
       } catch (err: any) {
         setIsUninstalling(false);
-        setMaintenanceMessage(`Could not launch uninstaller: ${err?.message || err}`);
-      }
-    } else if (action === 'stop-engine') {
-      try {
-        await quitApp();
-      } catch (err: any) {
-        setMaintenanceMessage(`Could not stop background engine: ${err?.message || err}`);
+        setMaintenanceMessage(`Uninstall launch error: ${err?.message || err}`);
       }
     }
   };
 
-  useEffect(() => {
-    getDefaultDownloadDir()
-      .then((dir) => {
-        if (dir) setDefaultDir(dir);
-      })
-      .catch(() => {});
-
-    getMaxSegments()
-      .then((count) => {
-        if (count) setMaxSegments(count);
-      })
-      .catch(() => {});
-
-    isAutostartEnabled()
-      .then((enabled) => {
-        setAutostart(enabled);
-      })
-      .catch(() => {});
-
-    getCloseToTray()
-      .then((enabled) => {
-        setCloseToTray(enabled);
-      })
-      .catch(() => {});
-  }, []);
-
-  const handlePickFolder = async () => {
-    try {
-      const picked = await openFolderPicker();
-      if (picked && picked.trim()) {
-        const saved = await setDefaultDownloadDir(picked.trim());
-        setDefaultDir(saved);
-        setFolderFeedback(`New downloads will save to: ${saved}`);
-        triggerSaved();
-        setTimeout(() => setFolderFeedback(null), 5000);
-      }
-    } catch (e) {
-      console.warn('Failed to pick folder:', e);
-      alert('Could not update download directory: ' + e);
-    }
-  };
-
-  const handleSegmentChange = async (count: number) => {
-    setMaxSegments(count);
-    localStorage.setItem('downex_max_segments', String(count));
-    await apiSetMaxSegments(count).catch(() => {});
-    triggerSaved();
-  };
-
-  const handleClipboardToggle = (val: boolean) => {
-    setClipboardWatch(val);
-    localStorage.setItem('downex_clipboard_watch', String(val));
-    triggerSaved();
-  };
-
-  const handleCloseToTrayToggle = async (val: boolean) => {
-    setCloseToTray(val);
-    localStorage.setItem('downex_close_to_tray', String(val));
-    try {
-      await apiSetCloseToTray(val);
-    } catch (e) {
-      console.warn('Failed to toggle close_to_tray:', e);
-    }
-    triggerSaved();
-  };
-
-  const handleAutostartToggle = async (val: boolean) => {
-    setAutostart(val);
-    try {
-      await setAutostartEnabled(val);
-    } catch (e) {
-      console.warn('Failed to toggle autostart:', e);
-    }
-    triggerSaved();
-  };
-
-  const triggerSaved = () => {
-    setSavedFeedback(true);
-    setTimeout(() => setSavedFeedback(false), 2000);
-  };
-
-  // Enterprise Reset to Defaults:
-  // - System Tray: ON
-  // - Launch on Startup: ON
-  // - Clipboard Auto-Detection: ON
-  // - Homepage Speed Panel: OFF (Clean mode)
-  // - Max Connections per File: 16 (Recommended)
-  // - Download Directory: Default user Downloads\Downex
-  const handleResetToDefaults = async () => {
-    setCloseToTray(true);
-    localStorage.setItem('downex_close_to_tray', 'true');
-    await apiSetCloseToTray(true).catch(() => {});
-
-    setAutostart(true);
-    try {
-      await setAutostartEnabled(true);
-    } catch {}
-
-    setClipboardWatch(true);
-    localStorage.setItem('downex_clipboard_watch', 'true');
-
-    setShowTelemetryOnHome(false);
-
-    setMaxSegments(16);
-    localStorage.setItem('downex_max_segments', '16');
-    await apiSetMaxSegments(16).catch(() => {});
-
-    try {
-      const res = await setDefaultDownloadDir('');
-      setDefaultDir(res);
-      setFolderFeedback(`Folder reset to default: ${res}`);
-      setTimeout(() => setFolderFeedback(null), 4000);
-    } catch {}
-
-    setResetFeedback(true);
-    setTimeout(() => setResetFeedback(false), 3500);
-  };
+  const cardBorder = darkMode ? 'border-zinc-800' : 'border-zinc-200';
+  const mutedText = darkMode ? 'text-zinc-400' : 'text-zinc-500';
+  const actionSize =
+    'w-[148px] h-8 inline-flex items-center justify-center font-mono-tabular text-[11px] uppercase tracking-wider border whitespace-nowrap shrink-0 cursor-pointer';
 
   return (
-    <div className="flex-1 h-full min-h-0 overflow-y-auto px-6 py-5 select-none bg-white dark:bg-zinc-950">
-      <div className="max-w-3xl mx-auto space-y-6 pb-12">
-        {/* Top Header with Reset to Defaults and Status Feedback */}
-        <div className="flex items-center justify-between pb-4 border-b border-zinc-200/80 dark:border-zinc-800/80">
-          <div>
-            <div className="flex items-center gap-2">
-              <Settings className="w-5 h-5 text-zinc-900 dark:text-zinc-100" />
-              <h1 className="text-base font-bold tracking-tight text-zinc-900 dark:text-zinc-100">
-                Settings
-              </h1>
-            </div>
-            <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-0.5">
-              Manage your download preferences, startup behavior, and storage.
-            </p>
+    <div className="flex-1 overflow-y-auto px-7 pt-4 pb-0 select-none flex flex-col">
+      <div className="flex-1">
+        {/* Header (1:1 ScheduleMe) */}
+        <div className="mb-4">
+          <div className={`font-mono-tabular text-[11px] uppercase tracking-[0.08em] ${mutedText}`}>
+            PREFERENCES
           </div>
-
-          <div className="flex items-center gap-2">
-            {resetFeedback && (
-              <div className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-300 dark:border-emerald-800 text-[11px] font-mono text-emerald-600 dark:text-emerald-400 animate-in fade-in duration-200">
-                <Check className="w-3.5 h-3.5 stroke-[2.5]" />
-                <span>Defaults Restored (Tray & Startup ON)</span>
-              </div>
-            )}
-
-            {savedFeedback && !resetFeedback && (
-              <div className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-300 dark:border-emerald-800 text-[11px] font-mono text-emerald-600 dark:text-emerald-400 animate-in fade-in duration-200">
-                <Check className="w-3.5 h-3.5 stroke-[2.5]" />
-                <span>Saved</span>
-              </div>
-            )}
-
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              icon={<RotateCcw className="w-3.5 h-3.5" />}
-              onClick={() => setPendingAction('reset-defaults')}
-              title="Reset all settings to recommended defaults (System Tray & Startup ON)"
-            >
-              Reset to Defaults
-            </Button>
-          </div>
+          <h1 className="text-[26px] font-bold tracking-tight leading-tight mt-0.5">Settings.</h1>
         </div>
 
-        {/* SECTION 1: GENERAL & SYSTEM BEHAVIOR (Clubbed Card) */}
-        <div className="space-y-2">
-          <div className="flex items-center gap-2 px-1">
-            <Sliders className="w-4 h-4 text-zinc-500 dark:text-zinc-400" />
-            <h2 className="text-xs font-semibold uppercase tracking-wider text-zinc-600 dark:text-zinc-400">
-              General & Startup
-            </h2>
-          </div>
+      {/* Info Banner (1:1 ScheduleMe) */}
+      <div
+        className={`border p-3 mb-4 text-[12px] leading-relaxed ${
+          darkMode
+            ? 'bg-violet-950/30 border-violet-900/60 text-violet-200'
+            : 'bg-[#F8F7FF] border-[#E9D5FF] text-zinc-700'
+        }`}
+      >
+        <div className="font-semibold text-[13px] mb-0.5">Download preferences stay safe across restarts</div>
+        Downex manages multi-connection downloads, startup behavior, and browser links quietly in the background.
+      </div>
 
-          <div className="rounded-xl bg-zinc-50/70 dark:bg-zinc-900/40 border border-zinc-200/80 dark:border-zinc-800/60 shadow-xs divide-y divide-zinc-200/60 dark:divide-zinc-800/60">
-            {/* Toggle 1: Start Downex with Windows */}
-            <div className="p-4 flex items-center justify-between gap-4">
-              <div className="space-y-0.5">
-                <div className="flex items-center gap-2">
-                  <Power className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
-                  <span className="text-xs font-semibold text-zinc-900 dark:text-zinc-100">
-                    Start Downex with Windows
-                  </span>
-                  <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-emerald-100 dark:bg-emerald-950/80 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800">
-                    Recommended: ON
-                  </span>
-                </div>
-                <p className="text-[11px] text-zinc-500 dark:text-zinc-400 max-w-xl">
-                  Automatically start Downex in the background tray when your computer boots up so browser downloads are captured seamlessly.
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={() => handleAutostartToggle(!autostart)}
-                className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
-                  autostart ? 'bg-emerald-600' : 'bg-zinc-300 dark:bg-zinc-700'
-                }`}
-              >
-                <span
-                  className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-sm ring-0 transition duration-200 ease-in-out ${
-                    autostart ? 'translate-x-5' : 'translate-x-0'
-                  }`}
-                />
-              </button>
-            </div>
-
-            {/* Toggle 2: Minimize to System Tray on Close */}
-            <div className="p-4 flex items-center justify-between gap-4">
-              <div className="space-y-0.5">
-                <div className="flex items-center gap-2">
-                  <Minimize2 className="w-4 h-4 text-blue-600 dark:text-blue-400 shrink-0" />
-                  <span className="text-xs font-semibold text-zinc-900 dark:text-zinc-100">
-                    Keep running in system tray on close
-                  </span>
-                  <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-blue-100 dark:bg-blue-950/80 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-800">
-                    Recommended: ON
-                  </span>
-                </div>
-                <p className="text-[11px] text-zinc-500 dark:text-zinc-400 max-w-xl">
-                  Closing the main window minimizes Downex to the taskbar notification tray so active downloads continue uninterrupted.
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={() => handleCloseToTrayToggle(!closeToTray)}
-                className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
-                  closeToTray ? 'bg-blue-600' : 'bg-zinc-300 dark:bg-zinc-700'
-                }`}
-              >
-                <span
-                  className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-sm ring-0 transition duration-200 ease-in-out ${
-                    closeToTray ? 'translate-x-5' : 'translate-x-0'
-                  }`}
-                />
-              </button>
-            </div>
-
-            {/* Toggle 3: Clipboard URL Auto-Detection */}
-            <div className="p-4 flex items-center justify-between gap-4">
-              <div className="space-y-0.5">
-                <div className="flex items-center gap-2">
-                  <Link2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
-                  <span className="text-xs font-semibold text-zinc-900 dark:text-zinc-100">
-                    Clipboard link auto-detection
-                  </span>
-                </div>
-                <p className="text-[11px] text-zinc-500 dark:text-zinc-400 max-w-xl">
-                  Automatically detect copied download links from your clipboard and pre-fill them when opening New Download.
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={() => handleClipboardToggle(!clipboardWatch)}
-                className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
-                  clipboardWatch ? 'bg-emerald-600' : 'bg-zinc-300 dark:bg-zinc-700'
-                }`}
-              >
-                <span
-                  className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-sm ring-0 transition duration-200 ease-in-out ${
-                    clipboardWatch ? 'translate-x-5' : 'translate-x-0'
-                  }`}
-                />
-              </button>
-            </div>
-
-            {/* Toggle 4: Homepage Speed Panel */}
-            <div className="p-4 flex items-center justify-between gap-4">
-              <div className="space-y-0.5">
-                <div className="flex items-center gap-2">
-                  <Eye className="w-4 h-4 text-zinc-600 dark:text-zinc-400 shrink-0" />
-                  <span className="text-xs font-semibold text-zinc-900 dark:text-zinc-100">
-                    Show speed panel on home page
-                  </span>
-                  <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-zinc-200/80 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400">
-                    Default: OFF
-                  </span>
-                </div>
-                <p className="text-[11px] text-zinc-500 dark:text-zinc-400 max-w-xl">
-                  Display the live speed sparkline panel directly on your downloads homepage. Keep off for maximum download space.
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={() => {
-                  setShowTelemetryOnHome(!showTelemetryOnHome);
-                  triggerSaved();
-                }}
-                className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
-                  showTelemetryOnHome ? 'bg-blue-600' : 'bg-zinc-300 dark:bg-zinc-700'
-                }`}
-              >
-                <span
-                  className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-sm ring-0 transition duration-200 ease-in-out ${
-                    showTelemetryOnHome ? 'translate-x-5' : 'translate-x-0'
-                  }`}
-                />
-              </button>
+      {/* Main Settings Card (1:1 ScheduleMe) */}
+      <div className={`border divide-y ${cardBorder} ${darkMode ? 'divide-zinc-800' : 'divide-zinc-200'}`}>
+        {/* Row 1: Start with Windows */}
+        <div className="px-4 py-3 flex items-center justify-between gap-4">
+          <div className="min-w-0 flex-1">
+            <div className="text-[13px] font-semibold">Start with Windows</div>
+            <div className={`text-[12px] ${mutedText}`}>
+              Opens quietly in tray when Windows starts ({autostart ? 'Ready' : 'Off'}).
             </div>
           </div>
-        </div>
-
-        {/* SECTION 2: DOWNLOADS & SPEED (Clubbed Card) */}
-        <div className="space-y-2">
-          <div className="flex items-center gap-2 px-1">
-            <HardDrive className="w-4 h-4 text-zinc-500 dark:text-zinc-400" />
-            <h2 className="text-xs font-semibold uppercase tracking-wider text-zinc-600 dark:text-zinc-400">
-              Downloads & Speed
-            </h2>
-          </div>
-
-          <div className="rounded-xl bg-zinc-50/70 dark:bg-zinc-900/40 border border-zinc-200/80 dark:border-zinc-800/60 shadow-xs divide-y divide-zinc-200/60 dark:divide-zinc-800/60">
-            {/* Option 1: Default Download Folder */}
-            <div className="p-4 space-y-2.5">
-              <div className="flex items-center justify-between">
-                <div className="space-y-0.5">
-                  <div className="flex items-center gap-2">
-                    <FolderOpen className="w-4 h-4 text-zinc-700 dark:text-zinc-300 shrink-0" />
-                    <span className="text-xs font-semibold text-zinc-900 dark:text-zinc-100">
-                      Default download folder
-                    </span>
-                  </div>
-                  <p className="text-[11px] text-zinc-500 dark:text-zinc-400">
-                    Where newly added downloads will be saved. Completed files remain safely in their original folders.
-                  </p>
-                </div>
-
-                <div className="flex items-center gap-2">
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    icon={<RotateCcw className="w-3.5 h-3.5" />}
-                    onClick={() => setPendingAction('reset-folder')}
-                    title="Reset download folder to default (%USERPROFILE%\Downloads\Downex)"
-                  >
-                    Reset
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="primary"
-                    size="md"
-                    icon={<FolderOpen className="w-3.5 h-3.5" />}
-                    onClick={handlePickFolder}
-                  >
-                    Change Folder...
-                  </Button>
-                </div>
-              </div>
-
-              {/* Current Path Badge */}
-              <div className="p-2.5 rounded-lg bg-zinc-100 dark:bg-zinc-800/80 border border-zinc-200/60 dark:border-zinc-700/60 flex items-center justify-between">
-                <span className="text-xs font-mono font-medium text-zinc-800 dark:text-zinc-200 truncate select-text" title={defaultDir}>
-                  📁 {defaultDir}
-                </span>
-                <span className="text-[10px] font-mono text-emerald-600 dark:text-emerald-400 font-semibold shrink-0 ml-2">
-                  ACTIVE
-                </span>
-              </div>
-
-              {/* Folder Feedback Alert */}
-              {folderFeedback && (
-                <div className="p-2.5 rounded-lg bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-300 dark:border-emerald-800 text-xs font-mono text-emerald-700 dark:text-emerald-300 flex items-center gap-2">
-                  <Check className="w-4 h-4 text-emerald-600 shrink-0 stroke-[2.5]" />
-                  <span>{folderFeedback}</span>
-                </div>
-              )}
-            </div>
-
-            {/* Option 2: Download Speed Acceleration (Parts per download) */}
-            <div className="p-4 flex items-center justify-between gap-4">
-              <div className="space-y-0.5">
-                <div className="flex items-center gap-2">
-                  <Zap className="w-4 h-4 text-amber-500 shrink-0" />
-                  <span className="text-xs font-semibold text-zinc-900 dark:text-zinc-100">
-                    Download acceleration (Connections per file)
-                  </span>
-                </div>
-                <p className="text-[11px] text-zinc-500 dark:text-zinc-400">
-                  Splits downloads into multi-part streams to maximize transfer speed.
-                </p>
-              </div>
-
-              <div className="flex items-center gap-1.5 font-mono text-xs">
-                {[4, 8, 16, 32].map((num) => (
-                  <button
-                    key={num}
-                    type="button"
-                    onClick={() => handleSegmentChange(num)}
-                    className={`px-3 py-1.5 rounded-md text-xs font-semibold cursor-pointer transition-colors ${
-                      maxSegments === num
-                        ? 'bg-zinc-900 text-white dark:bg-white dark:text-zinc-900 shadow-xs'
-                        : 'bg-zinc-200/70 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400 hover:bg-zinc-300/60 dark:hover:bg-zinc-700'
-                    }`}
-                  >
-                    {num} {num === 16 ? '★' : ''}
-                  </button>
-                ))}
-              </div>
-            </div>
-          </div>
-        </div>
-
-                {/* SECTION: BROWSER COMPANION EXTENSION (PERMANENT BACKGROUND LINK GRABBER) */}
-        <div className="space-y-2">
-          <div className="flex items-center gap-2 px-1">
-            <Puzzle className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
-            <h2 className="text-xs font-semibold uppercase tracking-wider text-zinc-600 dark:text-zinc-400">
-              Browser Companion Extension
-            </h2>
-            <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-950/80 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 font-bold">
-              Background Link Grabber
-            </span>
-          </div>
-
-          <div className="rounded-xl bg-zinc-50/70 dark:bg-zinc-900/40 border border-zinc-200/80 dark:border-zinc-800/60 shadow-xs p-4 space-y-3.5">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-              <div className="space-y-1">
-                <div className="flex items-center gap-2">
-                  <span className="text-xs font-semibold text-zinc-900 dark:text-zinc-100">
-                    Chrome, Edge & Chromium Integration
-                  </span>
-                  <span className="text-[10px] font-mono text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/50 px-1.5 py-0.5 rounded border border-emerald-200/60 dark:border-emerald-800/60">
-                    Active
-                  </span>
-                </div>
-                <p className="text-[11px] text-zinc-500 dark:text-zinc-400 max-w-xl leading-relaxed">
-                  Quietly runs in the background to intercept downloads (.zip, .exe, .iso, etc.) and forward them to Downex. Install once into your browser — zero UI, zero bloat, and no update maintenance needed.
-                </p>
-              </div>
-
-              <div className="flex items-center gap-2 shrink-0">
-                <Button
-                  type="button"
-                  variant="primary"
-                  size="sm"
-                  onClick={handleOpenExtensionFolder}
-                  icon={<FolderOpen className="w-3.5 h-3.5" />}
-                  className="whitespace-nowrap shrink-0"
-                  title="Open folder in File Explorer to load unpacked in chrome://extensions"
-                >
-                  Open Folder
-                </Button>
-              </div>
-            </div>
-
-            {/* Path Box */}
-            <div className="flex items-center justify-between px-3 py-2 rounded-lg bg-white dark:bg-zinc-950/80 border border-zinc-200 dark:border-zinc-800 text-[11px] font-mono text-zinc-600 dark:text-zinc-400">
-              <span className="truncate mr-2 select-all">
-                {extInfo?.canonical_dir || 'Loading canonical extension path...'}
-              </span>
-              <button
-                type="button"
-                onClick={handleCopyExtPath}
-                className="flex items-center gap-1 text-[11px] font-sans font-semibold text-emerald-600 dark:text-emerald-400 hover:underline shrink-0 cursor-pointer"
-              >
-                {copiedExtPath ? <Check className="w-3.5 h-3.5 text-emerald-500" /> : <Copy className="w-3.5 h-3.5" />}
-                <span>{copiedExtPath ? 'Copied' : 'Copy Path'}</span>
-              </button>
-            </div>
-
-            {/* 3-Step Setup Instructions */}
-            <div className="p-3 rounded-lg bg-zinc-100/60 dark:bg-zinc-800/40 border border-zinc-200/60 dark:border-zinc-800/60 text-[11px] text-zinc-600 dark:text-zinc-400 space-y-1">
-              <div className="font-semibold text-zinc-800 dark:text-zinc-200 mb-1">
-                30-Second One-Time Setup:
-              </div>
-              <div>1. Click <strong className="text-zinc-900 dark:text-zinc-100">Open Folder</strong> to reveal the extension directory on your machine.</div>
-              <div>2. In Chrome or Edge, navigate to <code className="px-1 py-0.5 rounded bg-zinc-200 dark:bg-zinc-700 text-zinc-800 dark:text-zinc-200 font-mono text-[10px]">chrome://extensions</code> and switch on <strong className="text-zinc-900 dark:text-zinc-100">Developer mode</strong>.</div>
-              <div>3. Click <strong className="text-zinc-900 dark:text-zinc-100">Load unpacked</strong> and select the extension folder. Done! Downex will seamlessly intercept your downloads in the background.</div>
-            </div>
-          </div>
-        </div>
-
-        {/* SECTION 3: LIVE SPEED & STATS SHORTCUT (Compact Enterprise Banner) */}
-        <div className="p-3.5 rounded-xl bg-zinc-50/70 dark:bg-zinc-900/40 border border-zinc-200/80 dark:border-zinc-800/60 shadow-xs flex items-center justify-between gap-4">
-          <div className="flex items-center gap-3">
-            <div className="w-8 h-8 rounded-lg bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-200 dark:border-emerald-800 flex items-center justify-center shrink-0">
-              <Activity className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
-            </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <span className="text-xs font-semibold text-zinc-900 dark:text-zinc-100">
-                  Download Speed & Statistics
-                </span>
-                <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" title="Engine Active" />
-              </div>
-              <p className="text-[11px] text-zinc-500 dark:text-zinc-400">
-                View real-time transfer graphs, active connection threads, and lifetime data history.
-              </p>
-            </div>
-          </div>
-
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            iconRight={<ArrowUpRight className="w-3.5 h-3.5" />}
-            onClick={() => setSelectedView('telemetry')}
-          >
-            Open Speed & Stats
-          </Button>
-        </div>
-
-        {/* SECTION 4: ABOUT & APP VERSION */}
-        <div className="space-y-2">
-          <div className="flex items-center gap-2 px-1">
-            <FileText className="w-4 h-4 text-zinc-500 dark:text-zinc-400" />
-            <h2 className="text-xs font-semibold uppercase tracking-wider text-zinc-600 dark:text-zinc-400">
-              About Downex
-            </h2>
-          </div>
-
-          <div className="rounded-xl bg-zinc-50/70 dark:bg-zinc-900/40 border border-zinc-200/80 dark:border-zinc-800/60 shadow-xs p-4 flex items-center justify-between gap-4">
-            <div className="space-y-0.5">
-              <div className="flex items-center gap-2">
-                <span className="text-xs font-semibold text-zinc-900 dark:text-zinc-100">
-                  Downex Desktop
-                </span>
-                <span className="px-2 py-0.5 rounded-md text-[10px] font-mono font-semibold bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 border border-zinc-200/80 dark:border-zinc-700/80 shadow-2xs">
-                  {formattedVersion}
-                </span>
-              </div>
-              <p className="text-[11px] text-zinc-500 dark:text-zinc-400">
-                Independent High-Performance Windows Download Manager
-              </p>
-            </div>
-          </div>
-        </div>
-
-        {/* SECTION 5: TROUBLESHOOTING & APP MANAGEMENT (Subtle, Non-Intimidating Clubbed Card) */}
-        <div className="space-y-2">
-          <div className="flex items-center justify-between px-1">
-            <div className="flex items-center gap-2">
-              <Wrench className="w-4 h-4 text-zinc-500 dark:text-zinc-400" />
-              <h2 className="text-xs font-semibold uppercase tracking-wider text-zinc-600 dark:text-zinc-400">
-                Troubleshooting & Maintenance
-              </h2>
-            </div>
-            <span className="text-[10px] font-mono text-zinc-400 dark:text-zinc-500">
-              Quick tools to fix locks, clear cache, or reinstall
-            </span>
-          </div>
-
-          {maintenanceMessage && (
-            <div className="p-3 rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-800 text-xs font-mono text-amber-800 dark:text-amber-300 flex items-center gap-2 shadow-xs">
-              <Loader2 className="w-4 h-4 animate-spin shrink-0 text-amber-600 dark:text-amber-400" />
-              <span>{maintenanceMessage}</span>
-            </div>
-          )}
-
-          <div className="rounded-xl bg-zinc-50/70 dark:bg-zinc-900/40 border border-zinc-200/80 dark:border-zinc-800/60 shadow-xs divide-y divide-zinc-200/60 dark:divide-zinc-800/60">
-            {/* Tool 1: Clean App Repair */}
-            <div className="p-3 sm:p-3.5 flex items-center justify-between gap-4">
-              <div className="space-y-0.5 min-w-0 flex-1">
-                <span className="text-xs font-semibold text-zinc-900 dark:text-zinc-100">
-                  Repair App & Clear Cache
-                </span>
-                <p className="text-[11px] text-zinc-500 dark:text-zinc-400">
-                  Clears temporary cached files, refreshes database connections, and restarts Downex cleanly.
-                </p>
-              </div>
-
-              <Button
-                type="button"
-                variant="outline"
-                size="md"
-                className="w-36 shrink-0"
-                icon={<Wrench className="w-3.5 h-3.5" />}
-                loading={isRepairing}
-                loadingText="Repairing..."
-                disabled={isResettingBase}
-                onClick={() => setPendingAction('repair')}
-              >
-                Run Repair
-              </Button>
-            </div>
-
-            {/* Tool 2: Reset to Original Foundation (v0.0.1) */}
-            <div className="p-3 sm:p-3.5 flex items-center justify-between gap-4">
-              <div className="space-y-0.5 min-w-0 flex-1">
-                <span className="text-xs font-semibold text-zinc-900 dark:text-zinc-100">
-                  Revert to Base Version (v0.0.1)
-                </span>
-                <p className="text-[11px] text-zinc-500 dark:text-zinc-400">
-                  Reverts the application back to the clean original installer if an update ever causes an issue.
-                </p>
-              </div>
-
-              <Button
-                type="button"
-                variant="outline"
-                size="md"
-                className="w-36 shrink-0"
-                icon={<RotateCcw className="w-3.5 h-3.5" />}
-                loading={isResettingBase}
-                loadingText="Reverting..."
-                disabled={isRepairing}
-                onClick={() => setPendingAction('reset-base')}
-              >
-                Reset to v0.0.1
-              </Button>
-            </div>
-
-            {/* Tool 3: Stop Background Engine & Exit */}
-            <div className="p-3 sm:p-3.5 flex items-center justify-between gap-4">
-              <div className="space-y-0.5 min-w-0 flex-1">
-                <span className="text-xs font-semibold text-zinc-900 dark:text-zinc-100">
-                  Exit Downex completely
-                </span>
-                <p className="text-[11px] text-zinc-500 dark:text-zinc-400">
-                  Completely closes all Downex windows and stops the background system tray engine.
-                </p>
-              </div>
-
-              <Button
-                type="button"
-                variant="outline"
-                size="md"
-                className="w-36 shrink-0"
-                icon={<Power className="w-3.5 h-3.5" />}
-                onClick={() => setPendingAction('stop-engine')}
-              >
-                Exit App
-              </Button>
-            </div>
-
-            {/* Tool 4: Uninstall Downex */}
-            <div className="p-3 sm:p-3.5 flex items-center justify-between gap-4">
-              <div className="space-y-0.5 min-w-0 flex-1">
-                <span className="text-xs font-semibold text-rose-600 dark:text-rose-400">
-                  Uninstall Downex
-                </span>
-                <p className="text-[11px] text-zinc-500 dark:text-zinc-400">
-                  Cleanly remove the Downex desktop application from your Windows computer.
-                </p>
-              </div>
-
-              <Button
-                type="button"
-                variant="destructive"
-                size="md"
-                className="w-36 shrink-0"
-                icon={<Trash2 className="w-3.5 h-3.5" />}
-                loading={isUninstalling}
-                loadingText="Launching..."
-                onClick={() => setPendingAction('uninstall')}
-              >
-                Uninstall
-              </Button>
-            </div>
-          </div>
-        </div>
-
-        {/* Minimal Footer & Terms */}
-        <div className="pt-2 border-t border-zinc-200/60 dark:border-zinc-800/60 flex items-center justify-between text-[11px] text-zinc-400 dark:text-zinc-500">
-          <div className="flex items-center gap-1.5">
-            <Shield className="w-3.5 h-3.5 text-zinc-400" />
-            <span>Downex Desktop Manager</span>
-          </div>
-
           <button
             type="button"
-            onClick={() => openExternalUrl('https://downex.gauravpatil.site#terms')}
-            className="hover:text-zinc-600 dark:hover:text-zinc-300 hover:underline cursor-pointer inline-flex items-center gap-1"
+            onClick={handleToggleAutostart}
+            className={`${actionSize} ${
+              autostart
+                ? darkMode
+                  ? 'bg-white text-zinc-950 border-white font-semibold'
+                  : 'bg-black text-white border-black font-semibold'
+                : darkMode
+                  ? 'border-zinc-700 text-zinc-300'
+                  : 'border-zinc-300 text-zinc-700'
+            }`}
           >
-            <span>Terms & Privacy Policy</span>
-            <ExternalLink className="w-3 h-3" />
+            {autostart ? 'ON' : 'OFF'}
           </button>
         </div>
+
+        {/* Row 2: Keep running in system tray on close */}
+        <div className="px-4 py-3 flex items-center justify-between gap-4">
+          <div className="min-w-0 flex-1">
+            <div className="text-[13px] font-semibold">Keep running in system tray on close</div>
+            <div className={`text-[12px] ${mutedText}`}>
+              Closing the main window minimizes to the system notification tray.
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={handleToggleCloseToTray}
+            className={`${actionSize} ${
+              closeToTray
+                ? darkMode
+                  ? 'bg-white text-zinc-950 border-white font-semibold'
+                  : 'bg-black text-white border-black font-semibold'
+                : darkMode
+                  ? 'border-zinc-700 text-zinc-300'
+                  : 'border-zinc-300 text-zinc-700'
+            }`}
+          >
+            {closeToTray ? 'ON' : 'OFF'}
+          </button>
+        </div>
+
+        {/* Row 3: Clipboard link auto-detection */}
+        <div className="px-4 py-3 flex items-center justify-between gap-4">
+          <div className="min-w-0 flex-1">
+            <div className="text-[13px] font-semibold">Clipboard link auto-detection</div>
+            <div className={`text-[12px] ${mutedText}`}>
+              Automatically detects copied download URLs and pre-fills New Download.
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={handleToggleClipboardWatch}
+            className={`${actionSize} ${
+              clipboardWatch
+                ? darkMode
+                  ? 'bg-white text-zinc-950 border-white font-semibold'
+                  : 'bg-black text-white border-black font-semibold'
+                : darkMode
+                  ? 'border-zinc-700 text-zinc-300'
+                  : 'border-zinc-300 text-zinc-700'
+            }`}
+          >
+            {clipboardWatch ? 'ON' : 'OFF'}
+          </button>
+        </div>
+
+        {/* Row 4: Show speed panel on home page */}
+        <div className="px-4 py-3 flex items-center justify-between gap-4">
+          <div className="min-w-0 flex-1">
+            <div className="text-[13px] font-semibold">Show speed panel on home page</div>
+            <div className={`text-[12px] ${mutedText}`}>
+              Display the live speed sparkline panel directly on your downloads home.
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={handleToggleTelemetryOnHome}
+            className={`${actionSize} ${
+              showTelemetryOnHome
+                ? darkMode
+                  ? 'bg-white text-zinc-950 border-white font-semibold'
+                  : 'bg-black text-white border-black font-semibold'
+                : darkMode
+                  ? 'border-zinc-700 text-zinc-300'
+                  : 'border-zinc-300 text-zinc-700'
+            }`}
+          >
+            {showTelemetryOnHome ? 'ON' : 'OFF'}
+          </button>
+        </div>
+
+        {/* Row 5: Download acceleration (Multi-segment selector) */}
+        <div className="px-4 py-3 flex items-center justify-between gap-4">
+          <div className="min-w-0 flex-1">
+            <div className="text-[13px] font-semibold">Download acceleration</div>
+            <div className={`text-[12px] ${mutedText}`}>
+              Maximum simultaneous parallel connections per download.
+            </div>
+          </div>
+          <div
+            className={`w-[148px] h-8 grid grid-cols-4 shrink-0 border ${
+              darkMode ? 'border-zinc-700' : 'border-zinc-300'
+            }`}
+          >
+            {[4, 8, 16, 32].map((threads) => {
+              const active = maxSegments === threads;
+              return (
+                <button
+                  key={threads}
+                  type="button"
+                  onClick={() => handleUpdateMaxSegments(threads)}
+                  className={`w-full h-full flex items-center justify-center font-mono-tabular text-[11px] cursor-pointer ${
+                    active
+                      ? darkMode
+                        ? 'bg-white text-zinc-950 font-semibold'
+                        : 'bg-black text-white font-semibold'
+                      : mutedText
+                  }`}
+                >
+                  {threads}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Row 6: Default download folder */}
+        <div className="px-4 py-3 flex items-center justify-between gap-4">
+          <div className="min-w-0 flex-1">
+            <div className="text-[13px] font-semibold">Default download folder</div>
+            <div className={`text-[12px] ${mutedText}`}>
+              Where newly captured and downloaded files are saved.
+            </div>
+            <div className="font-mono-tabular text-[11px] text-zinc-500 dark:text-zinc-400 mt-0.5 truncate max-w-sm sm:max-w-md">
+              {defaultDir}
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={handleChooseFolder}
+            className={`${actionSize} ${
+              darkMode
+                ? 'border-zinc-700 text-zinc-300 hover:bg-zinc-800'
+                : 'border-zinc-300 text-zinc-700 hover:bg-zinc-100'
+            }`}
+          >
+            CHANGE FOLDER
+          </button>
+        </div>
+
+        {/* Row 7: Browser companion extension */}
+        <div className="px-4 py-3 flex items-center justify-between gap-4">
+          <div className="min-w-0 flex-1">
+            <div className="text-[13px] font-semibold">Browser companion extension</div>
+            <div className={`text-[12px] ${mutedText}`}>
+              Direct download capture for Chrome, Edge, Brave, and Opera.
+            </div>
+            <div
+              onClick={handleCopyExtPath}
+              title="Click to copy path"
+              className="font-mono-tabular text-[11px] text-zinc-500 dark:text-zinc-400 mt-0.5 truncate max-w-sm sm:max-w-md cursor-pointer hover:underline"
+            >
+              {copiedExtPath ? 'Copied to clipboard!' : extInfo?.canonical_dir || 'Extension directory'}
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={handleOpenExtensionFolder}
+            className={`${actionSize} ${
+              darkMode
+                ? 'border-zinc-700 text-zinc-300 hover:bg-zinc-800'
+                : 'border-zinc-300 text-zinc-700 hover:bg-zinc-100'
+            }`}
+          >
+            OPEN FOLDER
+          </button>
+        </div>
+
+        {/* Row 8: Repair app & clean cache */}
+        <div className="px-4 py-3 flex items-center justify-between gap-4">
+          <div className="min-w-0 flex-1">
+            <div className="text-[13px] font-semibold">Repair app & clean cache</div>
+            <div className={`text-[12px] ${mutedText}`}>
+              Sweeps superseded files, repairs Windows locks, and refreshes supervisor.
+            </div>
+          </div>
+          <button
+            type="button"
+            disabled={isRepairing || isResettingBase}
+            onClick={() => setPendingAction('repair')}
+            className={`${actionSize} ${
+              darkMode
+                ? 'border-zinc-700 text-zinc-300 hover:bg-zinc-800'
+                : 'border-zinc-300 text-zinc-700 hover:bg-zinc-100'
+            }`}
+          >
+            {isRepairing ? 'REPAIRING...' : 'RUN REPAIR'}
+          </button>
+        </div>
+
+        {/* Row 9: Revert to Base Version (v0.0.1) */}
+        <div className="px-4 py-3 flex items-center justify-between gap-4">
+          <div className="min-w-0 flex-1">
+            <div className="text-[13px] font-semibold">Revert to Base Version (v0.0.1)</div>
+            <div className={`text-[12px] ${mutedText}`}>
+              Reverts executable back to original installer build if an update fails.
+            </div>
+          </div>
+          <button
+            type="button"
+            disabled={isRepairing || isResettingBase}
+            onClick={() => setPendingAction('reset-base')}
+            className={`${actionSize} ${
+              darkMode
+                ? 'border-zinc-700 text-zinc-300 hover:bg-zinc-800'
+                : 'border-zinc-300 text-zinc-700 hover:bg-zinc-100'
+            }`}
+          >
+            {isResettingBase ? 'REVERTING...' : 'REVERT V0.0.1'}
+          </button>
+        </div>
+
+        {/* Row 10: Uninstall Downex */}
+        <div className="px-4 py-3 flex items-center justify-between gap-4">
+          <div className="min-w-0 flex-1">
+            <div className="text-[13px] font-semibold">Uninstall Downex</div>
+            <div className={`text-[12px] ${mutedText}`}>
+              Opens the Windows uninstaller to remove Downex cleanly.
+            </div>
+          </div>
+          <button
+            type="button"
+            disabled={isUninstalling}
+            onClick={() => setPendingAction('uninstall')}
+            className={`${actionSize} ${
+              darkMode
+                ? 'border-zinc-700 text-zinc-300 hover:border-red-500 hover:text-red-400'
+                : 'border-zinc-300 text-zinc-700 hover:border-red-600 hover:text-red-600'
+            }`}
+          >
+            {isUninstalling ? 'OPENING...' : 'UNINSTALL'}
+          </button>
+        </div>
+
+        {/* Row 13: Reset all preferences (1:1 ScheduleMe wipe data pattern) */}
+        <div className="px-4 py-3 flex items-center justify-between gap-4">
+          <div className="min-w-0 flex-1">
+            <div className="text-[13px] font-semibold">Reset all preferences</div>
+            <div className={`text-[12px] ${mutedText}`}>
+              Restores connection limit, tray behavior, and startup settings to defaults.
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              if (!confirmReset) {
+                setConfirmReset(true);
+                return;
+              }
+              setConfirmReset(false);
+              void handleResetToDefaults();
+            }}
+            className={`${actionSize} ${
+              confirmReset
+                ? 'bg-red-600 border-red-600 text-white font-semibold'
+                : darkMode
+                  ? 'border-zinc-700 text-zinc-300 hover:border-red-500 hover:text-red-400'
+                  : 'border-zinc-300 text-zinc-700 hover:border-red-600 hover:text-red-600'
+            }`}
+          >
+            {confirmReset ? 'CONFIRM RESET' : 'RESET DEFAULTS'}
+          </button>
+        </div>
+      </div>
+
+      {/* Dynamic Feedback Message */}
+      {folderFeedback && (
+        <div
+          className={`mt-3 border px-3 py-2 text-[12px] ${
+            darkMode
+              ? 'border-zinc-800 bg-zinc-900 text-zinc-300'
+              : 'border-zinc-200 bg-zinc-50 text-zinc-700'
+          }`}
+        >
+          {folderFeedback}
+        </div>
+      )}
+
+      {maintenanceMessage && (
+        <div
+          className={`mt-3 border px-3 py-2 text-[12px] ${
+            darkMode
+              ? 'border-zinc-800 bg-zinc-900 text-zinc-300'
+              : 'border-zinc-200 bg-zinc-50 text-zinc-700'
+          }`}
+        >
+          {maintenanceMessage}
+        </div>
+      )}
+      </div>
+
+      {/* Minimal Footer (Exact symmetric spacing above and below Terms • Privacy Policy, centered) */}
+      <div
+        data-testid="settings-footer"
+        className={`mt-4 pt-2.5 pb-[11px] border-t ${cardBorder} flex items-center justify-center gap-2.5 text-[11px] leading-none shrink-0 ${mutedText}`}
+      >
+        <button
+          type="button"
+          onClick={() => openExternalUrl('https://downex.apps.gauravpatil.site/terms#terms')}
+          className="hover:underline cursor-pointer hover:text-zinc-900 dark:hover:text-zinc-100 transition-colors leading-none py-0 my-0 inline-flex items-center"
+        >
+          Terms
+        </button>
+        <span className="leading-none select-none inline-flex items-center">&bull;</span>
+        <button
+          type="button"
+          onClick={() => openExternalUrl('https://downex.apps.gauravpatil.site/privacy#privacy')}
+          className="hover:underline cursor-pointer hover:text-zinc-900 dark:hover:text-zinc-100 transition-colors leading-none py-0 my-0 inline-flex items-center"
+        >
+          Privacy Policy
+        </button>
+        <span className="leading-none select-none inline-flex items-center">&bull;</span>
+        <span
+          className="font-mono text-[10px] text-zinc-400 dark:text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300 transition-colors cursor-pointer select-all inline-flex items-center gap-1"
+          title="Click to copy Hardware ID"
+          onClick={() => {
+            if (hardwareId) {
+              navigator.clipboard.writeText(hardwareId);
+              setCopiedHwid(true);
+              setTimeout(() => setCopiedHwid(false), 2000);
+            }
+          }}
+        >
+          <span>ID: {hardwareId || 'DWNX-INITIALIZING'}</span>
+          {copiedHwid && <span className="text-emerald-500 text-[9px] font-sans font-bold">COPIED</span>}
+        </span>
       </div>
 
       {/* Confirmation Modal */}
@@ -849,6 +612,16 @@ export const SettingsView: React.FC<SettingsViewProps> = () => {
         onClose={() => setPendingAction(null)}
         onConfirm={executeConfirmedAction}
         isLoading={isRepairing || isResettingBase || isUninstalling}
+      />
+
+      {/* Custom Folder Change Modal (Matches Latest UI/UX Industrial Practices) */}
+      <FolderChangeModal
+        isOpen={isFolderModalOpen}
+        initialPath={defaultDir}
+        onClose={() => setIsFolderModalOpen(false)}
+        onSelect={handleFolderSelected}
+        title="DEFAULT DOWNLOAD FOLDER"
+        subtitle="GLOBAL APP SETTING"
       />
     </div>
   );

@@ -1,0 +1,27 @@
+================================================================================
+DOWNEX RESEARCH & STUDY ESSAY #09
+Title: SMART RETRIES AND HANDLING DROPPED WI-FI
+Author & Architect: Gaurav Patil (https://gauravpatil.site)
+Official Project: https://downex.apps.gauravpatil.site
+================================================================================
+
+Real-world internet connections are unpredictable. Microwaves cause Wi-Fi
+interference, cellular hotspots fluctuate, and home routers occasionally restart.
+
+When an ordinary app encounters a sudden network drop, it immediately panics and
+marks the download as "Failed".
+
+Downex implements an intelligent retry strategy called Exponential Backoff:
+- When a packet drops, Downex doesn't immediately give up. It waits 1.5 seconds
+  and attempts a gentle reconnect.
+- If the network is still reconnecting, it waits 3 seconds, then 6 seconds,
+  patiently giving your router time to restore the connection.
+- It will retry multiple times in the background without bothering you with alert
+  dialogs.
+
+Once your Wi-Fi reconnects, Downex silently picks up where it left off, finishes
+the download, and lets you know it's ready. Reliable software is patient software.
+
+================================================================================
+Copyright (C) 2026 Gaurav Patil. All Rights Reserved.
+================================================================================

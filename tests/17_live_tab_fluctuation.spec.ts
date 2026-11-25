@@ -44,9 +44,9 @@ test.describe('Downex — Live Tab Click Fluctuation & Count-Up', () => {
     // 3. Capture early frame (~100ms)
     await page.waitForTimeout(100);
 
-    const speedCard = page.locator('div.p-4.rounded-2xl', { hasText: 'Current Speed' }).locator('div.text-2xl');
-    const partsCard = page.locator('div.p-4.rounded-2xl', { hasText: 'Active Connections' }).locator('div.text-2xl');
-    const lifetimeCard = page.locator('div.p-4.rounded-2xl', { hasText: 'Total Data Downloaded' }).locator('div.text-2xl');
+    const speedCard = page.locator('[data-testid="telemetry-card-speed"]').locator('div.text-2xl');
+    const partsCard = page.locator('[data-testid="telemetry-card-parts"]').locator('div.text-2xl');
+    const lifetimeCard = page.locator('[data-testid="telemetry-card-lifetime"]').locator('div.text-2xl');
 
     const earlySpeed = await speedCard.innerText();
     const earlyParts = await partsCard.innerText();
@@ -94,7 +94,7 @@ test.describe('Downex — Live Tab Click Fluctuation & Count-Up', () => {
 
     // 6. Test clicking directly on Card 4 (Total Data Downloaded card)
     console.log('Clicking directly on Card 4 to verify card click re-fluctuation...');
-    const card4Container = page.locator('div.p-4.rounded-2xl', { hasText: 'Total Data Downloaded' });
+    const card4Container = page.locator('[data-testid="telemetry-card-lifetime"]');
     await card4Container.click();
 
     await page.waitForTimeout(100);

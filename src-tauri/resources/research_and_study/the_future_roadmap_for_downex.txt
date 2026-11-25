@@ -1,0 +1,30 @@
+================================================================================
+DOWNEX RESEARCH & STUDY ESSAY #30
+Title: THE FUTURE ROADMAP FOR DOWNEX
+Author & Architect: Gaurav Patil (https://gauravpatil.site)
+Official Project: https://downex.apps.gauravpatil.site
+================================================================================
+
+Downex is already a fast, reliable, and respectful download manager, but the
+journey of craftsmanship never truly ends.
+
+Here is what Gaurav Patil is exploring for upcoming releases:
+- Mobile Companion Link: Seamlessly hand off download links between your Android
+  device and your Windows PC.
+- Torrent and Peer-to-Peer Protocol Support: Bringing Downex's clean, bloat-free
+  philosophy to distributed downloads.
+- Automated Cloud Mirroring: Option to automatically sync completed downloads to
+  your personal private cloud storage.
+- Deeper Browser Integration: One-click video stream capture from popular media
+  platforms.
+
+Thank you for being part of this journey.
+Downex will always stay fast, clean, private, and bloat-free.
+
+Creator: Gaurav Patil
+Official Portal: https://downex.apps.gauravpatil.site
+Personal Portfolio: https://gauravpatil.site
+
+================================================================================
+Copyright (C) 2026 Gaurav Patil. All Rights Reserved.
+================================================================================

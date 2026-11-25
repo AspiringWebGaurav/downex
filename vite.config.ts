@@ -27,5 +27,17 @@ export default defineConfig({
     target: process.env.TAURI_ENV_PLATFORM == 'windows' ? 'chrome105' : 'safari13',
     minify: !process.env.TAURI_ENV_DEBUG ? 'esbuild' : false,
     sourcemap: !!process.env.TAURI_ENV_DEBUG,
+    chunkSizeWarningLimit: 2500,
+    rollupOptions: {
+      onwarn(warning, defaultWarn) {
+        if (
+          warning.code === 'DYNAMIC_IMPORT_WILL_NOT_MOVE_MODULE' ||
+          (warning.message && warning.message.includes('dynamically imported by'))
+        ) {
+          return;
+        }
+        defaultWarn(warning);
+      },
+    },
   },
 });

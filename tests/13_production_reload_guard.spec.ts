@@ -186,4 +186,52 @@ test.describe('Downex — Production Reload Guard & Shortcut Lockdown', () => {
     });
     expect(inputPrevented).toBe(false);
   });
+
+  test('Production mode locks browser actions (F12, Ctrl+Shift+I, Ctrl+P, Alt+Left) while Dev allows them', async ({ page }) => {
+    // 1. In dev mode, verify F12 and Ctrl+Shift+I are not prevented
+    const devF12 = await page.evaluate(() => {
+      const event = new KeyboardEvent('keydown', { key: 'F12', code: 'F12', cancelable: true, bubbles: true });
+      window.dispatchEvent(event);
+      return event.defaultPrevented;
+    });
+    expect(devF12).toBe(false);
+
+    // 2. Enable production lock
+    await page.evaluate(() => {
+      (window as any).__DOWNEX_FORCE_PRODUCTION__ = true;
+      (window as any).__DOWNEX_LOCK_REFRESH__ = true;
+    });
+
+    // 3. In production, verify F12 is locked
+    const prodF12 = await page.evaluate(() => {
+      const event = new KeyboardEvent('keydown', { key: 'F12', code: 'F12', cancelable: true, bubbles: true });
+      window.dispatchEvent(event);
+      return event.defaultPrevented;
+    });
+    expect(prodF12).toBe(true);
+
+    // 4. In production, verify Ctrl+Shift+I is locked
+    const prodInspect = await page.evaluate(() => {
+      const event = new KeyboardEvent('keydown', { key: 'I', code: 'KeyI', ctrlKey: true, shiftKey: true, cancelable: true, bubbles: true });
+      window.dispatchEvent(event);
+      return event.defaultPrevented;
+    });
+    expect(prodInspect).toBe(true);
+
+    // 5. In production, verify Ctrl+P (browser print) is locked
+    const prodPrint = await page.evaluate(() => {
+      const event = new KeyboardEvent('keydown', { key: 'p', code: 'KeyP', ctrlKey: true, cancelable: true, bubbles: true });
+      window.dispatchEvent(event);
+      return event.defaultPrevented;
+    });
+    expect(prodPrint).toBe(true);
+
+    // 6. In production, verify Alt+Left (browser history navigation) is locked
+    const prodHistory = await page.evaluate(() => {
+      const event = new KeyboardEvent('keydown', { key: 'ArrowLeft', code: 'ArrowLeft', altKey: true, cancelable: true, bubbles: true });
+      window.dispatchEvent(event);
+      return event.defaultPrevented;
+    });
+    expect(prodHistory).toBe(true);
+  });
 });

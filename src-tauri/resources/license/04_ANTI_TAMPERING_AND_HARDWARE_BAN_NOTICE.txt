@@ -1,0 +1,45 @@
+================================================================================
+DOWNEX DOWNLOAD MANAGER — ANTI-TAMPERING POLICY & HARDWARE BAN NOTICE
+Architect: Gaurav Patil | https://gauravpatil.site
+================================================================================
+
+================================================================================
+MANDATORY SECURITY WARNING — PLEASE READ CAREFULLY
+================================================================================
+
+1. ANTI-TAMPERING MONITORING
+Downex employs continuous runtime integrity verification. The application
+monitors its own binary headers, in-memory execution boundaries, and
+cryptographic trust chains to prevent malicious third parties from injecting
+spyware, malware, or keyloggers into Downex distribution copies.
+
+2. STRICT PROHIBITION ON MODIFICATION & CRACKING
+Any attempt to:
+- Decompile, patch, or reverse engineer the binary for unauthorized distribution;
+- Strip creator attribution or replace licensing tokens;
+- Intercept and spoof the cryptographic update channel;
+- Inject runtime DLLs or modify memory structures;
+is strictly prohibited and violates both this agreement and international
+intellectual property laws.
+
+3. HARDWARE-LEVEL MACHINE BAN ENFORCEMENT
+To protect our users and infrastructure against cracked or poisoned software
+variants, Downex is integrated with automated hardware device verification.
+
+Any machine detected attempting to tamper with internal binaries, spoof release
+signatures, or distribute unauthorized modified builds will be permanently
+blacklisted via a hardware-level machine identifier (derived from Motherboard
+UUID and CPU serial hashes).
+
+Once blacklisted:
+- The machine is permanently barred from accessing the update network.
+- All future OTA updates and cloud synchronization services are refused.
+- Automated recovery systems will quarantine the modified installation.
+
+Please install only genuine releases directly from:
+Official Portal: https://downex.apps.gauravpatil.site
+Creator Website: https://gauravpatil.site
+
+================================================================================
+Official Product Portal: https://downex.apps.gauravpatil.site
+================================================================================

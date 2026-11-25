@@ -22,7 +22,8 @@
   - **Shadow-DOM Media Pill:** Direct on-player floating download widget with zero layout shift or Win32 flicker.
   - **Download Interceptor:** Automatically captures browser downloads with full session cookies and referrers.
   - **Batch Link Grabber:** Filter and batch download links across any webpage.
-- **🎨 GPN-Style Frameless Desktop UI:** Compact, centered frameless window with smooth system tray docking, active progress rings, and queue scheduling.
+- **🎨 GPN-Style Frameless Desktop UI:** Compact, centered frameless window with smooth system tray docking, active progress rings, and quick-jump navigation.
+- **⚡ Simple 1-by-1 Queue Pipeline:** Dedicated queue workspace keeping active downloads clean, dynamic sequence numbering (`#1`, `#2`), proactive non-resumable HTTP Range guards preventing data loss, and automatic completion handoff.
 - **🔒 Zero-Cloud Encrypted Project Vault:** Secrets, OTA release signing keys, and proprietary references are stored in an authenticated **AES-256-GCM + scrypt** container right in the repo with a 2-attempt intrusion defense lifecycle.
 - **📦 In-Process OTA Pipeline:** Self-updating client utilizing Minisign Ed25519 cryptographic signatures and GPHost R2 atomic releases (`npm run ship`).
 

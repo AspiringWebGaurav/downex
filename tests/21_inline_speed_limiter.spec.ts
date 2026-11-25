@@ -75,7 +75,7 @@ test.describe('Downex — Inline Speed Limiter & Dynamic MB Controls', () => {
     }
   });
 
-  test('Starter options (20M, 50M, 100M, 150M, 200M) apply with dynamic MB conversion', async ({ page }) => {
+  test('Starter options (50M, 100M, 150M, 180M, 200M) apply with dynamic MB conversion', async ({ page }) => {
     await page.setViewportSize({ width: 1024, height: 720 });
 
     await page.evaluate(() => {
@@ -105,35 +105,35 @@ test.describe('Downex — Inline Speed Limiter & Dynamic MB Controls', () => {
     await expect(limiter).toBeVisible();
 
     const input = page.locator('[data-testid="speed-limiter-input"]').first();
-    const btn20 = page.locator('[data-testid="speed-limiter-preset-20"]').first();
     const btn50 = page.locator('[data-testid="speed-limiter-preset-50"]').first();
     const btn100 = page.locator('[data-testid="speed-limiter-preset-100"]').first();
     const btn150 = page.locator('[data-testid="speed-limiter-preset-150"]').first();
+    const btn180 = page.locator('[data-testid="speed-limiter-preset-180"]').first();
     const btn200 = page.locator('[data-testid="speed-limiter-preset-200"]').first();
     const resetBtn = page.locator('[data-testid="speed-limiter-reset"]').first();
 
     // Verify all 5 starter options are present
-    await expect(btn20).toBeVisible();
     await expect(btn50).toBeVisible();
     await expect(btn100).toBeVisible();
     await expect(btn150).toBeVisible();
+    await expect(btn180).toBeVisible();
     await expect(btn200).toBeVisible();
 
     // Initial state: Unthrottled, reset button disabled
     await expect(resetBtn).toBeDisabled();
     await expect(input).toHaveValue('');
 
-    // Click 20M: 20 Mbps = 2.5 MB/s
-    await btn20.click();
-    await expect(input).toHaveValue('20');
+    // Click 50M: 50 Mbps = 6.25 MB/s
+    await btn50.click();
+    await expect(input).toHaveValue('50');
     const status = page.locator('[data-testid="speed-limiter-status"]').first();
-    await expect(status).toHaveText(/20 Mbps Cap \(=2\.5 MB\/s\)/);
+    await expect(status).toHaveText(/50 Mbps Cap \(=6\.25 MB\/s\)/);
     await expect(resetBtn).toBeEnabled();
 
-    // Click 150M starter option: 150 Mbps = 18.75 MB/s
-    await btn150.click();
-    await expect(input).toHaveValue('150');
-    await expect(status).toHaveText(/150 Mbps Cap \(=18\.(75|8) MB\/s\)/);
+    // Click 180M starter option: 180 Mbps = 22.5 MB/s
+    await btn180.click();
+    await expect(input).toHaveValue('180');
+    await expect(status).toHaveText(/180 Mbps Cap \(=22\.5 MB\/s\)/);
 
     // Click 200M: 200 Mbps = 25 MB/s
     await btn200.click();
@@ -144,7 +144,7 @@ test.describe('Downex — Inline Speed Limiter & Dynamic MB Controls', () => {
     await expect(page.locator('[role="dialog"]')).toHaveCount(0);
   });
 
-  test('Custom digit input (e.g. 120) displays live dynamic MB and applies without creating extra buttons', async ({ page }) => {
+  test('Custom digit input (e.g. 120) displays live dynamic MB, has explicit Save button, and saves to database locally', async ({ page }) => {
     await page.setViewportSize({ width: 1024, height: 720 });
 
     await page.evaluate(() => {
@@ -170,6 +170,12 @@ test.describe('Downex — Inline Speed Limiter & Dynamic MB Controls', () => {
 
     await page.reload();
 
+    const customContainer = page.locator('[data-testid="speed-limiter-custom-container"]').first();
+    await expect(customContainer).toBeVisible();
+
+    // Verify smooth hover styling is active without transition-all layout reflows
+    await customContainer.hover();
+
     const input = page.locator('[data-testid="speed-limiter-input"]').first();
 
     // Type 120 in the custom box
@@ -181,12 +187,26 @@ test.describe('Downex — Inline Speed Limiter & Dynamic MB Controls', () => {
     await expect(dynamicMb).toBeVisible();
     await expect(dynamicMb).toHaveText('=15 MB/s');
 
-    // Apply on Enter
-    await input.press('Enter');
+    // Explicit Save button appears when custom value is typed
+    const saveBtn = page.locator('[data-testid="speed-limiter-save-btn"]').first();
+    await expect(saveBtn).toBeVisible();
+
+    // Click Save to commit to local database
+    await saveBtn.click();
 
     await expect(input).toHaveValue('120');
     const status = page.locator('[data-testid="speed-limiter-status"]').first();
     await expect(status).toHaveText(/120 Mbps Cap \(=15 MB\/s\)/);
+
+    // Verify SAVED confirmation indicator is briefly displayed
+    const savedIndicator = page.locator('[data-testid="speed-limiter-saved-indicator"]').first();
+    await expect(savedIndicator).toBeVisible();
+
+    // Verify persisted in localStorage / database locally
+    const savedInStorage = await page.evaluate(() => {
+      return localStorage.getItem('downex_saved_custom_speed_limit');
+    });
+    expect(savedInStorage).toBe('120');
 
     // Verify NO extra custom button was created in the row
     await expect(page.locator('[data-testid="speed-limiter-dynamic-preset"]')).toHaveCount(0);

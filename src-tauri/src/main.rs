@@ -38,7 +38,12 @@ fn main() {
     #[cfg(target_os = "windows")]
     if args.iter().any(|a| a == "--update-restart" || a == "--restarted-after-update" || a == "--restarted") {
         wait_for_exiting_parent(&args);
-        downex_lib::commands::cleanup_old_swap_files();
+    }
+
+    // Evaluate boot health and auto-rollback if target version failed probation twice
+    #[cfg(target_os = "windows")]
+    if !downex_lib::ota::evaluate_and_handle_boot_health(&args) {
+        return;
     }
 
     // 1. Chromium / Firefox Native Messaging Host Mode

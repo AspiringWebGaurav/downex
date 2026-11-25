@@ -14,24 +14,18 @@
 
 import {
   fetchUpdateManifest,
-  downloadUpdateBinary,
-  writeUpdateStagingFile,
   getStagedUpdate,
   onOtaDownloadProgress,
-  applyInProcessUpdate,
   setTrayIcon,
   getPendingUpdate,
   getInstallationId,
   onUpdateDetected,
-  onUpdateDeferred,
-  onUpdateUnblocked,
-  verifyUpdateSignature,
   pauseDownload,
   isTauri,
 } from './tauriService';
-import { unpackOtaPayload } from './otaContainer';
 import { ReleaseManifest } from '../types/download';
 import { cleanVersion, compareSemver, APP_BASE_VERSION } from '../utils/version';
+import { useHardwareBanStore } from '../stores/hardwareBanStore';
 
 export interface UpdateProgress {
   downloadedBytes: number;
@@ -45,6 +39,7 @@ export type UpdateState =
   | 'available'
   | 'downloading'
   | 'verifying'
+  | 'patching'
   | 'ready'
   | 'installing'
   | 'restarting'
@@ -79,62 +74,28 @@ class UpdateService {
   private resetTimer: any = null;
   private isSimulating = false;
   private simulationTimer: any = null;
+  private availableHoldTimer: any = null;
 
   constructor() {
     this.hydrateFromNativeSupervisor();
   }
 
+  public isWindowVisible(): boolean {
+    if (typeof document === 'undefined') return true;
+    return document.visibilityState === 'visible';
+  }
+
   private async hydrateFromNativeSupervisor() {
     try {
-      const pending = await getPendingUpdate();
-      if (pending && pending.version && compareSemver(cleanVersion(pending.version), this.currentVersion) > 0) {
-        this.notify({
-          state: 'available',
-          targetVersion: cleanVersion(pending.version),
-          manifest: pending,
-        });
-        // Quietly stage download in background without interrupting or restarting
-        if (!this.checkHasActiveDownloads()) {
-          this.downloadUpdate().catch(() => {});
-        }
-      }
-
-      onUpdateDeferred((manifest) => {
-        this.isDeferredDueToDownloads = true;
-        this.pendingDeferredManifest = manifest;
-        setTrayIcon('idle');
-      });
-
-      onUpdateUnblocked((manifest) => {
-        this.isDeferredDueToDownloads = false;
-        this.pendingDeferredManifest = null;
+      onUpdateDetected((manifest) => {
+        if (!this.isWindowVisible()) return;
         if (manifest && manifest.version && compareSemver(cleanVersion(manifest.version), this.currentVersion) > 0) {
           this.notify({
             state: 'available',
             targetVersion: cleanVersion(manifest.version),
             manifest,
           });
-          setTrayIcon('update_available');
-        }
-      });
-
-      onUpdateDetected((manifest) => {
-        if (manifest && manifest.version && compareSemver(cleanVersion(manifest.version), this.currentVersion) > 0) {
-          if (this.checkHasActiveDownloads()) {
-            this.isDeferredDueToDownloads = true;
-            this.pendingDeferredManifest = manifest;
-            setTrayIcon('idle');
-          } else {
-            this.notify({
-              state: 'available',
-              targetVersion: cleanVersion(manifest.version),
-              manifest,
-            });
-            // Quietly stage in background; NEVER auto-restart in background!
-            this.downloadUpdate().catch((err) => {
-              console.warn('[Downex OTA] Background download staging notice:', err);
-            });
-          }
+          this.evaluateAndApplyUpdate().catch(() => {});
         }
       });
     } catch (e) {
@@ -235,6 +196,10 @@ class UpdateService {
    */
   public async checkForUpdates(silent = false): Promise<ReleaseManifest | null> {
     if (this.isBusy) return null;
+    if (useHardwareBanStore.getState().isBanned) return null;
+    if (silent && !this.isWindowVisible()) {
+      return null;
+    }
 
     const isManual = !silent;
     const checkStartTime = Date.now();
@@ -386,6 +351,10 @@ class UpdateService {
             stagedPath: activeStaged,
             errorMessage: undefined,
           });
+          // Auto-install: trigger evaluation and safe activation immediately
+          this.evaluateAndApplyUpdate().catch((err) => {
+            console.warn('[Downex OTA] Staged activation notice:', err);
+          });
           return manifest;
         }
 
@@ -396,11 +365,20 @@ class UpdateService {
           manifest,
           errorMessage: undefined,
         });
-        // Stage quietly in background if no active downloads; NEVER auto-restart in background!
-        if (!this.checkHasActiveDownloads()) {
-          this.downloadUpdate().catch((err) => {
-            console.warn('[Downex OTA] Background download staging notice:', err);
-          });
+        // Auto-download update strictly while UI is visible and open (hold 'available' state for 2 seconds)
+        if (this.availableHoldTimer) {
+          clearTimeout(this.availableHoldTimer);
+          this.availableHoldTimer = null;
+        }
+        if (this.isWindowVisible() && !this.checkHasActiveDownloads()) {
+          this.availableHoldTimer = setTimeout(() => {
+            this.availableHoldTimer = null;
+            if (this.status.state === 'available') {
+              this.downloadUpdate().catch((err) => {
+                console.warn('[Downex OTA] Download staging notice:', err);
+              });
+            }
+          }, 2000);
         }
         return manifest;
       } else {
@@ -449,6 +427,10 @@ class UpdateService {
    * Asynchronously download, authenticate, and stage the update package (1:1 with GPN)
    */
   public async downloadUpdate(): Promise<boolean> {
+    if (!this.status.isManualCheck && !this.isWindowVisible()) {
+      return false;
+    }
+
     const { manifest, targetVersion } = this.status;
     const rawDownloadUrl = manifest?.url || manifest?.platforms?.['windows-x86_64']?.url;
 
@@ -482,6 +464,11 @@ class UpdateService {
       return false;
     }
     this.isBusy = true;
+
+    if (this.availableHoldTimer) {
+      clearTimeout(this.availableHoldTimer);
+      this.availableHoldTimer = null;
+    }
 
     if (this.resetTimer) {
       clearTimeout(this.resetTimer);
@@ -517,9 +504,12 @@ class UpdateService {
       streamedPercentage = Math.max(streamedPercentage, data.percentage);
     });
 
-    // 2. Start adaptive pacing timer (35ms interval for responsive, fluid progression)
+    // 2. Start adaptive pacing timer (25ms interval for responsive, fluid 60fps progression)
     const pacingPromise = new Promise<void>((resolve) => {
       if (this.pacingInterval) clearInterval(this.pacingInterval);
+      let displayedProgressFloat = 1.0;
+      const tickMs = 25;
+
       this.pacingInterval = setInterval(() => {
         const wireRatio = expectedTotalBytes > 0 ? Math.min(1, accumulatedBytes / expectedTotalBytes) : 0;
         const calculatedPct = Math.floor(wireRatio * 100);
@@ -529,114 +519,115 @@ class UpdateService {
         if (wireFinished) {
           targetPct = 100;
         } else {
-          // Keep pace with wire chunks in real time
+          // Keep pace with wire chunks in real time, capped at 99 until wire finishes
           targetPct = Math.min(99, Math.max(1, activePct));
         }
 
-        if (displayedPercentage < targetPct) {
-          const lag = targetPct - displayedPercentage;
-          const step = lag > 25 ? 5 : lag > 12 ? 3 : lag > 4 ? 2 : 1;
-          displayedPercentage = Math.min(targetPct, displayedPercentage + step);
+        // Adaptive Step Calculation:
+        if (displayedProgressFloat < targetPct) {
+          const lag = targetPct - displayedProgressFloat;
+          
+          let step: number;
+          if (wireFinished) {
+            // Fast internet scenario: Wire finished, but UI is still catching up.
+            // Pacing floor: Glide remaining percentage smoothly over ~1.2s - 1.5s
+            // (e.g. ~48 ticks of 25ms = 1200ms).
+            // This guarantees the human eye sees all digits tick up to 100%!
+            step = Math.max(0.65, lag / 45);
+          } else {
+            // Normal wire in-flight:
+            // Smoothly track active network stream with responsive interpolation
+            if (lag > 25) {
+              step = lag * 0.08;
+            } else if (lag > 6) {
+              step = lag * 0.12;
+            } else {
+              step = Math.max(0.25, lag * 0.2);
+            }
+          }
+
+          displayedProgressFloat = Math.min(targetPct, displayedProgressFloat + step);
+        } else if (!wireFinished && displayedProgressFloat < 99 && displayedProgressFloat >= targetPct) {
+          // Slow network / delayed packet scenario:
+          // Gently micro-creep (+0.025% per tick) up to fractional ceiling (e.g. targetPct + 0.85)
+          // so the progress indicator never looks frozen while waiting for the next buffer!
+          const microCeiling = Math.min(99, targetPct + 0.85);
+          if (displayedProgressFloat < microCeiling) {
+            displayedProgressFloat += 0.025;
+          }
         }
 
-        const displayedBytes = Math.min(expectedTotalBytes, Math.floor((displayedPercentage / 100) * expectedTotalBytes));
+        const nextInt = Math.min(100, Math.max(1, Math.floor(displayedProgressFloat)));
+        if (nextInt !== displayedPercentage || (wireFinished && nextInt === 100)) {
+          displayedPercentage = nextInt;
+          const displayedBytes = Math.min(expectedTotalBytes, Math.floor((displayedPercentage / 100) * expectedTotalBytes));
 
-        this.notify({
-          state: 'downloading',
-          progress: {
-            percentage: displayedPercentage,
-            downloadedBytes: displayedBytes,
-            totalBytes: expectedTotalBytes,
-          },
-        });
+          this.notify({
+            state: 'downloading',
+            progress: {
+              percentage: displayedPercentage,
+              downloadedBytes: displayedBytes,
+              totalBytes: expectedTotalBytes,
+            },
+          });
+        }
 
+        // Finish condition: wire must be finished AND displayedPercentage must hit 100!
         if (wireFinished && displayedPercentage >= 100) {
           if (this.pacingInterval) clearInterval(this.pacingInterval);
           this.pacingInterval = null;
-          resolve();
+          // Hold at 100% for 300ms so user registers the 100% download milestone
+          setTimeout(resolve, 300);
         }
-      }, 35);
+      }, tickMs);
     });
 
-    // 3. Execute wire download (Native Rust reqwest with standard browser UA primary, web fetch secondary)
+    // 3. Execute 100% Native Rust wire download, decryption, signature validation & staging
     try {
-      let rawBytes: Uint8Array;
-      try {
-        rawBytes = await downloadUpdateBinary(downloadUrl);
-        accumulatedBytes = rawBytes.length;
-        expectedTotalBytes = rawBytes.length;
-        wireFinished = true;
-      } catch (nativeErr: any) {
-        console.warn('[Downex OTA] Native download binary notice, trying web fetch:', nativeErr);
-        let fetchRes: Response | null = null;
-        let lastErr: any = null;
+      const { downloadAndStageUpdate } = await import('./tauriService');
+      const stagedPath = await downloadAndStageUpdate(
+        downloadUrl,
+        targetVersion,
+        manifest.signature
+      );
 
-        for (let attempt = 1; attempt <= 2; attempt++) {
-          try {
-            const urlWithTs = downloadUrl.includes('?')
-              ? `${downloadUrl.split('&_t=')[0].split('?_t=')[0]}${downloadUrl.includes('&') ? '&' : '?'}cache_bust=${Date.now()}`
-              : `${downloadUrl}?cache_bust=${Date.now()}`;
-
-            const res = await fetch(urlWithTs);
-            if (!res.ok) {
-              throw new Error(`Server returned HTTP ${res.status}: ${res.statusText}`);
-            }
-            const contentType = res.headers.get('content-type') || '';
-            if (contentType.includes('text/html') || contentType.includes('application/xml') || contentType.includes('text/xml')) {
-              throw new Error(`Server returned ${contentType} error page instead of binary package`);
-            }
-            fetchRes = res;
-            break;
-          } catch (e: any) {
-            lastErr = e;
-            console.warn(`[Downex OTA] Fetch attempt ${attempt} notice:`, e?.message);
-            if (attempt < 2) {
-              await new Promise((r) => setTimeout(r, 600));
-            }
-          }
-        }
-
-        if (!fetchRes) {
-          throw lastErr || new Error('Failed to fetch update payload from server');
-        }
-
-        // Stream reader in fetch mode to avoid chunk freezing
-        const reader = fetchRes.body?.getReader();
-        if (reader) {
-          const contentLength = Number(fetchRes.headers.get('content-length')) || expectedTotalBytes;
-          expectedTotalBytes = contentLength;
-          const chunks: Uint8Array[] = [];
-          while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            if (value) {
-              chunks.push(value);
-              accumulatedBytes += value.length;
-              if (expectedTotalBytes > 0) {
-                streamedPercentage = Math.min(99, Math.floor((accumulatedBytes / expectedTotalBytes) * 100));
-              }
-            }
-          }
-          const combined = new Uint8Array(accumulatedBytes);
-          let offset = 0;
-          for (const c of chunks) {
-            combined.set(c, offset);
-            offset += c.length;
-          }
-          rawBytes = combined;
-        } else {
-          const buf = await fetchRes.arrayBuffer();
-          rawBytes = new Uint8Array(buf);
-          accumulatedBytes = rawBytes.length;
-        }
-        wireFinished = true;
-      }
-
-      // Wait for pacing timer to smoothly finish to 100%
+      wireFinished = true;
       await pacingPromise;
       if (unlistenProgress) unlistenProgress();
 
-      return await this.verifyAndStage(rawBytes.buffer as ArrayBuffer, targetVersion);
+      this.stagedBinaryPath = stagedPath;
+      this.isBusy = false;
+
+      this.notify({
+        state: 'verifying',
+        targetVersion,
+        manifest,
+        stagedPath,
+        progress: {
+          percentage: 100,
+          downloadedBytes: expectedTotalBytes,
+          totalBytes: expectedTotalBytes,
+        },
+        errorMessage: undefined,
+      });
+
+      // Visual pause so the user sees VERIFYING stage
+      await new Promise((r) => setTimeout(r, 400));
+
+      this.notify({
+        state: 'ready',
+        targetVersion,
+        manifest,
+        stagedPath,
+        errorMessage: undefined,
+      });
+
+      // Automatically evaluate and apply safely (respecting downloads and idle guard)
+      this.evaluateAndApplyUpdate().catch((err) => {
+        console.warn('[Downex OTA] Automatic activation notice:', err);
+      });
+
+      return true;
     } catch (err: any) {
       if (unlistenProgress) unlistenProgress();
       if (this.pacingInterval) {
@@ -656,93 +647,7 @@ class UpdateService {
     }
   }
 
-  /**
-   * Decrypt container and stage verified binary (GPN-style robust AES-256-GCM verification)
-   */
-  private async verifyAndStage(rawBuffer: ArrayBuffer, targetVersion: string): Promise<boolean> {
-    this.notify({
-      state: 'verifying',
-      progress: {
-        percentage: 100,
-        downloadedBytes: rawBuffer.byteLength,
-        totalBytes: rawBuffer.byteLength,
-      },
-    });
 
-    try {
-      // 0. Container pre-flight integrity check
-      if (rawBuffer.byteLength < 100_000) {
-        throw new Error(`Incomplete or truncated update container (${rawBuffer.byteLength} bytes received). Expected >= 100 KB.`);
-      }
-
-      const rawBytes = new Uint8Array(rawBuffer);
-      const isOta = rawBytes.length >= 8 &&
-        rawBytes[0] === 0x44 && rawBytes[1] === 0x57 && rawBytes[2] === 0x4E && rawBytes[3] === 0x58 &&
-        rawBytes[4] === 0x5F && rawBytes[5] === 0x4F && rawBytes[6] === 0x54 && rawBytes[7] === 0x41;
-      const isPe = rawBytes.length >= 2 && rawBytes[0] === 0x4D && rawBytes[1] === 0x5A;
-
-      if (!isOta && !isPe) {
-        const headerPreview = new TextDecoder().decode(rawBytes.slice(0, 48)).replace(/[\r\n\t]/g, ' ');
-        if (headerPreview.includes('<?xml') || headerPreview.includes('<html') || headerPreview.includes('<!DOC')) {
-          throw new Error(`Server returned error response instead of binary container: "${headerPreview.trim()}"`);
-        }
-        throw new Error(`Invalid container format: expected DWNX_OTA container or PE executable, received: "${headerPreview.trim()}"`);
-      }
-      // 1. Minisign Ed25519 / SHA-256 cryptographic signature verification
-      if (this.status.manifest?.signature) {
-        try {
-          let sigToVerify = this.status.manifest.signature.trim();
-          if (!sigToVerify.startsWith('untrusted comment') && !sigToVerify.includes('\n') && sigToVerify.length > 64) {
-            try {
-              const decoded = atob(sigToVerify);
-              if (decoded.includes('untrusted comment')) {
-                sigToVerify = decoded;
-              }
-            } catch (_) {}
-          }
-          await verifyUpdateSignature(new Uint8Array(rawBuffer), sigToVerify);
-          console.log('[Downex OTA] Cryptographic signature check passed.');
-        } catch (sigErr: any) {
-          throw new Error(`Signature verification failed: ${sigErr?.message || sigErr}`);
-        }
-      }
-
-      // 2. Decrypt and authenticate payload using WebCrypto AES-256-GCM
-      // unpackOtaPayload verifies Magic ("DWNX_OTA"), authenticates 128-bit tag,
-      // and verifies the PE MZ executable signature header (0x4D, 0x5A)
-      const unpacked = await unpackOtaPayload(rawBuffer);
-      console.log(`[Downex OTA] Payload verified & decrypted: ${unpacked.payload.length} bytes.`);
-
-      // 2. Write verified executable into temporary staging directory
-      const stagingFilename = `downex-v${targetVersion}.staged.exe`;
-      const stagedPath = await writeUpdateStagingFile(stagingFilename, unpacked.payload);
-
-      this.stagedBinaryPath = stagedPath;
-      this.isBusy = false;
-
-      // Brief visual pause at verifying for smooth UX (200ms)
-      await new Promise((r) => setTimeout(r, 200));
-
-      this.notify({
-        state: 'ready',
-        stagedPath,
-        errorMessage: undefined,
-      });
-
-      return true;
-    } catch (err: any) {
-      console.error('[Downex OTA] Verification failed:', err);
-      this.isBusy = false;
-      const errorMsg = err instanceof Error ? err.message : String(err);
-      this.notify({
-        state: 'error',
-        errorMessage: `Verification failed: ${errorMsg}`,
-      });
-
-      if (this.resetTimer) clearTimeout(this.resetTimer);
-      return false;
-    }
-  }
 
   /**
    * Perform in-process NTFS atomic swap and restart (ScheduleMe 1:1 parity)
@@ -781,88 +686,94 @@ class UpdateService {
       }
     } catch {}
 
-    // In web browser (non-Tauri simulation fallback)
-    if (this.isSimulating || !isTauri || !this.stagedBinaryPath || this.stagedBinaryPath?.startsWith('mock/')) {
-      this.notify({
-        state: 'restarting',
-        errorMessage: undefined,
-      });
+    const effectiveTarget = targetVersion.replace(/^v/, '');
 
-      const effectiveTarget = targetVersion;
+    // In Desktop Tauri: Execute the REAL native Win32 updater pipeline!
+    // Old UI fades out 500ms -> window.hide() -> updater.exe floats on desktop -> Stop #1 (750ms) -> Stop #2 (750ms) -> relaunch
+    if (isTauri) {
       try {
-        localStorage.setItem('downex_persisted_version', effectiveTarget);
-        localStorage.setItem('downex_last_known_version', effectiveTarget);
-        localStorage.setItem(
-          'downex_recently_updated',
-          JSON.stringify({
-            targetVersion: effectiveTarget,
-            previousVersion: this.currentVersion,
-            timestamp: Date.now(),
-          })
-        );
-      } catch {}
+        this.notify({
+          state: 'restarting',
+          errorMessage: undefined,
+        });
 
-      await new Promise((resolve) => setTimeout(resolve, 300));
+        try {
+          localStorage.setItem('downex_persisted_version', effectiveTarget);
+          localStorage.setItem('downex_last_known_version', effectiveTarget);
+          localStorage.setItem(
+            'downex_recently_updated',
+            JSON.stringify({
+              targetVersion: effectiveTarget,
+              previousVersion: this.currentVersion,
+              timestamp: Date.now(),
+            })
+          );
+        } catch {}
 
-      this.isSimulating = false;
-      if (typeof window !== 'undefined') {
-        window.location.reload();
+        // Gracefully pause any downloading items to ensure clean SQLite WAL flush and avoid lock contention
+        try {
+          const { useDownloadStore } = await import('../stores/downloadStore');
+          const activeItems = useDownloadStore.getState().items.filter(
+            (i) => i.status === 'downloading' || i.status === 'probing'
+          );
+          for (const item of activeItems) {
+            await pauseDownload(item.id).catch(() => {});
+          }
+        } catch {}
+
+        // Wait for UI smooth fade-out (500ms) so the window fades away completely before process handoff
+        await new Promise((resolve) => setTimeout(resolve, 500));
+
+        const theme = localStorage.getItem('downex_theme') || (typeof document !== 'undefined' && document.documentElement.classList.contains('dark') ? 'dark' : 'light');
+        const { launchUpdaterAndExit } = await import('./tauriService');
+        await launchUpdaterAndExit(effectiveTarget, this.stagedBinaryPath || 'mock', theme);
+        return;
+      } catch (err: any) {
+        console.error('[Downex OTA] External updater handoff failed:', err);
+        try {
+          localStorage.removeItem('downex_recently_updated');
+        } catch {}
+        this.notify({
+          state: 'ready',
+          errorMessage: `Restart failed: ${err?.message || err}`,
+        });
+        return;
       }
-      return;
     }
 
-    if (!this.stagedBinaryPath || !this.status.targetVersion) {
-      this.notify({ state: 'error', errorMessage: 'No verified staged update available' });
-      return;
-    }
+    // In web browser (non-Tauri simulation fallback): Zero in-window modal!
+    this.notify({
+      state: 'restarting',
+      errorMessage: undefined,
+    });
 
     try {
-      this.notify({
-        state: 'restarting',
-        errorMessage: undefined,
-      });
+      localStorage.setItem('downex_persisted_version', effectiveTarget);
+      localStorage.setItem('downex_last_known_version', effectiveTarget);
+      localStorage.setItem(
+        'downex_recently_updated',
+        JSON.stringify({
+          targetVersion: effectiveTarget,
+          previousVersion: this.currentVersion,
+          timestamp: Date.now(),
+        })
+      );
+    } catch {}
 
-      try {
-        localStorage.setItem('downex_persisted_version', targetVersion);
-        localStorage.setItem('downex_last_known_version', targetVersion);
-        localStorage.setItem(
-          'downex_recently_updated',
-          JSON.stringify({
-            targetVersion,
-            previousVersion: this.currentVersion,
-            timestamp: Date.now(),
-          })
-        );
-      } catch {}
-
-      // Gracefully pause any downloading items to ensure clean SQLite WAL flush and avoid lock contention
-      try {
-        const { useDownloadStore } = await import('../stores/downloadStore');
-        const activeItems = useDownloadStore.getState().items.filter(
-          (i) => i.status === 'downloading' || i.status === 'probing'
-        );
-        for (const item of activeItems) {
-          await pauseDownload(item.id).catch(() => {});
-        }
-      } catch {}
-
-      // Brief calibrated pacing (200ms) for smooth visual feedback before native supervisor handoff (ScheduleMe 1:1)
-      await new Promise((resolve) => setTimeout(resolve, 200));
-
-      await applyInProcessUpdate({
-        stagingPath: this.stagedBinaryPath,
-        targetVersion,
-      });
-    } catch (err: any) {
-      console.error('[Downex OTA] In-process atomic swap failed:', err);
-      try {
-        localStorage.removeItem('downex_recently_updated');
-      } catch {}
-      this.notify({
-        state: 'ready',
-        errorMessage: `Restart failed: ${err?.message || err}`,
-      });
-    }
+    this.isSimulating = false;
+    this.currentVersion = effectiveTarget;
+    this.notify({
+      state: 'up-to-date',
+      currentVersion: effectiveTarget,
+      targetVersion: undefined,
+      isManualCheck: true,
+      errorMessage: undefined,
+    });
+    setTimeout(() => {
+      if (this.status.state === 'up-to-date') {
+        this.notify({ state: 'idle', isManualCheck: false });
+      }
+    }, 3500);
   }
 
   private lastUserActivityTime = Date.now();
@@ -876,14 +787,15 @@ class UpdateService {
   /**
    * UI-Triggered Evaluation & Safe Activation Lifecycle:
    * 1. Evaluates available or staged update only when the user opens/interacts with Downex UI.
-   * 2. Checks active download queue: if downloads are running, holds in QUEUED state without interrupting.
-   * 3. User Activity Guard: if user is actively interacting (typing, clicking, mouse movements),
-   *    holds in QUEUED state until user has been completely idle for 4-5 seconds (5000ms).
-   * 4. Holds user with prominent "Important Update" visual hold screen (1.5-2.0s).
-   * 5. Atomically restarts into the verified new binary.
+   * 2. Checks active download queue: if downloads are running, holds in QUEUED state.
+   *    Once completed, waits a 2-second safety buffer for SQLite WAL and disk flush.
+   * 3. Executes lock-free external updater handoff (Zero modal spam).
    */
   public async evaluateAndApplyUpdate(): Promise<void> {
     if (this.isEvaluatingUpdate || this.isBusy || this.status.state === 'restarting' || this.status.state === 'installing') {
+      return;
+    }
+    if (!this.status.isManualCheck && !this.isWindowVisible()) {
       return;
     }
 
@@ -919,12 +831,14 @@ class UpdateService {
       });
       try {
         const { useDownloadStore } = await import('../stores/downloadStore');
-        const unsub = useDownloadStore.subscribe((state) => {
+        const unsub = useDownloadStore.subscribe(async (state) => {
           const stillActive = state.items.some(
             (i) => i.status === 'downloading' || i.status === 'probing'
           );
           if (!stillActive) {
             unsub();
+            // Wait 2-second safety buffer for clean disk I/O & SQLite WAL settlement
+            await new Promise((r) => setTimeout(r, 2000));
             this.evaluateAndApplyUpdate().catch(() => {});
           }
         });
@@ -932,9 +846,10 @@ class UpdateService {
       return;
     }
 
-    // 3. User Activity Guard & 5-Second Idle Detection
+    // 3. User Activity Guard (Immediate on manual check, 5s quiet time on automatic)
+    const isManual = Boolean(this.status.isManualCheck);
     const idleMs = Date.now() - this.lastUserActivityTime;
-    if (idleMs < 5000) {
+    if (!isManual && idleMs < 5000) {
       this.notify({
         state: 'waiting_timer', // displays "QUEUED" on sidebar
         targetVersion,
@@ -943,7 +858,7 @@ class UpdateService {
       if (this.idleGuardTimer) clearTimeout(this.idleGuardTimer);
       this.idleGuardTimer = setTimeout(() => {
         this.evaluateAndApplyUpdate().catch(() => {});
-      }, 1000);
+      }, 1500);
       return;
     }
 
@@ -955,8 +870,8 @@ class UpdateService {
     this.isEvaluatingUpdate = true;
 
     try {
-      // 4. Ensure payload is downloaded & verified
-      let isReady = Boolean(this.stagedBinaryPath && this.status.state === 'ready');
+      // 4. Ensure payload is downloaded & staged
+      let isReady = Boolean(this.stagedBinaryPath);
       if (!isReady) {
         const stagedOnDisk = await getStagedUpdate(targetVersion);
         if (stagedOnDisk) {
@@ -972,20 +887,29 @@ class UpdateService {
         }
       }
 
-      // 5. User Hold Screen: Show Important Update Notice before restart
+      // 5. Dynamic stage transitions: PATCHING -> WORKING -> RESTARTING
       this.notify({
-        state: 'restarting',
+        state: 'patching',
         targetVersion,
         manifest,
       });
-      if (typeof window !== 'undefined' && (window as any).__DOWNEX_VERSION_STORE__) {
-        (window as any).__DOWNEX_VERSION_STORE__.getState().openModal();
-      }
+      await new Promise((r) => setTimeout(r, 450));
 
-      // Visual hold for 1.8 seconds so user clearly sees the update dialog
-      await new Promise((r) => setTimeout(r, 1800));
+      this.notify({
+        state: 'installing', // displays "WORKING" on sidebar
+        targetVersion,
+        manifest,
+      });
+      await new Promise((r) => setTimeout(r, 450));
 
-      // 6. Execute atomic restart
+      this.notify({
+        state: 'restarting', // displays "RESTARTING" on sidebar
+        targetVersion,
+        manifest,
+      });
+      await new Promise((r) => setTimeout(r, 350));
+
+      // 6. Execute atomic external updater restart
       await this.installAndRestart();
     } finally {
       this.isEvaluatingUpdate = false;
@@ -1011,6 +935,94 @@ class UpdateService {
   }
 
   /**
+   * Fluid 1% -> 100% live simulated download runner.
+   * Monotonically ticks through percentages, updating both progress bar and digit display.
+   */
+  public simulateLiveDownload(
+    targetVersion: string = '0.0.21',
+    durationMs: number = 2400,
+    onComplete?: () => void
+  ): Promise<void> {
+    if (this.simulationTimer) {
+      clearInterval(this.simulationTimer);
+      this.simulationTimer = null;
+    }
+
+    this.isSimulating = true;
+    const totalBytes = 15414272; // ~14.7 MB
+    const manifest: ReleaseManifest = {
+      version: targetVersion,
+      notes: 'New productivity features, performance improvements, and security enhancements.',
+      pub_date: new Date().toISOString(),
+      url: `https://gphost.eu.cc/releases/downex/v${targetVersion}/Downex-Update.tar.gz`,
+      signature: 'SIMULATED_SIGNATURE',
+      size: totalBytes,
+    };
+
+    let progressFloat = 1.0;
+    let displayedPct = 1;
+
+    // Immediately start at 1%
+    this.notify({
+      state: 'downloading',
+      targetVersion,
+      manifest,
+      progress: {
+        percentage: 1,
+        downloadedBytes: Math.floor(0.01 * totalBytes),
+        totalBytes,
+      },
+      errorMessage: undefined,
+    });
+
+    const tickMs = 25;
+    const totalTicks = Math.max(20, Math.floor(durationMs / tickMs));
+    const avgStep = 99 / totalTicks;
+
+    return new Promise<void>((resolve) => {
+      this.simulationTimer = setInterval(() => {
+        // Realistic progression: gentle start, steady broadband mid-stream, smooth approach
+        let step = avgStep;
+        if (progressFloat < 15) {
+          step = avgStep * 0.85;
+        } else if (progressFloat > 85) {
+          step = avgStep * 0.92;
+        } else {
+          step = avgStep * 1.05;
+        }
+
+        progressFloat = Math.min(100, progressFloat + step);
+        const nextInt = Math.min(100, Math.max(1, Math.floor(progressFloat)));
+
+        if (nextInt !== displayedPct || nextInt === 100) {
+          displayedPct = nextInt;
+          const downBytes = Math.min(totalBytes, Math.floor((displayedPct / 100) * totalBytes));
+
+          this.notify({
+            state: 'downloading',
+            targetVersion,
+            manifest,
+            progress: {
+              percentage: displayedPct,
+              downloadedBytes: downBytes,
+              totalBytes,
+            },
+          });
+        }
+
+        if (displayedPct >= 100) {
+          clearInterval(this.simulationTimer);
+          this.simulationTimer = null;
+          if (onComplete) {
+            onComplete();
+          }
+          resolve();
+        }
+      }, tickMs);
+    });
+  }
+
+  /**
    * Interactive UI Test Helper:
    * Smoothly animates simulated download progression from 1% to 100%,
    * verifies for calibrated hold duration, and transitions to ready.
@@ -1018,8 +1030,8 @@ class UpdateService {
   public async runSimulatedDownload(
     targetVersion = '0.0.21',
     manifest?: ReleaseManifest,
-    downloadDurationMs = 3500,
-    verifyDurationMs = 1800
+    downloadDurationMs = 2000,
+    verifyDurationMs = 800
   ): Promise<boolean> {
     if (this.simulationTimer) {
       clearInterval(this.simulationTimer);
@@ -1038,49 +1050,11 @@ class UpdateService {
       size: totalBytes,
     };
 
-    let currentPct = 1;
+    // Run fluid 1% -> 100% simulated download
+    await this.simulateLiveDownload(targetVersion, downloadDurationMs);
 
-    this.notify({
-      state: 'downloading',
-      targetVersion,
-      manifest: mockManifest,
-      progress: {
-        percentage: 1,
-        downloadedBytes: Math.floor((1 / 100) * totalBytes),
-        totalBytes,
-      },
-      errorMessage: undefined,
-    });
-
-    const stepInterval = 40;
-    const totalSteps = Math.max(10, Math.floor(downloadDurationMs / stepInterval));
-    const stepIncrement = 100 / totalSteps;
-
-    await new Promise<void>((resolve) => {
-      this.simulationTimer = setInterval(() => {
-        currentPct += stepIncrement;
-        if (currentPct >= 100) {
-          currentPct = 100;
-          clearInterval(this.simulationTimer);
-          this.simulationTimer = null;
-          resolve();
-        }
-
-        const pctInt = Math.min(100, Math.floor(currentPct));
-        const downBytes = Math.min(totalBytes, Math.floor((pctInt / 100) * totalBytes));
-
-        this.notify({
-          state: 'downloading',
-          targetVersion,
-          manifest: mockManifest,
-          progress: {
-            percentage: pctInt,
-            downloadedBytes: downBytes,
-            totalBytes,
-          },
-        });
-      }, stepInterval);
-    });
+    // Hold at 100% for brief visual registration before verification
+    await new Promise((r) => setTimeout(r, 200));
 
     // Verification stage
     this.notify({
@@ -1117,7 +1091,7 @@ class UpdateService {
           console.warn('[Downex OTA] Simulation restart notice:', err);
         });
       }
-    }, 700);
+    }, 400);
 
     return true;
   }
@@ -1126,7 +1100,7 @@ class UpdateService {
    * Developer / QA Simulation Controller:
    * Test any state or the full animated flow on demand.
    */
-  public simulateUpdate(mode: 'available' | 'downloading' | 'verifying' | 'ready' | 'auto' | 'idle' | 'error' = 'auto') {
+  public simulateUpdate(mode: 'available' | 'downloading' | 'verifying' | 'queued' | 'patching' | 'ready' | 'restarting' | 'auto' | 'idle' | 'error' = 'auto') {
     if (this.simulationTimer) {
       clearInterval(this.simulationTimer);
       this.simulationTimer = null;
@@ -1175,17 +1149,7 @@ class UpdateService {
         break;
 
       case 'downloading':
-        this.notify({
-          state: 'downloading',
-          targetVersion,
-          manifest,
-          progress: {
-            percentage: 45,
-            downloadedBytes: Math.floor(0.45 * totalBytes),
-            totalBytes,
-          },
-          errorMessage: undefined,
-        });
+        this.simulateLiveDownload(targetVersion, 2500);
         break;
 
       case 'verifying':
@@ -1202,6 +1166,26 @@ class UpdateService {
         });
         break;
 
+      case 'queued':
+        this.notify({
+          state: 'queued',
+          targetVersion,
+          manifest,
+          progress: undefined,
+          errorMessage: undefined,
+        });
+        break;
+
+      case 'patching':
+        this.notify({
+          state: 'patching',
+          targetVersion,
+          manifest,
+          progress: undefined,
+          errorMessage: undefined,
+        });
+        break;
+
       case 'ready':
         this.stagedBinaryPath = `mock/staged/downex-v${targetVersion}.staged.exe`;
         this.notify({
@@ -1209,6 +1193,16 @@ class UpdateService {
           targetVersion,
           manifest,
           stagedPath: this.stagedBinaryPath,
+          progress: undefined,
+          errorMessage: undefined,
+        });
+        break;
+
+      case 'restarting':
+        this.notify({
+          state: 'restarting',
+          targetVersion,
+          manifest,
           progress: undefined,
           errorMessage: undefined,
         });

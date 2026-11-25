@@ -415,12 +415,14 @@ impl QueueManager {
 
     pub fn pause_task(&self, id: &str) -> bool {
         let mut tokens = self.active_tokens.write();
-        if let Some(token) = tokens.remove(id) {
+        let was_active = if let Some(token) = tokens.remove(id) {
             token.cancel();
-            let _ = self.db.update_download_status(id, "paused", 0, None);
-            return true;
-        }
-        false
+            true
+        } else {
+            false
+        };
+        let _ = self.db.update_download_status(id, "paused", 0, None);
+        was_active || true
     }
 
     pub async fn resume_task(&self, id: &str) -> bool {

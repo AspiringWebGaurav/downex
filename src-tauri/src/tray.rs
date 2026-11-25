@@ -122,25 +122,7 @@ pub fn set_tray_update_info<R: Runtime>(
     let _ = set_tray_icon_state(app, status);
 
     if let Some(tray) = app.tray_by_id("main-tray") {
-        match new_status {
-            UpdateTrayStatus::Available => {
-                let ver_str = version.as_deref().unwrap_or("latest");
-                let _ = tray.set_tooltip(Some(&format!(
-                    "Downex • Update v{} Available (Click to view)",
-                    ver_str
-                )));
-            }
-            UpdateTrayStatus::Ready => {
-                let ver_str = version.as_deref().unwrap_or("latest");
-                let _ = tray.set_tooltip(Some(&format!(
-                    "Downex • v{} Ready (Click to restart)",
-                    ver_str
-                )));
-            }
-            UpdateTrayStatus::Idle => {
-                let _ = tray.set_tooltip(Some("Downex - Download Manager"));
-            }
-        }
+        let _ = tray.set_tooltip(Some("Downex - Download Manager"));
     }
 
     let _ = refresh_tray_menu(app);
@@ -148,6 +130,25 @@ pub fn set_tray_update_info<R: Runtime>(
 
 /// Dynamically constructs the tray context menu reflecting real-time window & download state (IDM / REA pattern)
 pub fn build_dynamic_tray_menu<R: Runtime>(app: &AppHandle<R>) -> Result<Menu<R>, Box<dyn std::error::Error>> {
+    // Check if machine is hardware banned
+    let is_banned = if let Some(state) = app.try_state::<crate::AppState>() {
+        crate::hardware::check_is_hardware_banned(Some(&state.db))
+    } else {
+        crate::hardware::check_is_hardware_banned(None)
+    };
+
+    if is_banned {
+        if let Some(tray) = app.tray_by_id("main-tray") {
+            let _ = tray.set_tooltip(Some("Banned"));
+        }
+        let menu = Menu::new(app)?;
+        let banned_item = MenuItem::with_id(app, "banned_label", "Banned", false, None::<&str>)?;
+        menu.append(&banned_item)?;
+        return Ok(menu);
+    } else if let Some(tray) = app.tray_by_id("main-tray") {
+        let _ = tray.set_tooltip(Some("Downex Download Manager"));
+    }
+
     let is_showing = if let Some(window) = app.get_webview_window("main") {
         window.is_visible().unwrap_or(false) && !window.is_minimized().unwrap_or(false)
     } else {
@@ -428,10 +429,18 @@ pub fn setup_system_tray<R: Runtime>(app: &AppHandle<R>) -> Result<TrayIcon<R>, 
     // Embed and set official Downex tray icon
     let icon = Image::from_bytes(include_bytes!("../icons/32x32.png"))?;
 
+    // Check initial ban status for tooltip
+    let is_banned = if let Some(state) = app.try_state::<crate::AppState>() {
+        crate::hardware::check_is_hardware_banned(Some(&state.db))
+    } else {
+        crate::hardware::check_is_hardware_banned(None)
+    };
+    let initial_tooltip = if is_banned { "Banned" } else { "Downex Download Manager" };
+
     let tray = TrayIconBuilder::with_id("main-tray")
         .icon(icon)
         .menu(&tray_menu)
-        .tooltip("Downex Download Manager")
+        .tooltip(initial_tooltip)
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id.as_ref() {
             "toggle_window" | "app_version" | "header_title" => {
@@ -452,6 +461,7 @@ pub fn setup_system_tray<R: Runtime>(app: &AppHandle<R>) -> Result<TrayIcon<R>, 
                         let _ = window.unminimize();
                         let _ = window.set_focus();
                         clean_all_task_trays(app);
+                        let _ = app.emit("downex-ui-opened", ());
                     }
                 } else {
                     let _ = create_or_show_main_window(app);
@@ -589,9 +599,7 @@ pub fn setup_system_tray<R: Runtime>(app: &AppHandle<R>) -> Result<TrayIcon<R>, 
                             #[cfg(target_os = "windows")]
                             crate::commands::force_window_to_foreground(&window);
                             clean_all_task_trays(app);
-                            if let Some(manifest) = get_pending_update_manifest() {
-                                let _ = app.emit("downex-update-detected", &manifest);
-                            }
+                            let _ = app.emit("downex-ui-opened", ());
                         }
                     } else {
                         let _ = create_or_show_main_window(app);
@@ -606,14 +614,10 @@ pub fn setup_system_tray<R: Runtime>(app: &AppHandle<R>) -> Result<TrayIcon<R>, 
     Ok(tray)
 }
 
-pub fn set_tray_icon_state<R: Runtime>(app: &AppHandle<R>, state: &str) -> Result<(), Box<dyn std::error::Error>> {
+pub fn set_tray_icon_state<R: Runtime>(app: &AppHandle<R>, _state: &str) -> Result<(), Box<dyn std::error::Error>> {
     ensure_main_tray(app);
     if let Some(tray) = app.tray_by_id("main-tray") {
-        let bytes: &[u8] = match state {
-            "update_available" | "available" => include_bytes!("../icons/32x32-update-1.png"),
-            "ready" => include_bytes!("../icons/32x32-update-ready.png"),
-            _ => include_bytes!("../icons/32x32.png"),
-        };
+        let bytes: &[u8] = include_bytes!("../icons/32x32.png");
         let img = Image::from_bytes(bytes)?;
         let _ = tray.set_icon(Some(img));
     }
@@ -1019,8 +1023,8 @@ pub fn create_or_show_main_window<R: Runtime>(app: &AppHandle<R>) -> Result<taur
         let icon_res = Image::from_bytes(include_bytes!("../icons/128x128.png"));
         let builder = tauri::WebviewWindowBuilder::new(app, "main", tauri::WebviewUrl::default())
             .title("Downex")
-            .inner_size(960.0, 640.0)
-            .min_inner_size(820.0, 540.0)
+            .inner_size(780.0, 540.0)
+            .min_inner_size(720.0, 480.0)
             .decorations(false)
             .transparent(false)
             .shadow(true)

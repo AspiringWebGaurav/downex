@@ -52,36 +52,36 @@ test.describe('Downex Base Application — Sidebar Navigation & View Lifecycle',
 
   test('Add URL button in sidebar opens New Download Modal', async ({ page }) => {
     await page.click('aside button:has-text("Add URL")');
-    await expect(page.locator('text=Download File')).toBeVisible();
-    await expect(page.locator('input[placeholder="Filename"]')).toBeVisible();
+    const modalInput = page.locator('input[placeholder="Filename"]');
+    await expect(modalInput).toBeVisible();
 
     // Close modal
     await page.keyboard.press('Escape');
-    await expect(page.locator('text=Download File')).not.toBeVisible();
+    await expect(modalInput).not.toBeVisible();
   });
 
   test('Sidebar collapse and expand via edge floating pill button', async ({ page }) => {
     const sidebar = page.locator('aside');
-    await expect(sidebar).toHaveClass(/w-\[(228|196)px\]/);
+    await expect(sidebar).toHaveClass(/w-\[(228|216|196|172)px\]/);
 
     // Click the edge collapse arrow
     const collapseBtn = page.locator('button[title*="Collapse Sidebar"], button[title*="Pure View"]').first();
     await expect(collapseBtn).toBeVisible();
     await collapseBtn.click();
 
-    // Should now be collapsed (w-[70px])
-    await expect(sidebar).toHaveClass(/(w-\[70px\]|w-14)/);
+    // Should now be collapsed (w-[64px])
+    await expect(sidebar).toHaveClass(/(w-\[64px\]|w-\[70px\]|w-14)/);
     const persisted = await page.evaluate(() => localStorage.getItem('downex_sidebar_collapsed'));
     expect(persisted).toBe('true');
 
     // Reload to verify persistence
     await page.reload();
-    await expect(page.locator('aside')).toHaveClass(/(w-\[70px\]|w-14)/);
+    await expect(page.locator('aside')).toHaveClass(/(w-\[64px\]|w-\[70px\]|w-14)/);
 
     // Click expand arrow
     const expandBtn = page.locator('button[title*="Expand Sidebar"]').first();
     await expandBtn.click();
-    await expect(page.locator('aside')).toHaveClass(/w-\[(228|196)px\]/);
+    await expect(page.locator('aside')).toHaveClass(/w-\[(228|216|196|172)px\]/);
 
     const persistedAfter = await page.evaluate(() => localStorage.getItem('downex_sidebar_collapsed'));
     expect(persistedAfter).toBe('false');
@@ -150,8 +150,8 @@ test.describe('Downex Base Application — Sidebar Navigation & View Lifecycle',
     await page.reload();
 
     // Verify badges
-    // All Downloads: 4
-    await expect(page.locator('aside button:has-text("All Downloads")')).toContainText('4');
+    // All Downloads: 3 (excluding 1 queued item per dedicated queue separation)
+    await expect(page.locator('aside button:has-text("All Downloads")')).toContainText('3');
     // Queues: 1
     await expect(page.locator('aside button:has-text("Queues")')).toContainText('1');
     // Trash: 1

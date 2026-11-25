@@ -30,22 +30,92 @@ export interface ProbeResult {
   last_modified?: string;
 }
 
-export async function probeUrl(url: string, headers?: Record<string, string>): Promise<ProbeResult | null> {
+export interface ProbeDetailedResult {
+  success: boolean;
+  result?: ProbeResult;
+  error?: string;
+}
+
+/**
+ * Extracts size from URL query parameters (e.g. Google Video / googleusercontent `clen=2985392814`, `size=...`)
+ */
+export function extractSizeFromUrl(url?: string): number | undefined {
+  if (!url) return undefined;
+  try {
+    const parsed = new URL(url);
+    const keys = ['clen', 'size', 'filesize', 'file_size', 'content_length', 'length', 'bytes', 'total_bytes'];
+    for (const k of keys) {
+      const val = parsed.searchParams.get(k);
+      if (val && /^\d+$/.test(val)) {
+        const num = parseInt(val, 10);
+        if (num > 1024) return num;
+      }
+    }
+  } catch {
+    const match = url.match(/[?&](?:clen|size|filesize|file_size|content_length|length|bytes)=(\d+)/i);
+    if (match && match[1]) {
+      const num = parseInt(match[1], 10);
+      if (num > 1024) return num;
+    }
+  }
+  return undefined;
+}
+
+export async function probeUrlDetailed(
+  url: string,
+  headers?: Record<string, string>
+): Promise<ProbeDetailedResult> {
+  const extractedSize = extractSizeFromUrl(url);
+
   if (!isTauri) {
+    if (url.includes('404') || url.includes('not-found')) {
+      return { success: false, error: 'Server returned HTTP 404 (Not Found)' };
+    }
+    if (url.includes('403') || url.includes('forbidden') || url.includes('expired')) {
+      return { success: false, error: 'Server returned HTTP 403 (Forbidden / Link Expired)' };
+    }
     const filename = url.split('/').pop()?.split('?')[0] || 'download.bin';
     return {
-      url,
-      filename,
-      total_bytes: 524288000,
-      supports_ranges: true,
+      success: true,
+      result: {
+        url,
+        filename,
+        total_bytes: extractedSize || 524288000,
+        supports_ranges: !url.includes('no-range'),
+      },
     };
   }
   try {
-    return await invoke<ProbeResult>('cmd_probe_url', { url, headers });
-  } catch (e) {
-    console.warn('Probe URL failed:', e);
-    return null;
+    const timeoutPromise = new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error('Probe timed out')), 5000)
+    );
+    const invokePromise = invoke<ProbeResult>('cmd_probe_url', { url, headers });
+    const result = await Promise.race([invokePromise, timeoutPromise]);
+    if (result && !result.total_bytes && extractedSize) {
+      result.total_bytes = extractedSize;
+    }
+    return { success: true, result };
+  } catch (e: any) {
+    // Graceful fallback: return partial result if we extracted size or filename from the URL
+    const rawGuess = url.split('?')[0].split('/').pop();
+    if (extractedSize || (rawGuess && rawGuess.includes('.'))) {
+      return {
+        success: true,
+        result: {
+          url,
+          filename: rawGuess && rawGuess.includes('.') ? rawGuess : 'download.bin',
+          total_bytes: extractedSize,
+          supports_ranges: true,
+        },
+      };
+    }
+    return { success: false, error: String(e || 'Server connection failed') };
   }
+}
+
+export async function probeUrl(url: string, headers?: Record<string, string>): Promise<ProbeResult | null> {
+  const res = await probeUrlDetailed(url, headers);
+  return res.success && res.result ? res.result : null;
 }
 // Local browser mock state for browser preview / Playwright testing
 let mockDownloads: DownloadItem[] = [];
@@ -176,6 +246,38 @@ export async function setDownloadSpeedLimit(id: string, limitMbps: number | null
   });
 }
 
+export async function saveCustomSpeedLimit(limitMbps: number | null): Promise<boolean> {
+  try {
+    if (limitMbps && limitMbps > 0) {
+      localStorage.setItem('downex_saved_custom_speed_limit', String(limitMbps));
+    } else {
+      localStorage.removeItem('downex_saved_custom_speed_limit');
+    }
+    if (isTauri) {
+      return await invoke<boolean>('cmd_save_custom_speed_limit', {
+        limitMbps: limitMbps !== null && limitMbps > 0 ? limitMbps : null,
+      });
+    }
+    return true;
+  } catch (e) {
+    console.error('Failed to save custom speed limit to SQLite DB:', e);
+    return false;
+  }
+}
+
+export async function getSavedCustomSpeedLimit(): Promise<number | null> {
+  try {
+    if (isTauri) {
+      const val = await invoke<number | null>('cmd_get_saved_custom_speed_limit');
+      if (val && val > 0) return val;
+    }
+    const local = localStorage.getItem('downex_saved_custom_speed_limit');
+    return local ? parseFloat(local) : null;
+  } catch {
+    return null;
+  }
+}
+
 export async function startQueue(): Promise<number> {
   if (!isTauri) {
     mockQueueRunning = true;
@@ -202,7 +304,7 @@ export async function isQueueRunning(): Promise<boolean> {
 }
 
 export async function queueDownload(id: string): Promise<boolean> {
-  if (!isTauri) {
+  if (isMockItem(id) || !isTauri) {
     const list = loadMockDownloads().map((item) =>
       item.id === id ? { ...item, status: 'queued' as const, speed_bytes_sec: 0 } : item
     );
@@ -213,8 +315,19 @@ export async function queueDownload(id: string): Promise<boolean> {
 }
 
 export async function getDownloads(): Promise<DownloadItem[]> {
-  if (!isTauri) return loadMockDownloads();
-  return await invoke('cmd_get_downloads');
+  const mocks = loadMockDownloads();
+  if (!isTauri) return mocks;
+  try {
+    const dbItems = await invoke<DownloadItem[]>('cmd_get_downloads');
+    if (!mocks.length) return dbItems;
+    // Keep mock items alive alongside database items so Dev QA test items persist through polling
+    const dbIds = new Set(dbItems.map((i) => i.id));
+    const activeMocks = mocks.filter((m) => !dbIds.has(m.id));
+    return [...activeMocks, ...dbItems];
+  } catch (e) {
+    console.warn('Failed to get native downloads, falling back to mocks:', e);
+    return mocks;
+  }
 }
 
 export async function getDefaultDownloadDir(): Promise<string> {
@@ -589,6 +702,47 @@ export async function verifyUpdateSignature(containerBytes: Uint8Array, signatur
   });
 }
 
+export async function downloadAndStageUpdate(
+  url: string,
+  targetVersion: string,
+  signature?: string
+): Promise<string> {
+  if (!isTauri) {
+    return 'C:\\mock\\downex.staged.exe';
+  }
+  return await invoke<string>('cmd_download_and_stage_update', {
+    url,
+    targetVersion,
+    signature,
+  });
+}
+
+export async function launchUpdaterAndExit(
+  targetVersion: string,
+  stagedPath: string,
+  theme?: string
+): Promise<void> {
+  if (!isTauri) {
+    console.log(`[Mock Mode] Launched external updater for v${targetVersion} with theme ${theme}!`);
+    return;
+  }
+  await invoke('cmd_launch_updater_and_exit', {
+    targetVersion,
+    stagedPath,
+    theme: theme || 'dark',
+  });
+}
+
+export async function previewExternalUpdater(theme?: string): Promise<void> {
+  if (!isTauri) {
+    console.log(`[Mock Mode] Preview external updater with theme ${theme}`);
+    return;
+  }
+  await invoke('cmd_preview_external_updater', {
+    theme: theme || 'dark',
+  });
+}
+
 export async function applyInProcessUpdate(options: {
   binaryBytes?: Uint8Array;
   stagingPath?: string;
@@ -661,6 +815,92 @@ export async function getInstallationId(): Promise<string> {
     } catch {}
   }
   return 'dwnx-client';
+}
+
+export async function getSiliconHardwareId(): Promise<string> {
+  if (isTauri) {
+    try {
+      return await invoke<string>('cmd_get_silicon_hardware_id');
+    } catch {}
+  }
+  try {
+    const cached = localStorage.getItem('downex_silicon_hwid');
+    if (cached) return cached;
+    const fallback = 'DWNX-' + Math.random().toString(36).substring(2, 6).toUpperCase() + '-' + Math.random().toString(36).substring(2, 6).toUpperCase();
+    localStorage.setItem('downex_silicon_hwid', fallback);
+    return fallback;
+  } catch {
+    return 'DWNX-SILICON-DEVICE';
+  }
+}
+
+export async function checkIsHardwareBanned(): Promise<boolean> {
+  if (isTauri) {
+    try {
+      return await invoke<boolean>('cmd_check_is_hardware_banned');
+    } catch {}
+  }
+  try {
+    return localStorage.getItem('downex_is_hardware_banned') === 'true';
+  } catch {
+    return false;
+  }
+}
+
+export async function enforceHardwareBan(reason?: string): Promise<void> {
+  try {
+    localStorage.setItem('downex_is_hardware_banned', 'true');
+    if (reason) localStorage.setItem('downex_hardware_ban_reason', reason);
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('downex-ban-state-changed', { detail: { is_banned: true, reason } }));
+    }
+  } catch {}
+  if (isTauri) {
+    try {
+      await invoke('cmd_enforce_hardware_ban', { reason });
+    } catch {}
+  }
+}
+
+export async function liftHardwareBan(): Promise<void> {
+  try {
+    localStorage.setItem('downex_is_hardware_banned', 'false');
+    localStorage.removeItem('downex_hardware_ban_reason');
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('downex-ban-state-changed', { detail: { is_banned: false } }));
+    }
+  } catch {}
+  if (isTauri) {
+    try {
+      await invoke('cmd_lift_hardware_ban');
+    } catch {}
+  }
+}
+
+export function onHardwareBanChanged(callback: (payload: { is_banned: boolean; reason?: string }) => void) {
+  if (!isTauri) return () => {};
+  let isCancelled = false;
+  let unlistenFn: (() => void) | null = null;
+  listen<{ is_banned: boolean; reason?: string }>('downex-hardware-ban-changed', (event) => {
+    if (!isCancelled && event.payload) {
+      callback(event.payload);
+    }
+  })
+    .then((unlisten) => {
+      if (isCancelled) {
+        unlisten();
+      } else {
+        unlistenFn = unlisten;
+      }
+    })
+    .catch((err) => {
+      console.warn('[Downex] Error listening to downex-hardware-ban-changed:', err);
+    });
+
+  return () => {
+    isCancelled = true;
+    if (unlistenFn) unlistenFn();
+  };
 }
 
 export async function getTrayUpdateStatus(): Promise<string> {
@@ -970,6 +1210,56 @@ export async function getDiskFreeSpace(path: string): Promise<number> {
   }
 }
 
+export interface DiskVolumeInfo {
+  letter: string;
+  path: string;
+  free_bytes: number;
+  total_bytes: number;
+  is_default: boolean;
+}
+
+export async function getAvailableDisks(): Promise<DiskVolumeInfo[]> {
+  if (!isTauri) {
+    return [
+      { letter: 'C', path: 'C:\\', free_bytes: 71841554432, total_bytes: 254896238592, is_default: true },
+      { letter: 'D', path: 'D:\\', free_bytes: 852992806912, total_bytes: 1000203087872, is_default: false },
+    ];
+  }
+
+  try {
+    const res = await invoke<DiskVolumeInfo[]>('cmd_get_available_disks');
+    if (res && res.length > 0) return res;
+  } catch {
+    // If command not yet compiled or unavailable, fall back to probing
+  }
+
+  const probeLetters = ['C', 'D', 'E', 'F', 'G', 'H'];
+  const results: DiskVolumeInfo[] = [];
+
+  const checks = await Promise.allSettled(
+    probeLetters.map(async (letter) => {
+      const free = await getDiskFreeSpace(`${letter}:\\`);
+      return { letter, free };
+    })
+  );
+
+  for (const check of checks) {
+    if (check.status === 'fulfilled' && check.value.free > 0) {
+      results.push({
+        letter: check.value.letter,
+        path: `${check.value.letter}:\\`,
+        free_bytes: check.value.free,
+        total_bytes: check.value.free * 1.5,
+        is_default: check.value.letter === 'C',
+      });
+    }
+  }
+
+  return results.length > 0
+    ? results
+    : [{ letter: 'C', path: 'C:\\', free_bytes: 70 * 1024 * 1024 * 1024, total_bytes: 256 * 1024 * 1024 * 1024, is_default: true }];
+}
+
 export function onOpenDownloadInfoModal(callback: (payload: DownloadInfoModalPayload) => void): () => void {
   if (!isTauri) return () => {};
   let isCancelled = false;
@@ -1245,6 +1535,26 @@ export async function resetToBaseVersion(): Promise<string> {
     return 'Base reset complete (Dev Mode)';
   }
   return await invoke<string>('cmd_reset_to_base_version');
+}
+
+export function getDownexWebBaseUrl(): string {
+  if (typeof window !== 'undefined') {
+    const host = window.location.hostname.toLowerCase();
+    const port = window.location.port;
+
+    // Packaged Tauri Windows WebView2 serves from tauri.localhost — only treat dev ports/hosts as local
+    const isDev =
+      Boolean((import.meta as any)?.env?.DEV) ||
+      port === '1420' ||
+      port === '5173' ||
+      (host !== 'tauri.localhost' &&
+        (host === 'localhost' || host === '127.0.0.1' || host.endsWith('.localhost')));
+
+    if (isDev) {
+      return 'http://downex.localhost:3000';
+    }
+  }
+  return 'https://downex.apps.gauravpatil.site';
 }
 
 export async function openExternalUrl(url: string): Promise<void> {

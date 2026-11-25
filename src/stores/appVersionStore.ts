@@ -162,14 +162,29 @@ export const useAppVersionStore = create<AppVersionStore>((set, get) => {
         try {
           const lastVersion = localStorage.getItem('downex_last_known_version');
           const hasUpgraded = lastVersion && compareSemver(cleaned, lastVersion) > 0;
+          const wasRecentlyUpdated = Boolean(localStorage.getItem('downex_recently_updated') || hasUpgraded);
 
           if (hasUpgraded) {
             localStorage.removeItem(PERSISTED_UPDATE_KEY);
-            localStorage.removeItem('downex_recently_updated');
             cleanSupersededOldBinaries().catch(() => {});
           }
           localStorage.setItem('downex_last_known_version', cleaned);
           localStorage.setItem('downex_persisted_version', cleaned);
+
+          if (wasRecentlyUpdated) {
+            // One-time post-update verification check: shows "UP TO DATE" on sidebar for 3.5s after fresh update restart
+            setTimeout(async () => {
+              try {
+                await get().checkForUpdates(false);
+              } catch (e) {
+                console.warn('[Downex Store] Post-update verification notice:', e);
+              } finally {
+                try {
+                  localStorage.removeItem('downex_recently_updated');
+                } catch {}
+              }
+            }, 1200);
+          }
         } catch {}
 
         // Restore persisted update status across refreshes/restarts
@@ -213,24 +228,11 @@ export const useAppVersionStore = create<AppVersionStore>((set, get) => {
           }
         } catch {}
 
-        // Instant event-driven hydration from native background supervisor (zero network requests)
         // In browser dev preview / Playwright mock mode outside Tauri: schedule silent check to support route mocks
         if (!isTauri) {
           setTimeout(() => {
             get().checkForUpdates(true).catch(() => {});
           }, 1200);
-        } else {
-          try {
-            const pending = await getPendingUpdate();
-            if (pending && pending.version && compareSemver(cleanVersion(pending.version), cleaned) > 0) {
-              updateService.notify({
-                state: 'available',
-                targetVersion: cleanVersion(pending.version),
-                manifest: pending,
-              });
-              updateService.evaluateAndApplyUpdate().catch(() => {});
-            }
-          } catch {}
         }
 
         // Re-synchronize on window focus when unminimized from tray (zero network requests)
@@ -300,8 +302,11 @@ updateService.subscribe((status) => {
       } catch {}
     }
 
+    const nextCurrentVersion = status.currentVersion || state?.currentVersion || APP_BASE_VERSION;
     return {
       status: { ...status },
+      currentVersion: nextCurrentVersion,
+      formattedVersion: formatVersion(nextCurrentVersion),
       isToastDismissed: shouldShowToast ? false : (state?.isToastDismissed ?? false),
     };
   });

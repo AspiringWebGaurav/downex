@@ -1,0 +1,28 @@
+================================================================================
+DOWNEX RESEARCH & STUDY ESSAY #28
+Title: DATA INTEGRITY & BIT-PERFECT VERIFICATION
+Author & Architect: Gaurav Patil (https://gauravpatil.site)
+Official Project: https://downex.apps.gauravpatil.site
+================================================================================
+
+Speed is completely useless if the downloaded file is corrupted.
+
+Over noisy internet connections or long downloads, data packets can occasionally
+suffer bit-flips or truncated endings, resulting in broken zip files, glitchy
+videos, or corrupt installers.
+
+Downex incorporates rigorous integrity safeguards:
+- Chunk Verification: Every segment downloaded is validated for exact byte counts
+  before being committed to the final file.
+- Checksum Support: Downex supports cryptographic hash verification (SHA-256) so
+  you can verify that the file on your disk matches the author's original file
+  down to the exact bit.
+- Atomic Finalization: Downex downloads files with a temporary extension until the
+  very last byte is verified. Only when the file is 100% complete does it rename
+  to the final file name.
+
+You never have to guess whether a download finished properly.
+
+================================================================================
+Copyright (C) 2026 Gaurav Patil. All Rights Reserved.
+================================================================================

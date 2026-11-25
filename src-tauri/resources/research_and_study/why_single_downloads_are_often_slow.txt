@@ -1,0 +1,28 @@
+================================================================================
+DOWNEX RESEARCH & STUDY ESSAY #05
+Title: WHY SINGLE-CONNECTION DOWNLOADS ARE OFTEN SLOW
+Author & Architect: Gaurav Patil (https://gauravpatil.site)
+Official Project: https://downex.apps.gauravpatil.site
+================================================================================
+
+Have you ever wondered why a file downloads at only 2 MB/s in your web browser,
+even though your internet plan provides 100 MB/s?
+
+The reason comes down to how standard web servers work.
+
+When your browser downloads a file in a single connection, the server's network
+scheduler often limits the speed of that specific connection to prevent any one
+user from overloading their network. Furthermore, network latency—the physical
+distance between your computer and the server—causes delays in acknowledging
+received data packets (known as the TCP bandwidth-delay product).
+
+If a single packet gets lost, the connection artificially slows down to prevent
+congestion, even if your Wi-Fi is capable of much higher speeds.
+
+Downex solves this by breaking the artificial speed ceiling. Instead of asking
+the server for the file through one narrow pipe, it asks for the file through
+multiple parallel pipes at the same time.
+
+================================================================================
+Copyright (C) 2026 Gaurav Patil. All Rights Reserved.
+================================================================================

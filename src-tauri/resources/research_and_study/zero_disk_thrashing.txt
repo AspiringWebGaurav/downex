@@ -1,0 +1,27 @@
+================================================================================
+DOWNEX RESEARCH & STUDY ESSAY #14
+Title: PROTECTING YOUR SSD LIFE WITH SEQUENTIAL DISK WRITES
+Author & Architect: Gaurav Patil (https://gauravpatil.site)
+Official Project: https://downex.apps.gauravpatil.site
+================================================================================
+
+Solid State Drives (SSDs) are fast, but they have a finite lifespan measured
+in write endurance (Terabytes Written, or TBW).
+
+Badly designed download managers cause "disk thrashing"—they write tiny 4-kilobyte
+chunks randomly across the drive, causing the SSD controller to perform costly
+block erase cycles that wear out the drive prematurely.
+
+Downex protects your SSD through Sequential Buffered I/O:
+- Instead of writing every incoming packet to the disk instantly, Downex collects
+  data into a 512 KB memory buffer.
+- Once full, it writes the entire block sequentially into its exact file location
+  in a single disk operation.
+- This maximizes disk throughput, prevents drive stutter, and significantly
+  reduces wear on your SSD over the lifetime of your computer.
+
+Craftsmanship means caring about the physical hardware your software runs on.
+
+================================================================================
+Copyright (C) 2026 Gaurav Patil. All Rights Reserved.
+================================================================================

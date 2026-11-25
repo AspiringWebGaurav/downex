@@ -14,23 +14,37 @@ import {
 } from 'lucide-react';
 import { useDownloadStore } from '../stores/downloadStore';
 import { useAppVersionStore } from '../stores/appVersionStore';
+import { useHardwareBanStore } from '../stores/hardwareBanStore';
+import { useMarqueeNoticeStore } from '../stores/marqueeNoticeStore';
 import { cleanVersion } from '../utils/version';
 import { SidebarTooltip } from './ui/SidebarTooltip';
 
 interface DownexSidebarProps {
   darkMode: boolean;
   setDarkMode: (val: boolean) => void;
+  isBanned?: boolean;
+  isReinstating?: boolean;
 }
 
-export const DownexSidebar: React.FC<DownexSidebarProps> = ({ darkMode, setDarkMode }) => {
+const SIDEBAR_STORAGE_KEY = 'downex_sidebar_collapsed';
+
+export const DownexSidebar: React.FC<DownexSidebarProps> = ({
+  darkMode,
+  setDarkMode,
+  isBanned = false,
+  isReinstating = false,
+}) => {
   const [isCollapsed, setIsCollapsed] = useState<boolean>(() => {
     try {
-      const saved = localStorage.getItem('downex_sidebar_collapsed');
+      const saved = localStorage.getItem(SIDEBAR_STORAGE_KEY);
       return saved === 'true';
     } catch {
       return false;
     }
   });
+
+  const isSidebarLocked = Boolean(isBanned || isReinstating);
+  const effectiveCollapsed = isSidebarLocked ? true : isCollapsed;
 
   const selectedView = useDownloadStore((state) => state.selectedView);
   const setSelectedView = useDownloadStore((state) => state.setSelectedView);
@@ -41,17 +55,79 @@ export const DownexSidebar: React.FC<DownexSidebarProps> = ({ darkMode, setDarkM
   const status = useAppVersionStore((state) => state.status);
   const currentVersion = useAppVersionStore((state) => state.currentVersion);
   const checkForUpdates = useAppVersionStore((state) => state.checkForUpdates);
+  const noticePulse = useMarqueeNoticeStore((state) => state.noticePulse);
+
+  // Sync sidebar state when unban completes or pre-ban snapshot is restored
+  useEffect(() => {
+    const syncFromStorage = () => {
+      try {
+        const saved = localStorage.getItem(SIDEBAR_STORAGE_KEY);
+        if (saved !== null) {
+          setIsCollapsed(saved === 'true');
+        }
+      } catch (e) {
+        console.warn('Failed to restore sidebar state:', e);
+      }
+    };
+
+    const handleRestoreEvent = (e: Event) => {
+      const custom = e as CustomEvent<{ sidebarCollapsed?: boolean }>;
+      if (custom?.detail && typeof custom.detail.sidebarCollapsed === 'boolean') {
+        setIsCollapsed(custom.detail.sidebarCollapsed);
+      } else {
+        syncFromStorage();
+      }
+    };
+
+    if (!isSidebarLocked) {
+      syncFromStorage();
+    }
+
+    window.addEventListener('downex-restore-ui-settings', handleRestoreEvent);
+    return () => window.removeEventListener('downex-restore-ui-settings', handleRestoreEvent);
+  }, [isSidebarLocked]);
 
   const toggleCollapse = () => {
+    const { isBanned: bannedNow, isReinstating: reinstatingNow } = useHardwareBanStore.getState();
+    if (bannedNow || reinstatingNow || isSidebarLocked) return;
     setIsCollapsed((prev) => {
       const next = !prev;
       try {
-        localStorage.setItem('downex_sidebar_collapsed', String(next));
+        localStorage.setItem(SIDEBAR_STORAGE_KEY, String(next));
       } catch (e) {
         console.warn('Failed to save sidebar state to localStorage:', e);
       }
       return next;
     });
+  };
+
+  const handleSidebarMouseDown = (e: React.MouseEvent<HTMLElement>) => {
+    if (e.button !== 0 || e.detail < 2) return;
+    const target = e.target instanceof Element ? e.target : null;
+    if (
+      target &&
+      !target.closest(
+        'button, a, input, select, textarea, [role="button"], [data-sidebar-interactive="true"]'
+      )
+    ) {
+      // Prevent native browser double-click selection/drag artifacts on empty space
+      e.preventDefault();
+    }
+  };
+
+  const handleSidebarDoubleClick = (e: React.MouseEvent<HTMLElement>) => {
+    if (e.button !== 0 || e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return;
+    const target = e.target instanceof Element ? e.target : null;
+    if (!target) return;
+    if (
+      target.closest(
+        'button, a, input, select, textarea, [role="button"], [data-sidebar-interactive="true"]'
+      )
+    ) {
+      return;
+    }
+    e.preventDefault();
+    toggleCollapse();
   };
 
   useEffect(() => {
@@ -74,6 +150,27 @@ export const DownexSidebar: React.FC<DownexSidebarProps> = ({ darkMode, setDarkM
   const wasManualClickRef = useRef(false);
   const [showResultStage, setShowResultStage] = useState(false);
   const resultTimerRef = useRef<number | null>(null);
+
+  // Theme switch tactile pulse animation (Sun & Moon ambient halo)
+  const [themePulse, setThemePulse] = useState<'sun' | 'moon' | null>(null);
+  const themePulseTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+  const handleToggleTheme = () => {
+    const nextIsDark = !darkMode;
+    if (themePulseTimerRef.current) clearTimeout(themePulseTimerRef.current);
+    setThemePulse(nextIsDark ? 'moon' : 'sun');
+    themePulseTimerRef.current = setTimeout(() => {
+      setThemePulse(null);
+    }, 550);
+
+    setDarkMode(nextIsDark);
+  };
+
+  useEffect(() => {
+    return () => {
+      if (themePulseTimerRef.current) clearTimeout(themePulseTimerRef.current);
+    };
+  }, []);
 
   useEffect(() => {
     if (isChecking) {
@@ -111,6 +208,8 @@ export const DownexSidebar: React.FC<DownexSidebarProps> = ({ darkMode, setDarkM
     switch (status.state) {
       case 'checking':
         return 'CHECKING';
+      case 'available':
+        return 'UPDATE READY';
       case 'up-to-date':
         return showResultStage ? 'UP TO DATE' : '';
       case 'error':
@@ -119,15 +218,18 @@ export const DownexSidebar: React.FC<DownexSidebarProps> = ({ darkMode, setDarkM
         return `${pct}%`;
       case 'verifying':
         return 'VERIFYING';
-      case 'ready':
+      case 'patching':
+        return 'PATCHING';
       case 'installing':
+      case 'ready':
+        return 'WORKING';
       case 'restarting':
-        return 'UPDATING';
+        return 'RESTARTING';
       case 'waiting_timer':
       case 'queued':
         return 'QUEUED';
       default:
-        return '';
+        return noticePulse ? 'NOTICE' : '';
     }
   })();
 
@@ -139,37 +241,52 @@ export const DownexSidebar: React.FC<DownexSidebarProps> = ({ darkMode, setDarkM
           : 'text-zinc-600 font-semibold animate-pulse';
       case 'error':
         return darkMode ? 'text-rose-400 font-semibold' : 'text-rose-600 font-semibold';
+      case 'available':
+        return darkMode
+          ? 'text-emerald-400 font-semibold animate-pulse'
+          : 'text-emerald-600 font-semibold animate-pulse';
       case 'waiting_timer':
       case 'queued':
         return darkMode ? 'text-amber-400 font-semibold' : 'text-amber-600 font-semibold';
+      case 'verifying':
+        return darkMode ? 'text-indigo-400 font-semibold animate-pulse' : 'text-indigo-600 font-semibold animate-pulse';
+      case 'patching':
+        return darkMode ? 'text-violet-400 font-semibold animate-pulse' : 'text-violet-600 font-semibold animate-pulse';
+      case 'installing':
+      case 'ready':
+        return darkMode ? 'text-sky-400 font-semibold animate-pulse' : 'text-sky-600 font-semibold animate-pulse';
+      case 'restarting':
+        return darkMode ? 'text-purple-400 font-semibold animate-pulse' : 'text-purple-600 font-semibold animate-pulse';
       default:
-        return darkMode ? 'text-emerald-400 font-semibold' : 'text-emerald-600 font-semibold';
+        return noticePulse
+          ? darkMode
+            ? 'text-sky-400 font-semibold animate-pulse'
+            : 'text-sky-600 font-semibold animate-pulse'
+          : darkMode
+          ? 'text-emerald-400 font-semibold'
+          : 'text-emerald-600 font-semibold';
     }
   })();
-
-  const stagePhaseKey = otaStageText ? status.state : '';
 
   const activeDlPct =
     status.state === 'downloading'
       ? pct
       : status.state === 'verifying' ||
-        status.state === 'ready' ||
+        status.state === 'patching' ||
         status.state === 'installing' ||
+        status.state === 'ready' ||
         status.state === 'restarting'
       ? 100
       : 0;
 
   const [displayedStage, setDisplayedStage] = useState(otaStageText);
   const [displayedTone, setDisplayedTone] = useState(otaStageTone);
-  const [displayedPhaseKey, setDisplayedPhaseKey] = useState(stagePhaseKey);
   const [stageVisible, setStageVisible] = useState(Boolean(otaStageText));
   const [dlBarWidth, setDlBarWidth] = useState(activeDlPct);
   const hideTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
-    if (activeDlPct > 0) {
-      setDlBarWidth(activeDlPct);
-    }
+    setDlBarWidth(activeDlPct);
   }, [activeDlPct]);
 
   useEffect(() => {
@@ -181,25 +298,15 @@ export const DownexSidebar: React.FC<DownexSidebarProps> = ({ darkMode, setDarkM
     if (otaStageText) {
       setDisplayedStage(otaStageText);
       setDisplayedTone(otaStageTone);
-      setDisplayedPhaseKey(stagePhaseKey);
-      let raf2 = 0;
-      const raf1 = window.requestAnimationFrame(() => {
-        raf2 = window.requestAnimationFrame(() => {
-          setStageVisible(true);
-        });
-      });
-      return () => {
-        window.cancelAnimationFrame(raf1);
-        window.cancelAnimationFrame(raf2);
-      };
+      setStageVisible(true);
+      return;
     }
 
     setStageVisible(false);
     hideTimerRef.current = window.setTimeout(() => {
       setDisplayedStage('');
-      setDisplayedPhaseKey('');
       hideTimerRef.current = null;
-    }, 520);
+    }, 350);
 
     return () => {
       if (hideTimerRef.current !== null) {
@@ -207,7 +314,7 @@ export const DownexSidebar: React.FC<DownexSidebarProps> = ({ darkMode, setDarkM
         hideTimerRef.current = null;
       }
     };
-  }, [otaStageText, otaStageTone, stagePhaseKey]);
+  }, [otaStageText, otaStageTone]);
 
   const rowWashClass = !otaStageText
     ? 'opacity-0'
@@ -215,6 +322,14 @@ export const DownexSidebar: React.FC<DownexSidebarProps> = ({ darkMode, setDarkM
     ? `opacity-100 ${darkMode ? 'bg-rose-500/[0.07]' : 'bg-rose-500/[0.06]'}`
     : status.state === 'waiting_timer' || status.state === 'queued'
     ? `opacity-100 ${darkMode ? 'bg-amber-500/[0.07]' : 'bg-amber-500/[0.06]'}`
+    : status.state === 'verifying'
+    ? `opacity-100 ${darkMode ? 'bg-indigo-500/[0.08]' : 'bg-indigo-500/[0.06]'}`
+    : status.state === 'patching'
+    ? `opacity-100 ${darkMode ? 'bg-violet-500/[0.08]' : 'bg-violet-500/[0.06]'}`
+    : status.state === 'installing' || status.state === 'ready'
+    ? `opacity-100 ${darkMode ? 'bg-sky-500/[0.08]' : 'bg-sky-500/[0.06]'}`
+    : status.state === 'restarting'
+    ? `opacity-100 ${darkMode ? 'bg-purple-500/[0.08]' : 'bg-purple-500/[0.06]'}`
     : status.state === 'checking'
     ? `opacity-100 ${darkMode ? 'bg-zinc-800/35' : 'bg-zinc-200/40'}`
     : `opacity-100 ${darkMode ? 'bg-emerald-500/[0.08]' : 'bg-emerald-500/[0.06]'}`;
@@ -223,6 +338,7 @@ export const DownexSidebar: React.FC<DownexSidebarProps> = ({ darkMode, setDarkM
   const showDlBar =
     status.state === 'downloading' ||
     status.state === 'verifying' ||
+    status.state === 'patching' ||
     status.state === 'ready' ||
     status.state === 'installing' ||
     status.state === 'restarting';
@@ -234,17 +350,18 @@ export const DownexSidebar: React.FC<DownexSidebarProps> = ({ darkMode, setDarkM
   const trashCount = items.filter(
     (i) => i.status === 'failed' || i.status === 'cancelled' || i.status === 'error'
   ).length;
+  const allDownloadsCount = items.filter((i) => i.status !== 'queued').length;
 
   const navItems = [
     {
       id: 'all',
       label: 'All Downloads',
       icon: Download,
-      count: items.length,
+      count: allDownloadsCount,
       subLabel:
         activeDownloadingCount > 0
           ? `${activeDownloadingCount} active download${activeDownloadingCount > 1 ? 's' : ''}`
-          : `${items.length} total downloads`,
+          : `${allDownloadsCount} total downloads`,
       activeCount: activeDownloadingCount,
     },
     {
@@ -299,39 +416,64 @@ export const DownexSidebar: React.FC<DownexSidebarProps> = ({ darkMode, setDarkM
 
   return (
     <aside
-      className={`relative z-30 h-full flex flex-col justify-between select-none border-r shrink-0 transition-all duration-300 ease-in-out ${
+      onMouseDown={handleSidebarMouseDown}
+      onDoubleClick={handleSidebarDoubleClick}
+      className={`relative z-30 h-full flex flex-col justify-between select-none border-r shrink-0 transition-[width] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] will-change-[width] ${
         darkMode
           ? 'bg-zinc-900 border-zinc-800 text-zinc-100'
           : 'bg-[#FAFAFA] border-zinc-200 text-zinc-900'
-      } ${isCollapsed ? 'w-[70px]' : 'w-[228px]'}`}
+      } ${effectiveCollapsed ? 'w-[64px]' : 'w-[172px]'}`}
     >
       {/* Collapse/Expand Floating Button - Positioned neatly near top, 100% visible, smoothly animated */}
       <button
         type="button"
         onClick={toggleCollapse}
-        title={isCollapsed ? 'Expand Sidebar (Ctrl+B)' : 'Collapse Sidebar (Ctrl+B)'}
-        aria-label={isCollapsed ? 'Expand Sidebar (Ctrl+B)' : 'Collapse Sidebar (Ctrl+B)'}
-        className="absolute -right-2.5 top-[27px] -translate-y-1/2 z-40 w-5 h-5 rounded-full bg-white dark:bg-zinc-800 border border-zinc-200/90 dark:border-zinc-700/90 shadow-sm hover:shadow-md flex items-center justify-center text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 hover:bg-zinc-50 dark:hover:bg-zinc-700 active:scale-90 hover:scale-110 transition-all duration-200 ease-out cursor-pointer pointer-events-auto"
+        onDoubleClick={(e) => e.stopPropagation()}
+        disabled={isSidebarLocked}
+        title={
+          isSidebarLocked
+            ? 'Sidebar locked while banned'
+            : effectiveCollapsed
+            ? 'Expand Sidebar (Ctrl+B)'
+            : 'Collapse Sidebar (Ctrl+B)'
+        }
+        aria-label={
+          isSidebarLocked
+            ? 'Sidebar locked while banned'
+            : effectiveCollapsed
+            ? 'Expand Sidebar (Ctrl+B)'
+            : 'Collapse Sidebar (Ctrl+B)'
+        }
+        className={`absolute -right-2.5 top-[25px] -translate-y-1/2 z-40 w-5 h-5 rounded-full bg-white dark:bg-zinc-800 border border-zinc-200/90 dark:border-zinc-700/90 shadow-sm flex items-center justify-center text-zinc-500 dark:text-zinc-400 ${
+          isSidebarLocked
+            ? 'opacity-60 cursor-not-allowed'
+            : 'hover:shadow-md hover:text-zinc-900 dark:hover:text-zinc-100 hover:bg-zinc-50 dark:hover:bg-zinc-700 active:scale-90 hover:scale-110 cursor-pointer pointer-events-auto'
+        } transition-all duration-200 ease-out`}
       >
         <ChevronLeft
           className={`w-3.5 h-3.5 transition-transform duration-300 ease-[cubic-bezier(0.34,1.56,0.64,1)] ${
-            isCollapsed ? 'rotate-180' : ''
+            effectiveCollapsed ? 'rotate-180' : ''
           }`}
         />
       </button>
 
       {/* Top Header & Navigation Section */}
-      <div className="flex flex-col overflow-x-hidden pt-2">
+      <div className="flex flex-col overflow-hidden pt-2">
         {/* Navigation Items */}
-        <nav className={isCollapsed ? 'px-2.5 space-y-1' : 'px-3 space-y-0.5'}>
+        <nav
+          className={`transition-[padding] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] ${
+            effectiveCollapsed ? 'px-3 space-y-1' : 'px-2.5 space-y-0.5'
+          }`}
+        >
           {navItems.map((item) => {
             const Icon = item.icon;
             const isSelected = selectedView === item.id;
 
             const buttonNode = (
               <button
-                key={item.id}
+                disabled={isSidebarLocked}
                 onClick={() => {
+                  if (isSidebarLocked) return;
                   if (item.isAction) {
                     setNewModalOpen(true);
                   } else {
@@ -341,34 +483,43 @@ export const DownexSidebar: React.FC<DownexSidebarProps> = ({ darkMode, setDarkM
                     }
                   }
                 }}
-                className={`w-full flex items-center justify-between px-3 py-2 text-[13px] font-medium transition-colors text-left cursor-pointer rounded-sm ${
-                  isCollapsed ? 'w-11 h-11 mx-auto justify-center p-0 relative rounded-md' : ''
+                className={`flex items-center justify-start text-[11.5px] font-mono-tabular text-left overflow-hidden transition-[width,height,padding,border-radius,background-color,color] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] ${
+                  isSidebarLocked ? 'opacity-40 cursor-not-allowed' : 'cursor-pointer'
+                } ${
+                  effectiveCollapsed
+                    ? 'w-[40px] h-[40px] pl-[12.5px] pr-0 rounded-md relative'
+                    : 'w-[152px] h-[30px] pl-2.5 pr-2.5 rounded-sm'
                 } ${
                   isSelected
                     ? darkMode
-                      ? 'bg-white text-zinc-950 font-medium'
-                      : 'bg-black text-white font-medium'
+                      ? 'bg-white text-zinc-950 font-semibold'
+                      : 'bg-black text-white font-semibold'
                     : darkMode
-                    ? 'text-zinc-400 hover:text-white hover:bg-zinc-800/60'
-                    : 'text-zinc-600 hover:text-zinc-950 hover:bg-zinc-200/50'
+                    ? 'text-zinc-400 hover:text-white hover:bg-zinc-800/60 font-medium'
+                    : 'text-zinc-600 hover:text-zinc-950 hover:bg-zinc-200/50 font-medium'
                 }`}
               >
-                <div className={`flex items-center ${isCollapsed ? 'justify-center relative' : 'gap-2.5'}`}>
-                  <Icon size={16} strokeWidth={2} className="shrink-0" />
-                  {!isCollapsed && <span className="truncate">{item.label}</span>}
+                <div className="relative flex items-center shrink-0">
+                  <Icon size={15} strokeWidth={2} className="shrink-0" />
 
                   {/* Active downloading indicator on All Downloads icon when collapsed */}
-                  {isCollapsed && item.id === 'all' && (item.activeCount || 0) > 0 && (
-                    <span className="absolute -top-1 -right-1 flex h-2 w-2 pointer-events-none">
+                  {item.id === 'all' && (item.activeCount || 0) > 0 && (
+                    <span
+                      className={`absolute -top-1 -right-1 flex h-2 w-2 pointer-events-none transition-opacity duration-200 ${
+                        effectiveCollapsed ? 'opacity-100' : 'opacity-0'
+                      }`}
+                    >
                       <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
                       <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" />
                     </span>
                   )}
 
                   {/* Collapsed Badge Pill on Icon for Queues / Trash */}
-                  {isCollapsed && item.count !== undefined && item.count > 0 && item.id !== 'all' && (
+                  {item.count !== undefined && item.count > 0 && item.id !== 'all' && (
                     <span
-                      className={`absolute -top-1 -right-1 min-w-[16px] h-3.5 px-0.5 rounded-full text-[8.5px] font-mono font-bold flex items-center justify-center leading-none shadow-xs pointer-events-none ${
+                      className={`absolute -top-1.5 -right-1.5 min-w-[15px] h-3.5 px-0.5 rounded-full text-[8.5px] font-mono font-bold flex items-center justify-center leading-none shadow-xs pointer-events-none transition-opacity duration-200 ${
+                        effectiveCollapsed ? 'opacity-100' : 'opacity-0'
+                      } ${
                         item.highlight
                           ? 'bg-emerald-500 text-white animate-pulse'
                           : isSelected
@@ -385,37 +536,52 @@ export const DownexSidebar: React.FC<DownexSidebarProps> = ({ darkMode, setDarkM
                   )}
                 </div>
 
-                {!isCollapsed ? (
-                  item.isAction ? (
-                    <span
-                      className={`text-[10px] font-mono-tabular ${
-                        isSelected ? 'opacity-70' : 'text-zinc-400 dark:text-zinc-500'
-                      }`}
-                    >
-                      Ctrl+N
-                    </span>
-                  ) : item.count !== undefined && item.count > 0 ? (
-                    <span
-                      className={`text-[10px] font-mono-tabular px-1.5 py-0.5 rounded-sm ${
-                        isSelected
-                          ? darkMode
-                            ? 'bg-zinc-200 text-zinc-900 font-bold'
-                            : 'bg-zinc-800 text-white font-bold'
-                          : item.highlight
-                          ? 'bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 font-semibold'
-                          : 'text-zinc-400'
-                      }`}
-                    >
-                      {item.count}
-                    </span>
-                  ) : null
-                ) : null}
+                <span
+                  className={`truncate whitespace-nowrap overflow-hidden transition-[max-width,opacity,margin] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] ${
+                    effectiveCollapsed ? 'max-w-0 opacity-0 ml-0' : 'max-w-[96px] opacity-100 ml-2.5'
+                  }`}
+                >
+                  {item.label}
+                </span>
+
+                {(item.isAction || (item.count !== undefined && item.count > 0)) && (
+                  <span
+                    className={`shrink-0 overflow-hidden whitespace-nowrap transition-[max-width,opacity,margin] duration-250 ease-out ${
+                      effectiveCollapsed ? 'max-w-0 opacity-0 ml-0' : 'max-w-[46px] opacity-100 ml-auto'
+                    }`}
+                  >
+                    {item.isAction ? (
+                      <span
+                        className={`text-[10px] font-mono-tabular ${
+                          isSelected ? 'opacity-70' : 'text-zinc-400 dark:text-zinc-500'
+                        }`}
+                      >
+                        Ctrl+N
+                      </span>
+                    ) : (
+                      <span
+                        className={`text-[10px] font-mono-tabular px-1.5 py-0.5 rounded-sm ${
+                          isSelected
+                            ? darkMode
+                              ? 'bg-zinc-200 text-zinc-900 font-bold'
+                              : 'bg-zinc-800 text-white font-bold'
+                            : item.highlight
+                            ? 'bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 font-semibold'
+                            : 'text-zinc-400'
+                        }`}
+                      >
+                        {item.count}
+                      </span>
+                    )}
+                  </span>
+                )}
               </button>
             );
 
-            return isCollapsed ? (
+            return (
               <SidebarTooltip
                 key={item.id}
+                disabled={!effectiveCollapsed}
                 label={item.label}
                 subLabel={item.subLabel}
                 shortcut={item.shortcut}
@@ -426,122 +592,134 @@ export const DownexSidebar: React.FC<DownexSidebarProps> = ({ darkMode, setDarkM
               >
                 {buttonNode}
               </SidebarTooltip>
-            ) : (
-              buttonNode
             );
           })}
         </nav>
       </div>
 
       {/* Bottom Actions & Version Info - Positioned right at Check updates horizontal line */}
-      <div className="shrink-0 select-none">
-        {!isCollapsed ? (
+      <div className="shrink-0 select-none overflow-hidden">
+        <div className="relative h-[32px] overflow-hidden">
+          {/* Expanded Version Row */}
           <div
             data-testid="sidebar-version"
-            onClick={() => {
-              wasManualClickRef.current = true;
-              checkForUpdates(false);
-            }}
-            title={isChecking ? 'Checking for updates...' : 'Click to check for updates'}
-            className="group relative overflow-hidden pl-4 pr-4 pt-2 pb-2 flex items-center justify-between gap-2 font-mono-tabular text-[10px] uppercase tracking-wider select-none text-zinc-500 cursor-pointer hover:bg-zinc-100/60 dark:hover:bg-zinc-800/40 transition-colors"
+            data-sidebar-interactive="true"
+            aria-label={`Downex version ${cleanVersion(currentVersion)}`}
+            className={`group absolute inset-x-0 top-0 h-[28px] overflow-hidden pl-2.5 pr-2.5 pt-1.5 pb-1.5 flex items-center justify-between gap-1.5 font-mono-tabular text-[10px] uppercase tracking-wider select-none text-zinc-500 cursor-default transition-opacity duration-200 ${
+              effectiveCollapsed ? 'opacity-0 pointer-events-none' : 'opacity-100'
+            }`}
           >
             {/* Dynamic Stage Background Wash */}
             <div
               aria-hidden="true"
-              className={`absolute inset-x-3 inset-y-0.5 pointer-events-none transition-opacity duration-500 ease-out ${rowWashClass}`}
+              className={`absolute inset-x-2 inset-y-0.5 rounded pointer-events-none transition-opacity duration-300 ease-out will-change-opacity ${rowWashClass}`}
             />
 
             {/* Ambient Shimmer Sweep during Checking */}
             {showShimmer && (
               <div
                 aria-hidden="true"
-                className="absolute inset-x-3 inset-y-0.5 pointer-events-none overflow-hidden"
+                className="absolute inset-x-2 inset-y-0.5 pointer-events-none overflow-hidden rounded"
               >
                 <div
                   className={`h-full w-2/3 animate-shimmer-sweep ${
                     darkMode
-                      ? 'bg-gradient-to-r from-transparent via-zinc-300/10 to-transparent'
-                      : 'bg-gradient-to-r from-transparent via-zinc-900/[0.06] to-transparent'
+                      ? 'bg-gradient-to-r from-transparent via-zinc-300/12 to-transparent'
+                      : 'bg-gradient-to-r from-transparent via-zinc-900/[0.08] to-transparent'
                   }`}
                 />
               </div>
             )}
 
-            {/* Hairline Bottom Progress Bar with Emerald Fill */}
+            {/* Hairline Bottom Progress Bar with GPU Composited Transform */}
             <div
               aria-hidden="true"
-              className={`absolute inset-x-0 bottom-0 h-[1.5px] pointer-events-none transition-opacity duration-500 ease-out ${
+              className={`ota-progress-track ${
                 showDlBar ? 'opacity-100' : 'opacity-0'
-              } ${darkMode ? 'bg-zinc-800/70' : 'bg-zinc-200/70'}`}
+              } ${darkMode ? 'bg-zinc-800/80' : 'bg-zinc-200/80'}`}
             >
               <div
-                className={`h-full transition-[width] duration-300 ease-out ${
-                  darkMode ? 'bg-emerald-400' : 'bg-emerald-600'
+                className={`ota-progress-fill ${
+                  status.state === 'downloading' ? 'ota-progress-active' : ''
+                } bg-gradient-to-r ${
+                  darkMode
+                    ? 'from-emerald-500 via-emerald-400 to-teal-300'
+                    : 'from-emerald-600 via-emerald-500 to-teal-400'
                 }`}
-                style={{ width: `${dlBarWidth}%` }}
+                style={{ transform: `scaleX(${Math.min(100, Math.max(0, dlBarWidth)) / 100})` }}
               />
             </div>
 
-            <span className="relative z-10 whitespace-nowrap leading-none group-hover:text-zinc-700 dark:group-hover:text-zinc-300 transition-colors">
-              APP VERSION
+            <span className="relative z-10 whitespace-nowrap leading-none transition-colors">
+              {stageVisible && displayedStage ? (
+                <span className="text-[10px] uppercase tracking-wider leading-none font-mono-tabular font-medium text-zinc-500 dark:text-zinc-400">
+                  v{cleanVersion(currentVersion)}
+                </span>
+              ) : (
+                'APP VERSION'
+              )}
             </span>
             <span className="relative z-10 inline-flex items-center gap-1.5 whitespace-nowrap leading-none font-mono-tabular">
-              <span className="text-[10px] uppercase tracking-wider leading-none">
-                v{cleanVersion(currentVersion)}
-              </span>
+              {(!stageVisible || !displayedStage) && status.state !== 'available' && (
+                <span className="text-[10px] uppercase tracking-wider leading-none">
+                  v{cleanVersion(currentVersion)}
+                </span>
+              )}
               {displayedStage ? (
                 <span
                   data-testid="sidebar-version-stage"
-                  className={`inline-flex items-center text-[10px] uppercase font-mono-tabular tracking-wider leading-none transition-all duration-300 ${displayedTone} ${
-                    stageVisible ? 'opacity-100 max-w-[100px]' : 'opacity-0 max-w-0'
+                  className={`inline-flex items-center text-[10px] uppercase font-mono-tabular tracking-wider leading-none transition-opacity duration-150 ${displayedTone} ${
+                    stageVisible ? 'opacity-100' : 'opacity-0'
                   }`}
                 >
-                  <span
-                    key={displayedPhaseKey}
-                    className="inline-block animate-fade-in font-semibold leading-none"
-                  >
+                  <span className="inline-block font-semibold leading-none">
                     {displayedStage}
                   </span>
                 </span>
               ) : null}
             </span>
           </div>
-        ) : (
-          <div className="flex justify-center items-center pb-2">
+
+          {/* Collapsed Version Pill */}
+          <div
+            className={`absolute inset-x-0 top-0 pb-2 flex justify-center items-center transition-opacity duration-200 ${
+              effectiveCollapsed ? 'opacity-100' : 'opacity-0 pointer-events-none'
+            }`}
+          >
             <SidebarTooltip
+              disabled={!effectiveCollapsed}
               label={`Downex v${cleanVersion(currentVersion)}`}
               subLabel={
                 isChecking
                   ? 'Checking for updates...'
                   : otaStageText
                   ? `Update: ${otaStageText}`
-                  : 'App is up to date • Click to check'
+                  : `Version v${cleanVersion(currentVersion)}`
               }
               side="right"
               darkMode={darkMode}
             >
-              <button
-                type="button"
-                onClick={() => {
-                  wasManualClickRef.current = true;
-                  checkForUpdates(false);
-                }}
-                disabled={isChecking}
+              <div
+                data-sidebar-interactive="true"
                 aria-label={`Downex v${cleanVersion(currentVersion)}`}
-                className="group relative w-[52px] h-[25px] mx-auto flex items-center justify-center rounded-md bg-zinc-100 dark:bg-zinc-800/80 hover:bg-zinc-200/80 dark:hover:bg-zinc-700/80 border border-zinc-200/90 dark:border-zinc-700/70 shadow-2xs hover:shadow-xs transition-all duration-200 cursor-pointer overflow-hidden"
+                className="group relative w-[52px] h-[25px] mx-auto flex items-center justify-center rounded-md bg-zinc-100 dark:bg-zinc-800/80 border border-zinc-200/90 dark:border-zinc-700/70 shadow-2xs select-none cursor-default overflow-hidden"
               >
                 {/* Hairline Progress in Collapsed Mode */}
                 <div
                   aria-hidden="true"
-                  className={`absolute inset-x-0 bottom-0 h-[2px] pointer-events-none transition-opacity duration-300 ${
+                  className={`ota-progress-track ${
                     showDlBar ? 'opacity-100' : 'opacity-0'
-                  } ${darkMode ? 'bg-zinc-800' : 'bg-zinc-200'}`}
+                  } ${darkMode ? 'bg-zinc-800/80' : 'bg-zinc-200/80'}`}
                 >
                   <div
-                    className={`h-full transition-[width] duration-300 ${
-                      darkMode ? 'bg-emerald-400' : 'bg-emerald-600'
+                    className={`ota-progress-fill ${
+                      status.state === 'downloading' ? 'ota-progress-active' : ''
+                    } bg-gradient-to-r ${
+                      darkMode
+                        ? 'from-emerald-500 via-emerald-400 to-teal-300'
+                        : 'from-emerald-600 via-emerald-500 to-teal-400'
                     }`}
-                    style={{ width: `${dlBarWidth}%` }}
+                    style={{ transform: `scaleX(${Math.min(100, Math.max(0, dlBarWidth)) / 100})` }}
                   />
                 </div>
 
@@ -565,6 +743,10 @@ export const DownexSidebar: React.FC<DownexSidebarProps> = ({ darkMode, setDarkM
                   <span className="font-mono text-[10px] font-bold tracking-tight text-zinc-600 dark:text-zinc-300 leading-none select-none animate-pulse">
                     v{cleanVersion(currentVersion)}
                   </span>
+                ) : status.state === 'available' ? (
+                  <span className="text-[9px] font-mono font-bold text-emerald-600 dark:text-emerald-400 leading-none animate-pulse">
+                    NEW
+                  </span>
                 ) : status.state === 'downloading' ? (
                   <span className="font-mono text-[9.5px] font-bold text-emerald-600 dark:text-emerald-400 animate-pulse leading-none">
                     {pct}%
@@ -578,104 +760,127 @@ export const DownexSidebar: React.FC<DownexSidebarProps> = ({ darkMode, setDarkM
                     v{cleanVersion(currentVersion)}
                   </span>
                 )}
-              </button>
+              </div>
             </SidebarTooltip>
           </div>
-        )}
+        </div>
 
         {/* Check update horizontal line */}
         <div
-          className={`border-t border-zinc-200 dark:border-zinc-800 ${
-            isCollapsed ? 'p-2.5 space-y-1' : 'p-3 space-y-0.5'
+          className={`border-t border-zinc-200 dark:border-zinc-800 transition-[padding] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] ${
+            effectiveCollapsed ? 'px-3 py-2 space-y-1' : 'p-2.5 space-y-0.5'
           }`}
         >
-          {isCollapsed ? (
-            <>
-              <SidebarTooltip
-                label="Check for Updates"
-                subLabel={isChecking ? 'Checking for updates...' : `Current: v${cleanVersion(currentVersion)}`}
-                side="right"
-                darkMode={darkMode}
-              >
-                <button
-                  type="button"
-                  onClick={() => {
-                    wasManualClickRef.current = true;
-                    checkForUpdates(false);
-                  }}
-                  disabled={isChecking}
-                  aria-label="Check for updates"
-                  className={`w-11 h-11 mx-auto flex items-center justify-center rounded-md transition-colors cursor-pointer ${
-                    darkMode
-                      ? 'text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800/60'
-                      : 'text-zinc-500 hover:text-zinc-900 hover:bg-zinc-200/50'
-                  }`}
-                >
-                  <RefreshCw
-                    size={16}
-                    strokeWidth={1.75}
-                    className={isChecking ? 'animate-spin text-emerald-500' : ''}
-                  />
-                </button>
-              </SidebarTooltip>
-
-              <SidebarTooltip
-                label={darkMode ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
-                side="right"
-                darkMode={darkMode}
-              >
-                <button
-                  type="button"
-                  onClick={() => setDarkMode(!darkMode)}
-                  aria-label={darkMode ? 'Light mode' : 'Dark mode'}
-                  className={`w-11 h-11 mx-auto flex items-center justify-center rounded-md transition-colors cursor-pointer ${
-                    darkMode
-                      ? 'text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800/60'
-                      : 'text-zinc-500 hover:text-zinc-900 hover:bg-zinc-200/50'
-                  }`}
-                >
-                  {darkMode ? <Sun size={16} strokeWidth={1.75} /> : <Moon size={16} strokeWidth={1.75} />}
-                </button>
-              </SidebarTooltip>
-            </>
-          ) : (
-            <>
-              <button
-                type="button"
-                onClick={() => {
-                  wasManualClickRef.current = true;
-                  checkForUpdates(false);
-                }}
-                disabled={isChecking}
-                title={isChecking ? 'Checking for updates...' : 'Check for updates'}
-                className={`w-full flex items-center gap-2.5 px-3 py-1.5 text-[12px] text-left cursor-pointer transition-colors rounded-sm ${
-                  darkMode ? 'text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800/50' : 'text-zinc-500 hover:text-zinc-900 hover:bg-zinc-200/40'
+          <SidebarTooltip
+            disabled={!effectiveCollapsed}
+            label={isSidebarLocked ? 'Updates Unavailable' : 'Check for Updates'}
+            subLabel={
+              isSidebarLocked
+                ? 'Device banned from owner updates'
+                : isChecking
+                ? 'Checking for updates...'
+                : `Current: v${cleanVersion(currentVersion)}`
+            }
+            side="right"
+            darkMode={darkMode}
+          >
+            <button
+              type="button"
+              onClick={() => {
+                if (isSidebarLocked || isChecking) return;
+                wasManualClickRef.current = true;
+                checkForUpdates(false);
+              }}
+              disabled={isSidebarLocked || isChecking}
+              title={
+                effectiveCollapsed
+                  ? undefined
+                  : isSidebarLocked
+                  ? 'Updates unavailable (Device banned)'
+                  : isChecking
+                  ? 'Checking for updates...'
+                  : 'Check for updates'
+              }
+              aria-label={isSidebarLocked ? 'Updates unavailable (Device banned)' : 'Check for updates'}
+              className={`flex items-center justify-start text-[11px] font-mono-tabular text-left overflow-hidden transition-[width,height,padding,border-radius,background-color,color] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] ${
+                effectiveCollapsed
+                  ? 'w-[40px] h-[40px] pl-[12.5px] pr-0 rounded-md'
+                  : 'w-[152px] h-[28px] pl-2.5 pr-2.5 rounded-sm'
+              } ${
+                isSidebarLocked
+                  ? 'opacity-40 cursor-not-allowed text-zinc-500'
+                  : darkMode
+                  ? 'text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800/60 font-medium cursor-pointer'
+                  : 'text-zinc-600 hover:text-zinc-950 hover:bg-zinc-200/50 font-medium cursor-pointer'
+              }`}
+            >
+              <RefreshCw
+                size={15}
+                strokeWidth={1.8}
+                className={`shrink-0 ${isChecking ? 'animate-spin text-emerald-500' : ''}`}
+              />
+              <span
+                className={`truncate whitespace-nowrap overflow-hidden transition-[max-width,opacity,margin] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] ${
+                  effectiveCollapsed ? 'max-w-0 opacity-0 ml-0' : 'max-w-[110px] opacity-100 ml-2.5'
                 }`}
               >
-                <span className="w-4 h-4 inline-flex items-center justify-center shrink-0">
-                  <RefreshCw
-                    size={15}
-                    strokeWidth={1.75}
-                    className={isChecking ? 'animate-spin' : ''}
-                  />
-                </span>
-                <span>Check updates</span>
-              </button>
+                Check updates
+              </span>
+            </button>
+          </SidebarTooltip>
 
-              <button
-                type="button"
-                onClick={() => setDarkMode(!darkMode)}
-                className={`w-full flex items-center gap-2.5 px-3 py-1.5 text-[12px] text-left cursor-pointer transition-colors rounded-sm ${
-                  darkMode ? 'text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800/50' : 'text-zinc-500 hover:text-zinc-900 hover:bg-zinc-200/40'
+          <SidebarTooltip
+            disabled={!effectiveCollapsed}
+            label={darkMode ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
+            side="right"
+            darkMode={darkMode}
+          >
+            <button
+              type="button"
+              onClick={handleToggleTheme}
+              aria-label={darkMode ? 'Light mode' : 'Dark mode'}
+              className={`flex items-center justify-start text-[11px] font-mono-tabular text-left cursor-pointer group relative overflow-hidden subpixel-antialiased transition-[width,height,padding,border-radius,background-color,color] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] ${
+                effectiveCollapsed
+                  ? 'w-[40px] h-[40px] pl-[12.5px] pr-0 rounded-md'
+                  : 'w-[152px] h-[28px] pl-2.5 pr-2.5 rounded-sm'
+              } ${
+                themePulse === 'sun'
+                  ? `animate-theme-sun ${effectiveCollapsed ? '' : 'ring-1 ring-amber-500/40'}`
+                  : themePulse === 'moon'
+                  ? `animate-theme-moon ${effectiveCollapsed ? '' : 'ring-1 ring-indigo-500/40'}`
+                  : ''
+              } ${
+                darkMode
+                  ? 'text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800/60 font-medium'
+                  : 'text-zinc-600 hover:text-zinc-950 hover:bg-zinc-200/50 font-medium'
+              }`}
+            >
+              <div className="relative w-[15px] h-[15px] flex items-center justify-center shrink-0">
+                <Sun
+                  size={15}
+                  strokeWidth={1.8}
+                  className={`absolute text-amber-500 dark:text-amber-400 transition-all duration-350 ease-out ${
+                    darkMode ? 'rotate-0 scale-100 opacity-100' : '-rotate-180 scale-50 opacity-0 pointer-events-none'
+                  }`}
+                />
+                <Moon
+                  size={15}
+                  strokeWidth={1.8}
+                  className={`absolute text-zinc-600 dark:text-indigo-300 transition-all duration-350 ease-out ${
+                    !darkMode ? 'rotate-0 scale-100 opacity-100' : 'rotate-180 scale-50 opacity-0 pointer-events-none'
+                  }`}
+                />
+              </div>
+              <span
+                key={darkMode ? 'light' : 'dark'}
+                className={`truncate whitespace-nowrap overflow-hidden animate-theme-label transition-[max-width,opacity,margin] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] ${
+                  effectiveCollapsed ? 'max-w-0 opacity-0 ml-0' : 'max-w-[110px] opacity-100 ml-2.5'
                 }`}
               >
-                <span className="w-4 h-4 inline-flex items-center justify-center shrink-0">
-                  {darkMode ? <Sun size={15} strokeWidth={1.75} /> : <Moon size={15} strokeWidth={1.75} />}
-                </span>
-                <span>{darkMode ? 'Light mode' : 'Dark mode'}</span>
-              </button>
-            </>
-          )}
+                {darkMode ? 'Light mode' : 'Dark mode'}
+              </span>
+            </button>
+          </SidebarTooltip>
         </div>
       </div>
     </aside>

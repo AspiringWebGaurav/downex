@@ -44,7 +44,7 @@ test.describe('Downex — Speed & Stats Smooth Digit Count Animation', () => {
 
     // 4. Capture early frame (~100ms after opening)
     await page.waitForTimeout(100);
-    const lifetimeCard = page.locator('div.p-4.rounded-2xl', { hasText: 'Total Data Downloaded' }).locator('div.text-2xl');
+    const lifetimeCard = page.locator('[data-testid="telemetry-card-lifetime"]').locator('div.text-2xl');
     const earlyText = await lifetimeCard.innerText();
     console.log('EARLY DIGIT (100ms):', earlyText);
 
@@ -65,12 +65,12 @@ test.describe('Downex — Speed & Stats Smooth Digit Count Animation', () => {
     expect(finalText).toContain('11.64 GB');
 
     // Also verify speed settled on 15.0 MB/s
-    const speedCard = page.locator('div.p-4.rounded-2xl', { hasText: 'Current Speed' }).locator('div.text-2xl');
+    const speedCard = page.locator('[data-testid="telemetry-card-speed"]').locator('div.text-2xl');
     const finalSpeed = await speedCard.innerText();
     expect(finalSpeed).toContain('15.0 MB/s');
 
     // Verify parts settled on 16 Parts
-    const partsCard = page.locator('div.p-4.rounded-2xl', { hasText: 'Active Connections' }).locator('div.text-2xl');
+    const partsCard = page.locator('[data-testid="telemetry-card-parts"]').locator('div.text-2xl');
     const finalParts = await partsCard.innerText();
     expect(finalParts).toContain('16 Parts');
 
@@ -96,7 +96,7 @@ test.describe('Downex — Speed & Stats Smooth Digit Count Animation', () => {
 
     // Wait for first animation to settle
     await page.waitForTimeout(1300);
-    const lifetimeCard = page.locator('div.p-4.rounded-2xl', { hasText: 'Total Data Downloaded' }).locator('div.text-2xl');
+    const lifetimeCard = page.locator('[data-testid="telemetry-card-lifetime"]').locator('div.text-2xl');
     expect(await lifetimeCard.innerText()).toContain('11.64 GB');
 
     // Click Refresh Sensors button

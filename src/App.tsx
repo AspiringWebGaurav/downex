@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { Button } from './components/ui/Button';
-import { Plus, ShieldAlert, X } from 'lucide-react';
+import { Plus, RefreshCw, ShieldAlert, X } from 'lucide-react';
 import { DownexWindowHeader } from './components/DownexWindowHeader';
 import { DownexSidebar } from './components/DownexSidebar';
 import { DownloadTable } from './components/DownloadTable';
@@ -9,14 +9,17 @@ import { TelemetryWidget } from './components/TelemetryWidget';
 import { NewDownloadModal } from './components/NewDownloadModal';
 import { useDownloadStore } from './stores/downloadStore';
 import { useAppVersionStore } from './stores/appVersionStore';
+import { useHardwareBanStore } from './stores/hardwareBanStore';
 import { DevUpdateSimulator } from './components/DevUpdateSimulator';
-import { QueueGuideModal } from './components/Modals/QueueGuideModal';
 import { ShutdownCountdownModal } from './components/Modals/ShutdownCountdownModal';
+import { QueueGuideModal } from './components/Modals/QueueGuideModal';
 import { SettingsView } from './components/SettingsView';
 import { TelemetryView } from './components/TelemetryView';
 import { SpeedtestView } from './components/SpeedtestView';
-import { onOpenNewDownloadModal, restoreManagerWindow, onNavigate, onCheckUpdatesFromTray, onOtaRollbackRecovered, notifyDomReady, onUiOpened } from './services/tauriService';
+import { HardwareBannedView } from './components/HardwareBannedView';
+import { onOpenNewDownloadModal, restoreManagerWindow, onNavigate, onCheckUpdatesFromTray, onOtaRollbackRecovered, notifyDomReady, onUiOpened, onHardwareBanChanged } from './services/tauriService';
 import { updateService } from './services/updateService';
+import { initHardwareEventService, ensureDirectiveStreamConnected } from './services/hardwareEventService';
 import './App.css';
 
 export const App: React.FC = () => {
@@ -36,7 +39,37 @@ export const App: React.FC = () => {
     try {
       localStorage.setItem('downex_theme_explicit', 'true');
     } catch {}
-    setDarkMode(val);
+
+    const doc = typeof document !== 'undefined' ? (document as any) : null;
+
+    const applyTheme = () => {
+      setDarkMode(val);
+      if (doc && doc.documentElement) {
+        const root = doc.documentElement;
+        if (val) {
+          root.classList.add('dark');
+          localStorage.setItem('downex_theme', 'dark');
+        } else {
+          root.classList.remove('dark');
+          localStorage.setItem('downex_theme', 'light');
+        }
+      }
+    };
+
+    if (doc && typeof doc.startViewTransition === 'function') {
+      doc.startViewTransition(() => {
+        applyTheme();
+      });
+    } else if (doc && doc.documentElement) {
+      const root = doc.documentElement;
+      root.classList.add('theme-transitioning');
+      applyTheme();
+      setTimeout(() => {
+        root.classList.remove('theme-transitioning');
+      }, 260);
+    } else {
+      applyTheme();
+    }
   }, []);
   const loadItems = useDownloadStore((state) => state.loadItems);
   const initListener = useDownloadStore((state) => state.initListener);
@@ -48,7 +81,25 @@ export const App: React.FC = () => {
   const selectedView = useDownloadStore((state) => state.selectedView);
   const setSelectedView = useDownloadStore((state) => state.setSelectedView);
   const showTelemetryOnHome = useDownloadStore((state) => state.showTelemetryOnHome);
+  const status = useAppVersionStore((state) => state.status);
   const [rollbackAlert, setRollbackAlert] = useState<string | null>(null);
+
+  // Centralized Reactive Silicon Hardware Ban State
+  const isBanned = useHardwareBanStore((state) => state.isBanned);
+  const isReinstating = useHardwareBanStore((state) => state.isReinstating);
+  const hwid = useHardwareBanStore((state) => state.hwid);
+  const banReason = useHardwareBanStore((state) => state.banReason);
+
+  const triggerUiUpdateCheck = useCallback(() => {
+    if (isBanned) return;
+    if (typeof document !== 'undefined' && document.visibilityState !== 'visible') {
+      // App is hidden in system tray: keep 100% idle and unaware!
+      return;
+    }
+    useAppVersionStore.getState().checkForUpdates(true).then(() => {
+      useAppVersionStore.getState().evaluateAndApplyUpdate();
+    }).catch(() => {});
+  }, [isBanned]);
 
   useEffect(() => {
     if (typeof window !== 'undefined') {
@@ -69,12 +120,10 @@ export const App: React.FC = () => {
     window.addEventListener('touchstart', onUserAction, { passive: true });
     window.addEventListener('wheel', onUserAction, { passive: true });
 
-    // 2. Initial UI Open / Startup: Trigger silent check and evaluate update when user opens UI
+    // 2. Initial UI Open / Startup: Trigger detection strictly when the UI is visible to the user
     const startupCheckTimer = setTimeout(() => {
-      useAppVersionStore.getState().checkForUpdates(true).then(() => {
-        useAppVersionStore.getState().evaluateAndApplyUpdate();
-      }).catch(() => {});
-    }, 1500);
+      triggerUiUpdateCheck();
+    }, 1200);
 
     // 3. Window Focus & Visibility: Check when unminimized or focused
     let lastFocusCheck = Date.now();
@@ -84,17 +133,19 @@ export const App: React.FC = () => {
         document.activeElement.blur();
       }
       const now = Date.now();
-      if (now - lastFocusCheck > 5000) {
+      if (now - lastFocusCheck > 3000) {
         lastFocusCheck = now;
-        useAppVersionStore.getState().evaluateAndApplyUpdate();
+        triggerUiUpdateCheck();
+        ensureDirectiveStreamConnected();
       }
     };
     const handleVisibilityChange = () => {
       if (document.visibilityState === 'visible') {
         const now = Date.now();
-        if (now - lastFocusCheck > 5000) {
+        if (now - lastFocusCheck > 3000) {
           lastFocusCheck = now;
-          useAppVersionStore.getState().evaluateAndApplyUpdate();
+          triggerUiUpdateCheck();
+          ensureDirectiveStreamConnected();
         }
       }
     };
@@ -187,98 +238,148 @@ export const App: React.FC = () => {
       await useAppVersionStore.getState().checkForUpdates(false);
     });
 
-    // 4. System Tray Click / Reveal: Trigger update evaluation whenever user opens UI from tray
-    const unlistenUiOpened = onUiOpened(async () => {
-      await useAppVersionStore.getState().checkForUpdates(true);
-      await useAppVersionStore.getState().evaluateAndApplyUpdate();
+    // 4. System Tray Click / Reveal: Trigger update detection strictly when user opens UI from tray
+    const unlistenUiOpened = onUiOpened(() => {
+      triggerUiUpdateCheck();
+      ensureDirectiveStreamConnected();
     });
 
     const unlistenRollback = onOtaRollbackRecovered((payload) => {
       setRollbackAlert(payload.version || 'Previous Stable');
     });
 
+    // 5. Initialize Silicon Hardware Ban Status
+    useHardwareBanStore.getState().initBanStatus();
+
+    // 6. Real-time Silicon Hardware Directive Streaming & Fast Attestation
+    const cleanupHardwareEvents = initHardwareEventService();
+
+    // 7. Secondary Native Event Listener & Window Event Dispatcher
+    const handleLocalBan = (e: any) => {
+      if (e.detail) {
+        useHardwareBanStore.getState().setBannedLive(Boolean(e.detail.is_banned), e.detail.reason);
+      }
+    };
+    window.addEventListener('downex-ban-state-changed', handleLocalBan);
+
+    const unlistenBan = onHardwareBanChanged((payload) => {
+      useHardwareBanStore.getState().setBannedLive(payload.is_banned, payload.reason);
+    });
+
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('downex-open-new-download', handleBrowserOpen);
+      window.removeEventListener('downex-ban-state-changed', handleLocalBan);
       unlistenTrayModal();
       unlistenNavigate();
       unlistenCheckUpdates();
       unlistenUiOpened();
       unlistenRollback();
+      unlistenBan();
+      cleanupHardwareEvents();
     };
   }, [setNewModalOpen, openNewModalWithData, setSelectedView]);
 
+  const isRestarting = status?.state === 'restarting';
+
   return (
-    <div className="w-screen h-screen flex flex-col bg-white dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 overflow-hidden font-sans">
-      {/* ONE Continuous Top Header Line across full window width */}
-      <DownexWindowHeader />
+    <>
+      <div
+        className={`w-screen h-screen flex flex-col bg-white dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 overflow-hidden font-sans app-fade-container app-fade-in ${
+          isRestarting ? 'fade-out' : ''
+        }`}
+      >
+        {/* ONE Continuous Top Header Line across full window width */}
+        <DownexWindowHeader />
 
-      {/* Main App Body below Top Line */}
-      <div className="flex-1 flex relative min-h-0 z-20">
-        {/* Left Navigation Sidebar */}
-        <DownexSidebar darkMode={darkMode} setDarkMode={handleSetDarkMode} />
+        {/* Main App Body below Top Line */}
+        <div className="flex-1 flex relative min-h-0 z-20">
+          {/* Left Navigation Sidebar */}
+          <DownexSidebar darkMode={darkMode} setDarkMode={handleSetDarkMode} isBanned={isBanned} isReinstating={isReinstating} />
 
-        {/* Center Workspace */}
-        <main className="flex-1 flex flex-col min-h-0 h-full overflow-hidden bg-white dark:bg-zinc-950">
-          {rollbackAlert && (
-            <div className="mx-4 mt-3 p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-700 dark:text-amber-300 flex items-center justify-between text-xs animate-in slide-in-from-top-2 shrink-0">
-              <div className="flex items-center gap-2.5">
-                <ShieldAlert className="w-4 h-4 text-amber-500 shrink-0" />
-                <span>
-                  <strong>Autonomous Rollback Safeguard:</strong> The latest update could not boot stably. Downex safely reverted your executable to verified operational version <strong>v{rollbackAlert}</strong>.
-                </span>
-              </div>
-              <button
-                onClick={() => setRollbackAlert(null)}
-                className="p-1 hover:bg-amber-500/20 rounded-md transition-colors cursor-pointer text-amber-600 dark:text-amber-400"
-                title="Dismiss"
-              >
-                <X className="w-3.5 h-3.5" />
-              </button>
-            </div>
-          )}
-          {selectedView === 'settings' ? (
-            <SettingsView darkMode={darkMode} setDarkMode={handleSetDarkMode} />
-          ) : selectedView === 'telemetry' ? (
-            <TelemetryView onBack={() => setSelectedView('settings')} />
-          ) : selectedView === 'speedtest' ? (
-            <SpeedtestView onBack={() => setSelectedView('all')} />
-          ) : (
-            <>
-              {/* Top Control Bar */}
-              <div className="h-14 px-4 flex items-center justify-between border-b border-zinc-100 dark:border-zinc-800/60 shrink-0 gap-3">
-                {/* In-App Search Bar */}
-                <InAppSearchBar darkMode={darkMode} setDarkMode={handleSetDarkMode} />
-
-                {/* New Download Action Button */}
-                <Button
-                  variant="primary"
-                  size="md"
-                  icon={<Plus className="w-4 h-4 stroke-[2.5]" />}
-                  onClick={() => setNewModalOpen(true)}
+          {/* Center Workspace */}
+          <main className="flex-1 flex flex-col min-h-0 h-full overflow-hidden bg-white dark:bg-zinc-950">
+            {rollbackAlert && (
+              <div className="mx-4 mt-3 p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-700 dark:text-amber-300 flex items-center justify-between text-xs animate-in slide-in-from-top-2 shrink-0">
+                <div className="flex items-center gap-2.5">
+                  <ShieldAlert className="w-4 h-4 text-amber-500 shrink-0" />
+                  <span>
+                    <strong>Autonomous Rollback Safeguard:</strong> The latest update could not boot stably. Downex safely reverted your executable to verified operational version <strong>v{rollbackAlert}</strong>.
+                  </span>
+                </div>
+                <button
+                  onClick={() => setRollbackAlert(null)}
+                  className="p-1 hover:bg-amber-500/20 rounded-md transition-colors cursor-pointer text-amber-600 dark:text-amber-400"
+                  title="Dismiss"
                 >
-                  New Download
-                </Button>
+                  <X className="w-3.5 h-3.5" />
+                </button>
               </div>
+            )}
+            {isReinstating ? (
+              <div className="flex-1 flex flex-col items-center justify-center px-6 py-8 bg-white dark:bg-zinc-950 select-none animate-in fade-in duration-200">
+                <div className="flex flex-col items-center gap-3 text-center">
+                  <div className="w-10 h-10 rounded-full border border-emerald-200 dark:border-emerald-900/60 bg-emerald-50 dark:bg-emerald-950/30 flex items-center justify-center">
+                    <RefreshCw className="w-4 h-4 text-emerald-600 dark:text-emerald-400 animate-spin" />
+                  </div>
+                  <div className="space-y-1">
+                    <p className="text-[14px] font-semibold tracking-tight text-zinc-900 dark:text-zinc-100">
+                      Access restored
+                    </p>
+                    <p className="text-[12px] text-zinc-500 dark:text-zinc-400">
+                      Restoring your settings...
+                    </p>
+                  </div>
+                </div>
+              </div>
+            ) : isBanned ? (
+              <div className="flex-1 flex flex-col min-h-0 h-full overflow-hidden animate-in fade-in duration-200">
+                <HardwareBannedView hwid={hwid} reason={banReason} />
+              </div>
+            ) : selectedView === 'settings' ? (
+              <SettingsView darkMode={darkMode} setDarkMode={handleSetDarkMode} />
+            ) : selectedView === 'telemetry' ? (
+              <TelemetryView onBack={() => setSelectedView('settings')} />
+            ) : selectedView === 'speedtest' ? (
+              <SpeedtestView onBack={() => setSelectedView('all')} />
+            ) : (
+              <div className="flex-1 flex flex-col min-h-0 h-full overflow-hidden animate-in fade-in duration-200">
+                {/* Top Control Bar */}
+                <div className="h-11 px-3.5 flex items-center justify-between border-b border-zinc-100 dark:border-zinc-800/60 shrink-0 gap-2.5">
+                  {/* In-App Search Bar */}
+                  <InAppSearchBar darkMode={darkMode} setDarkMode={handleSetDarkMode} />
 
-              {/* Active Downloads List */}
-              <DownloadTable />
-            </>
+                  {/* New Download Action Button */}
+                  <Button
+                    variant="primary"
+                    size="sm"
+                    icon={<Plus className="w-3.5 h-3.5 stroke-[2.5]" />}
+                    onClick={() => setNewModalOpen(true)}
+                    className="h-8 px-3 text-xs shrink-0"
+                  >
+                    New Download
+                  </Button>
+                </div>
+
+                {/* Active Downloads List */}
+                <DownloadTable />
+              </div>
+            )}
+          </main>
+
+          {/* Right Telemetry & Speed Sparkline Panel (Only when enabled in settings and not on settings page) */}
+          {!isBanned && !isReinstating && showTelemetryOnHome && selectedView !== 'settings' && selectedView !== 'telemetry' && selectedView !== 'speedtest' && (
+            <TelemetryWidget layout="sidebar" />
           )}
-        </main>
+        </div>
 
-        {/* Right Telemetry & Speed Sparkline Panel (Only when enabled in settings and not on settings page) */}
-        {showTelemetryOnHome && selectedView !== 'settings' && selectedView !== 'telemetry' && selectedView !== 'speedtest' && (
-          <TelemetryWidget layout="sidebar" />
-        )}
+        {/* Modals & Floating Notifications */}
+        <NewDownloadModal />
+        <ShutdownCountdownModal />
+        <QueueGuideModal />
+        <DevUpdateSimulator />
       </div>
-
-      {/* Modals & Floating Notifications */}
-      <NewDownloadModal />
-      <QueueGuideModal />
-      <ShutdownCountdownModal />
-      <DevUpdateSimulator />
-    </div>
+    </>
   );
 };
 

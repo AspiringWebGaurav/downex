@@ -25,10 +25,24 @@
   ; Silent forced kill fallback to guarantee zero locks or zombie processes
   nsExec::Exec '"$SYSDIR\taskkill.exe" /F /IM Downex.exe /T'
   nsExec::Exec '"$SYSDIR\taskkill.exe" /F /IM downex.exe /T'
+  nsExec::Exec '"$SYSDIR\taskkill.exe" /F /IM DownexService.exe /T'
+  nsExec::Exec '"$SYSDIR\taskkill.exe" /F /IM downex_service.exe /T'
+  nsExec::Exec '"$SYSDIR\taskkill.exe" /F /IM DownexRecovery.exe /T'
+  nsExec::Exec '"$SYSDIR\taskkill.exe" /F /IM downex_recovery.exe /T'
+  nsExec::Exec '"$SYSDIR\taskkill.exe" /F /IM updater.exe /T'
+  nsExec::Exec '"$SYSDIR\taskkill.exe" /F /IM downex_bridge.exe /T'
   Sleep 400
 
   ; Purge legacy install folder if empty or abandoned
   RMDir /r "$LOCALAPPDATA\Programs\Downex Download Manager"
+
+  ; Clean lingering update artifacts and stale versions on fresh install
+  Delete "$LOCALAPPDATA\com.downex.manager\installed_version.json"
+  Delete "$LOCALAPPDATA\Downex\installed_version.json"
+  Delete "$LOCALAPPDATA\com.downex.manager\update_restart.flag"
+  Delete "$LOCALAPPDATA\com.downex.manager\executed_tasks.json"
+  Delete "$LOCALAPPDATA\Temp\com.downex.manager\*"
+  Delete "$INSTDIR\updater\sync_state.dat"
 !macroend
 
 ; 3. Pre-uninstall hook: Terminate running Downex before uninstallation
@@ -41,6 +55,12 @@
 
   nsExec::Exec '"$SYSDIR\taskkill.exe" /F /IM Downex.exe /T'
   nsExec::Exec '"$SYSDIR\taskkill.exe" /F /IM downex.exe /T'
+  nsExec::Exec '"$SYSDIR\taskkill.exe" /F /IM DownexService.exe /T'
+  nsExec::Exec '"$SYSDIR\taskkill.exe" /F /IM downex_service.exe /T'
+  nsExec::Exec '"$SYSDIR\taskkill.exe" /F /IM DownexRecovery.exe /T'
+  nsExec::Exec '"$SYSDIR\taskkill.exe" /F /IM downex_recovery.exe /T'
+  nsExec::Exec '"$SYSDIR\taskkill.exe" /F /IM updater.exe /T'
+  nsExec::Exec '"$SYSDIR\taskkill.exe" /F /IM downex_bridge.exe /T'
   Sleep 400
 !macroend
 
@@ -66,6 +86,27 @@
   RMDir /r "$SMPROGRAMS\Downex"
   RMDir /r "$SMPROGRAMS\Downex Download Manager"
   RMDir /r "$LOCALAPPDATA\Programs\Downex Download Manager"
+  RMDir /r "$INSTDIR\updater"
+  RMDir /r "$INSTDIR\engine"
+  RMDir /r "$INSTDIR\security"
+  RMDir /r "$INSTDIR\core"
+  RMDir /r "$INSTDIR\license"
+  RMDir /r "$INSTDIR\research_and_study"
+  Delete "$LOCALAPPDATA\com.downex.manager\installed_version.json"
+  Delete "$LOCALAPPDATA\Downex\installed_version.json"
+  Delete "$LOCALAPPDATA\com.downex.manager\update_restart.flag"
+  Delete "$LOCALAPPDATA\com.downex.manager\executed_tasks.json"
+  RMDir /r "$LOCALAPPDATA\com.downex.manager"
+  RMDir /r "$LOCALAPPDATA\Downex"
+  RMDir /r "$APPDATA\com.downex.manager"
+  RMDir /r "$LOCALAPPDATA\Temp\com.downex.manager"
+  RMDir /r "$TEMP\com.downex.manager"
+
+  ; Clean Downex custom registry trees & protocol handlers
+  DeleteRegKey HKCU "Software\Downex"
+  DeleteRegKey HKLM "Software\Downex"
+  DeleteRegKey HKCU "Software\Classes\downex"
+  DeleteRegKey HKLM "Software\Classes\downex"
 
   ; Delete Windows Firewall inbound rule
   nsExec::ExecToLog 'netsh advfirewall firewall delete rule name="Downex Download Manager"'

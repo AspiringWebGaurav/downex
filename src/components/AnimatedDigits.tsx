@@ -5,6 +5,7 @@ interface UseCountAnimationOptions {
   duration?: number;
   startValue?: number;
   triggerKey?: any;
+  easing?: 'snappy' | 'gentle' | 'linear';
 }
 
 /**
@@ -18,11 +19,12 @@ export function useCountAnimation(
   const duration = options?.duration ?? 1000;
   const initialStart = options?.startValue ?? 0;
   const triggerKey = options?.triggerKey;
+  const easing = options?.easing ?? 'snappy';
 
   const [current, setCurrent] = useState<number>(initialStart);
   const currentRef = useRef<number>(initialStart);
   const animFrameRef = useRef<number | null>(null);
-  const prevTriggerRef = useRef<any>(triggerKey);
+  const prevTriggerRef = useRef<any>(undefined);
 
   useEffect(() => {
     if (animFrameRef.current !== null) {
@@ -52,8 +54,19 @@ export function useCountAnimation(
     const animate = (now: number) => {
       const elapsed = now - startTime;
       const progress = Math.min(elapsed / duration, 1);
-      // easeOutCubic: snappy launch, gentle settling on final metric
-      const eased = 1 - Math.pow(1 - progress, 3);
+      
+      // Calculate eased progression based on desired velocity curve
+      let eased: number;
+      if (easing === 'gentle') {
+        // Smooth quadratic ease-out allows user to clearly follow the ticking digits
+        eased = 1 - Math.pow(1 - progress, 2);
+      } else if (easing === 'linear') {
+        eased = progress;
+      } else {
+        // 'snappy' cubic ease-out
+        eased = 1 - Math.pow(1 - progress, 3);
+      }
+      
       const nextVal = startVal + (endVal - startVal) * eased;
 
       setCurrent(nextVal);
@@ -75,7 +88,7 @@ export function useCountAnimation(
         cancelAnimationFrame(animFrameRef.current);
       }
     };
-  }, [target, duration, triggerKey]);
+  }, [target, duration, triggerKey, easing]);
 
   return current;
 }
@@ -87,6 +100,7 @@ interface AnimatedNumberProps {
   suffix?: string;
   duration?: number;
   triggerKey?: any;
+  easing?: 'snappy' | 'gentle' | 'linear';
   className?: string;
 }
 
@@ -100,9 +114,10 @@ export const AnimatedNumber: React.FC<AnimatedNumberProps> = ({
   suffix = '',
   duration = 1000,
   triggerKey,
+  easing = 'snappy',
   className,
 }) => {
-  const animatedVal = useCountAnimation(value, { duration, triggerKey });
+  const animatedVal = useCountAnimation(value, { duration, triggerKey, easing });
   const formatted =
     decimals > 0
       ? animatedVal.toFixed(decimals)
@@ -123,6 +138,7 @@ interface AnimatedBytesProps {
   prefix?: string;
   suffix?: string;
   triggerKey?: any;
+  easing?: 'snappy' | 'gentle' | 'linear';
   className?: string;
 }
 
@@ -135,12 +151,13 @@ export const AnimatedBytes: React.FC<AnimatedBytesProps> = ({
   prefix = '',
   suffix = '',
   triggerKey,
+  easing = 'snappy',
   className,
 }) => {
   const validBytes = bytes && bytes > 0 && Number.isFinite(bytes) ? bytes : 0;
   const target = splitBytes(validBytes);
 
-  const animatedNum = useCountAnimation(target.value, { duration, triggerKey });
+  const animatedNum = useCountAnimation(target.value, { duration, triggerKey, easing });
   const formattedNum =
     target.decimals > 0
       ? animatedNum.toFixed(target.decimals)

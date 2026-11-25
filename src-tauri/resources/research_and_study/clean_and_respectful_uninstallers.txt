@@ -1,0 +1,29 @@
+================================================================================
+DOWNEX RESEARCH & STUDY ESSAY #24
+Title: CLEAN & RESPECTFUL UNINSTALLERS
+Author & Architect: Gaurav Patil (https://gauravpatil.site)
+Official Project: https://downex.apps.gauravpatil.site
+================================================================================
+
+You can tell everything about a software company by how they behave when you
+decide to leave.
+
+Bad software acts like a desperate salesman:
+- It hides the uninstaller deep in obscure subfolders.
+- It displays three different confirmation dialogs ("Are you SURE you want to leave?").
+- When you click Yes, it forces open your web browser to a 10-question survey page.
+- It leaves behind registry keys, cache folders, and background services that
+  continue running even after you thought you removed it.
+
+Downex follows the Clean Uninstaller Protocol:
+- The uninstaller (uninstall.exe) is right there in the installation folder.
+- When run, it politely and silently closes any background processes.
+- It removes all application files, shortcuts, and temporary caches.
+- It NEVER opens your web browser. ZERO surveys. ZERO spam.
+
+We earn your trust by respecting your choices from the day you install to the day
+you uninstall.
+
+================================================================================
+Copyright (C) 2026 Gaurav Patil. All Rights Reserved.
+================================================================================

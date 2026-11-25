@@ -1,25 +1,26 @@
 import React, { useEffect, useState, useCallback } from 'react';
-import { Button } from '../components/ui/Button';
 import { 
   X, 
-  Download, 
   Folder, 
-  Clock, 
   Copy, 
   Check, 
   HardDrive, 
-  Layers, 
   FileBox, 
   CheckCircle2,
-  AlertCircle,
   Sun,
   Moon,
   RotateCcw,
   ArrowRight,
   Monitor,
   Link2,
-  ClipboardPaste
+  ClipboardPaste,
+  FileText,
+  Shield,
+  Mail,
+  Lock
 } from 'lucide-react';
+import { useHardwareBanStore } from '../stores/hardwareBanStore';
+import { initHardwareEventService } from '../services/hardwareEventService';
 import { 
   addDownload, 
   closeDownloadDialog, 
@@ -32,8 +33,11 @@ import {
   getDownloadDialogPayload,
   restoreManagerWindow,
   getClipboardText,
+  extractSizeFromUrl,
   DownloadInfoModalPayload,
-  isTauri
+  isTauri,
+  openExternalUrl,
+  getDownexWebBaseUrl
 } from '../services/tauriService';
 import { 
   getCachedDownloadDir, 
@@ -41,7 +45,7 @@ import {
   getCachedDiskFreeSpace, 
   setCachedDiskFreeSpace 
 } from '../services/modalPreload';
-import { getResumeCapability } from '../utils/format';
+import { MarqueeFileName } from '../components/MarqueeFileName';
 
 function formatBytes(bytes?: number): string {
   if (!bytes || bytes === 0) return 'Unknown size';
@@ -154,7 +158,6 @@ export const DownloadDialogWindow: React.FC = () => {
   const [submitting, setSubmitting] = useState(false);
   const [copiedUrl, setCopiedUrl] = useState(false);
   const [incomingHeaders, setIncomingHeaders] = useState<Record<string, string> | undefined>();
-  const [isCloseHovered, setIsCloseHovered] = useState(false);
 
   // Browser sandbox state
   const [activeScenarioId, setActiveScenarioId] = useState<string>('iso');
@@ -175,20 +178,77 @@ export const DownloadDialogWindow: React.FC = () => {
     }, 3200);
   }, []);
 
-  // Cleanly reset hover state on window blur, focus, or visibility changes
+
+
+  // Reactive hardware ban state
+  const isBanned = useHardwareBanStore((state) => state.isBanned);
+  const hwid = useHardwareBanStore((state) => state.hwid);
+  const banReason = useHardwareBanStore((state) => state.banReason);
+
   useEffect(() => {
-    const clearHover = () => setIsCloseHovered(false);
-    window.addEventListener('blur', clearHover);
-    window.addEventListener('focus', clearHover);
-    document.addEventListener('visibilitychange', clearHover);
-    window.addEventListener('mouseleave', clearHover);
+    useHardwareBanStore.getState().initBanStatus();
+    const cleanup = initHardwareEventService();
     return () => {
-      window.removeEventListener('blur', clearHover);
-      window.removeEventListener('focus', clearHover);
-      document.removeEventListener('visibilitychange', clearHover);
-      window.removeEventListener('mouseleave', clearHover);
+      cleanup();
     };
   }, []);
+
+  const baseUrl = getDownexWebBaseUrl();
+  const termsUrl = `${baseUrl}/terms#dos-and-donts`;
+  const policiesUrl = `${baseUrl}/privacy`;
+  const hardwarePatchUrl = `${baseUrl}/terms#hardware-enforcement`;
+
+  const handleOpenTerms = (e: React.MouseEvent) => {
+    e.preventDefault();
+    openExternalUrl(termsUrl);
+  };
+
+  const handleOpenPolicies = (e: React.MouseEvent) => {
+    e.preventDefault();
+    openExternalUrl(policiesUrl);
+  };
+
+  const handleOpenHardwarePatch = (e: React.MouseEvent) => {
+    e.preventDefault();
+    openExternalUrl(hardwarePatchUrl);
+  };
+
+  const [copiedId, setCopiedId] = useState(false);
+  const handleCopyId = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!hwid) return;
+    try {
+      await navigator.clipboard.writeText(hwid);
+      setCopiedId(true);
+      setTimeout(() => setCopiedId(false), 2000);
+    } catch {
+      const textArea = document.createElement('textarea');
+      textArea.value = hwid;
+      document.body.appendChild(textArea);
+      textArea.select();
+      document.execCommand('copy');
+      document.body.removeChild(textArea);
+      setCopiedId(true);
+      setTimeout(() => setCopiedId(false), 2000);
+    }
+  };
+
+  const handleOpenManager = async () => {
+    try {
+      await restoreManagerWindow();
+      if (isTauri) {
+        await closeDownloadDialog();
+      }
+    } catch {}
+  };
+
+  const banSubtitle =
+    banReason &&
+    banReason !== 'Administrative hardware ban enforced.' &&
+    banReason !== 'You have been banned from App Owner' &&
+    banReason !== 'You have been banned from ADMIN'
+      ? banReason
+      : 'This is hardware patched. Formatting System and reinstalling App will not bypass this.';
 
   // Sync theme immediately
   useEffect(() => {
@@ -231,10 +291,26 @@ export const DownloadDialogWindow: React.FC = () => {
 
   // Update filename state helper
   const applyFilename = useCallback((fullName: string) => {
+    if (!fullName || !fullName.trim()) {
+      setFileBaseName('');
+      setFileExtension('');
+      return;
+    }
     const { base, ext } = splitFilenameAndExt(fullName);
     setFileBaseName(base);
     setFileExtension(ext);
   }, []);
+
+  // Dynamically sync when URL is empty or cleared
+  useEffect(() => {
+    const trimmed = url.trim();
+    if (!trimmed) {
+      setFileBaseName('');
+      setFileExtension('');
+      setTotalBytes(undefined);
+      setIsProbing(false);
+    }
+  }, [url]);
 
   const applyPayload = useCallback((payload: DownloadInfoModalPayload) => {
     if (!payload || !payload.url) return;
@@ -243,8 +319,12 @@ export const DownloadDialogWindow: React.FC = () => {
     const name = payload.filename || payload.url.split('?')[0].split('/').pop() || 'download.bin';
     applyFilename(name);
 
-    if (payload.total_bytes && payload.total_bytes > 0) {
-      setTotalBytes(payload.total_bytes);
+    const detectedSize = (payload.total_bytes && payload.total_bytes > 0)
+      ? payload.total_bytes
+      : extractSizeFromUrl(payload.url);
+
+    if (detectedSize && detectedSize > 0) {
+      setTotalBytes(detectedSize);
       setIsProbing(false);
     } else {
       setTotalBytes(undefined);
@@ -328,6 +408,10 @@ export const DownloadDialogWindow: React.FC = () => {
   }, [applyFilename, showToast]);
 
   const probeServer = async (targetUrl: string) => {
+    const preSize = extractSizeFromUrl(targetUrl);
+    if (preSize && preSize > 0) {
+      setTotalBytes(preSize);
+    }
     setIsProbing(true);
     try {
       const result = await probeUrl(targetUrl);
@@ -335,15 +419,18 @@ export const DownloadDialogWindow: React.FC = () => {
         if (result.filename) {
           applyFilename(result.filename);
         }
-        if (result.total_bytes) {
+        if (result.total_bytes && result.total_bytes > 0) {
           setTotalBytes(result.total_bytes);
         }
-        setSupportsRanges(result.supports_ranges);
+        if (result.supports_ranges !== undefined) {
+          setSupportsRanges(result.supports_ranges);
+        }
       }
     } catch (e) {
       console.warn('Probe error:', e);
     } finally {
       setIsProbing(false);
+      setTotalBytes((prev) => prev || extractSizeFromUrl(targetUrl));
     }
   };
 
@@ -365,7 +452,6 @@ export const DownloadDialogWindow: React.FC = () => {
   };
 
   const handleClose = async () => {
-    setIsCloseHovered(false);
     if (document.activeElement instanceof HTMLElement) {
       document.activeElement.blur();
     }
@@ -463,198 +549,181 @@ export const DownloadDialogWindow: React.FC = () => {
 
   // The Dialog Window Component
   const DialogContent = (
-    <div className="w-full h-full flex flex-col bg-white dark:bg-zinc-900 text-zinc-900 dark:text-zinc-100 font-sans select-none overflow-hidden">
-      {/* Frameless Drag Title Bar */}
+    <div className="w-full h-full flex flex-col justify-between bg-white dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 font-sans select-none overflow-hidden border border-zinc-200 dark:border-zinc-800">
+      {/* Title Bar */}
       <div 
         data-tauri-drag-region
-        className="h-10 px-4 flex items-center justify-between border-b border-zinc-200/80 dark:border-zinc-800 bg-zinc-50/90 dark:bg-zinc-950/70 select-none cursor-move shrink-0"
+        className="h-8 px-3.5 flex items-center justify-between border-b border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900 select-none cursor-move shrink-0"
       >
-        <div data-tauri-drag-region className="flex items-center gap-2.5">
-          <div className="w-5 h-5 rounded-md bg-emerald-600 dark:bg-emerald-500 flex items-center justify-center text-white shrink-0 shadow-xs">
-            <Download className="w-3 h-3 stroke-[2.5]" />
-          </div>
-          <span data-tauri-drag-region className="font-semibold text-xs tracking-tight text-zinc-900 dark:text-zinc-100">
-            Download File
+        <div data-tauri-drag-region className="flex items-center gap-2">
+          <span data-tauri-drag-region className="font-mono-tabular text-[10.5px] uppercase tracking-wider text-emerald-600 dark:text-emerald-400 font-semibold">
+            NEW DOWNLOAD
           </span>
-          {isProbing && (
-            <span className="text-[10px] font-medium text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-200/80 dark:border-emerald-800/80 px-2.5 py-0.5 rounded-full flex items-center gap-2 ml-2">
-              <span className="relative flex h-2.5 w-2.5 items-center justify-center shrink-0">
-                <span className="absolute inline-flex h-full w-full rounded-full bg-emerald-400/80 animate-ping pointer-events-none" />
-                <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-emerald-500 shadow-[0_0_4px_rgba(16,185,129,0.8)]" />
-              </span>
-              <span>Checking file size</span>
+          {isProbing && !!url.trim() && (
+            <span className="text-[10px] font-mono-tabular text-zinc-400 ml-1 animate-pulse">
+              Checking size...
             </span>
           )}
         </div>
         <button
           onClick={handleClose}
-          onMouseEnter={() => setIsCloseHovered(true)}
-          onMouseLeave={() => setIsCloseHovered(false)}
           title="Close (Esc)"
-          className={`w-6 h-6 rounded-md flex items-center justify-center transition-colors cursor-pointer focus:outline-none ${
-            isCloseHovered
-              ? 'bg-rose-500 text-white dark:bg-rose-600'
-              : 'text-zinc-400 dark:text-zinc-500 bg-transparent'
-          }`}
+          className="p-1 text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 cursor-pointer focus:outline-none"
         >
-          <X className="w-3.5 h-3.5" />
+          <X className="w-3.5 h-3.5 stroke-[1.8]" />
         </button>
       </div>
 
       {/* Main Form Body */}
-      <div className="p-4.5 flex-1 flex flex-col justify-between gap-3 overflow-hidden">
-        {/* Row 1: Prominent Editable File Name */}
+      <div className="p-3.5 space-y-2.5 flex-1 flex flex-col justify-between">
+        {/* Row 1: File Name */}
         <div>
-          <div className="flex items-center justify-between mb-1.5">
-            <label className="text-[11px] font-semibold text-zinc-700 dark:text-zinc-300">
+          <div className="flex items-center justify-between mb-1">
+            <label className="text-[11px] font-semibold text-zinc-900 dark:text-zinc-100">
               File Name
             </label>
-            <span className="text-[11px] text-zinc-400 font-normal">
-              Rename before download
+            <span className="text-[10px] font-mono-tabular text-zinc-400">
+              RENAME IF NEEDED
             </span>
           </div>
-          <div className="flex items-center rounded-lg bg-zinc-50/80 dark:bg-zinc-950/60 border border-zinc-200 dark:border-zinc-800 focus-within:border-emerald-500 focus-within:ring-2 focus-within:ring-emerald-500/15 focus-within:bg-white dark:focus-within:bg-zinc-950 transition-all overflow-hidden">
-            <div className="pl-3 pr-2 text-zinc-400 dark:text-zinc-500">
-              <FileBox className="w-4 h-4" />
+          <div className="flex items-center border border-zinc-300 dark:border-zinc-700 bg-zinc-50/50 dark:bg-zinc-900/50 focus-within:border-black dark:focus-within:border-white transition-colors">
+            <div className="pl-2.5 pr-1.5 text-zinc-400 dark:text-zinc-500">
+              <FileBox className="w-3.5 h-3.5" />
             </div>
             <input
               type="text"
-              required
-              placeholder="Filename"
+              required={!!url.trim()}
+              placeholder={url.trim() ? "Filename" : "Enter or paste download link below..."}
               value={fileBaseName}
               onChange={(e) => setFileBaseName(e.target.value)}
-              className="flex-1 py-2 text-xs font-medium text-zinc-900 dark:text-zinc-100 bg-transparent focus:outline-none"
+              className="flex-1 py-1.5 text-[12px] font-mono-tabular font-medium text-zinc-900 dark:text-zinc-100 bg-transparent focus:outline-none placeholder:text-zinc-400/80"
             />
-            {fileExtension && (
-              <span className="px-2 py-0.5 mr-2 text-[11px] font-mono font-semibold rounded bg-zinc-200/70 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300">
+            {fileExtension && (!!url.trim() || !!fileBaseName.trim()) && (
+              <span className="px-1.5 py-0.5 mr-2 text-[10px] font-mono-tabular font-semibold bg-zinc-200 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 uppercase shrink-0">
                 .{fileExtension.replace(/^\./, '')}
               </span>
             )}
           </div>
         </div>
 
-        {/* Row 2: File Size & Download Parts */}
-        <div className="grid grid-cols-2 gap-3">
-          {/* Card 1: File Size (Larger Digit) */}
-          <div className="p-3.5 rounded-xl bg-zinc-50/80 dark:bg-zinc-950/60 border border-zinc-200/90 dark:border-zinc-800/90 flex flex-col justify-between gap-1.5">
-            <span className="text-[11px] font-semibold text-zinc-500 dark:text-zinc-400">File Size</span>
-            <div className="text-xl font-bold font-mono text-zinc-900 dark:text-zinc-100 tracking-tight">
-              {formatBytes(totalBytes)}
+        {/* Row 2: Streamlined Info Strip */}
+        <div className="grid grid-cols-2 gap-2">
+          <div className="border border-zinc-200 dark:border-zinc-800 bg-zinc-50/40 dark:bg-zinc-950/40 px-2.5 py-1.5 flex items-center justify-between">
+            <div className="min-w-0">
+              <div className="text-[9.5px] uppercase font-mono-tabular text-zinc-400 leading-tight">File Size</div>
+              <div className="font-mono-tabular text-[12.5px] font-bold text-zinc-900 dark:text-zinc-100 leading-snug truncate">
+                {url.trim() ? (isProbing ? 'Checking...' : formatBytes(totalBytes)) : '—'}
+              </div>
             </div>
-            {(() => {
-              const resInfo = getResumeCapability(supportsRanges);
-              return (
-                <span className={`text-[11px] ${resInfo.colorClass} font-medium flex items-center gap-1.5`} title={resInfo.description}>
-                  {resInfo.canResume ? (
-                    <CheckCircle2 className="w-3.5 h-3.5 shrink-0 text-emerald-500" />
-                  ) : (
-                    <AlertCircle className="w-3.5 h-3.5 shrink-0 text-amber-500" />
-                  )}
-                  <span>{resInfo.modalStatusText}</span>
-                </span>
-              );
-            })()}
+            {url.trim() ? (
+              <span className={`text-[9.5px] font-mono-tabular px-1.5 py-0.5 border shrink-0 ${
+                supportsRanges
+                  ? 'border-emerald-500/50 text-emerald-600 dark:text-emerald-400 bg-emerald-500/5'
+                  : 'border-zinc-300 dark:border-zinc-700 text-zinc-500'
+              }`}>
+                {supportsRanges ? 'RESUME OK' : 'SINGLE'}
+              </span>
+            ) : (
+              <span className="text-[9.5px] font-mono-tabular px-1.5 py-0.5 border border-zinc-200 dark:border-zinc-800 text-zinc-400 shrink-0">
+                WAITING
+              </span>
+            )}
           </div>
 
-          {/* Card 2: Download Parts */}
-          <div className="p-3.5 rounded-xl bg-zinc-50/80 dark:bg-zinc-950/60 border border-zinc-200/90 dark:border-zinc-800/90 flex flex-col justify-between gap-1.5">
-            <span className="text-[11px] font-semibold text-zinc-500 dark:text-zinc-400">Download Parts</span>
-            <div className="flex items-center gap-2 text-xl font-bold font-mono text-zinc-900 dark:text-zinc-100 tracking-tight">
-              <Layers className="w-4 h-4 text-sky-500 shrink-0" />
-              <span>{supportsRanges ? '8 Parts' : '1 Part'}</span>
+          <div className="border border-zinc-200 dark:border-zinc-800 bg-zinc-50/40 dark:bg-zinc-950/40 px-2.5 py-1.5 flex items-center justify-between">
+            <div className="min-w-0">
+              <div className="text-[9.5px] uppercase font-mono-tabular text-zinc-400 leading-tight">Connections</div>
+              <div className="font-mono-tabular text-[12.5px] font-bold text-zinc-900 dark:text-zinc-100 leading-snug truncate">
+                {url.trim() ? (supportsRanges ? '32 Threads' : '1 Stream') : '32 Threads'}
+              </div>
             </div>
-            <span className="text-[11px] text-zinc-500 dark:text-zinc-400 truncate">
-              {supportsRanges ? 'Downloads in 8 parts at once' : 'Downloads in 1 part'}
+            <span className="text-[9.5px] font-mono-tabular text-zinc-400 uppercase shrink-0">
+              {url.trim() ? 'PARALLEL' : 'DEFAULT'}
             </span>
           </div>
         </div>
 
         {/* Row 3: Destination Folder + Live Disk Free Space */}
         <div>
-          <div className="flex items-center justify-between mb-1.5">
-            <label className="text-[11px] font-semibold text-zinc-700 dark:text-zinc-300">
+          <div className="flex items-center justify-between mb-1">
+            <label className="text-[11px] font-semibold text-zinc-900 dark:text-zinc-100">
               Save To
             </label>
             {freeSpaceBytes !== null && (
-              <span className={`text-[11px] font-mono flex items-center gap-1 ${
+              <span className={`text-[10px] font-mono-tabular flex items-center gap-1 ${
                 isLowSpace 
                   ? 'text-rose-500 font-bold animate-pulse' 
-                  : 'text-zinc-500 dark:text-zinc-400'
+                  : 'text-zinc-400'
               }`}>
                 <HardDrive className="w-3 h-3" />
-                <span>{formatBytes(freeSpaceBytes)} free space</span>
-                {isLowSpace && <span className="text-[10px] bg-rose-500/10 text-rose-500 px-1 rounded ml-1 font-sans">Low Space</span>}
+                <span>{formatBytes(freeSpaceBytes)} free</span>
               </span>
             )}
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1.5">
             <div className="relative flex-1">
               <input
                 type="text"
                 value={savePath}
                 onChange={(e) => setSavePath(e.target.value)}
                 placeholder="Destination folder path"
-                className="w-full px-3 py-2 pl-9 rounded-lg bg-zinc-50/80 dark:bg-zinc-950/60 border border-zinc-200 dark:border-zinc-800 text-xs font-mono text-zinc-800 dark:text-zinc-200 focus:outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/15 focus:bg-white dark:focus:bg-zinc-950 transition-all"
+                className="w-full px-2.5 py-1.5 pl-8 border border-zinc-300 dark:border-zinc-700 bg-zinc-50/50 dark:bg-zinc-950/50 text-[11px] font-mono-tabular text-zinc-900 dark:text-zinc-100 focus:outline-none focus:border-black dark:focus:border-white transition-colors"
               />
-              <Folder className="w-3.5 h-3.5 text-zinc-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+              <Folder className="w-3.5 h-3.5 text-zinc-400 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
             </div>
-            <Button
+            <button
               type="button"
-              variant="secondary"
-              size="md"
               onClick={handleBrowseFolder}
-              title="Browse folder"
+              className="h-7.5 px-3 border border-zinc-300 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-800 font-mono-tabular text-[10px] uppercase tracking-wider shrink-0 cursor-pointer"
             >
-              Browse…
-            </Button>
+              Browse
+            </button>
           </div>
         </div>
 
         {/* Row 4: Source URL (Interactive input with Paste & Copy actions) */}
         <div>
-          <div className="flex items-center justify-between mb-1.5">
-            <label className="text-[11px] font-semibold text-zinc-700 dark:text-zinc-300">
+          <div className="flex items-center justify-between mb-1">
+            <label className="text-[11px] font-semibold text-zinc-900 dark:text-zinc-100">
               Source URL
             </label>
             <div className="flex items-center gap-2">
               <button
                 type="button"
                 onClick={handlePasteClipboard}
-                className="text-[11px] font-medium text-emerald-600 dark:text-emerald-400 hover:text-emerald-500 transition-colors flex items-center gap-1 cursor-pointer"
-                title="Paste URL from clipboard"
+                className="text-[10px] font-mono-tabular font-semibold text-emerald-600 dark:text-emerald-400 hover:underline transition-colors flex items-center gap-1 cursor-pointer"
               >
                 <ClipboardPaste className="w-3 h-3" />
-                <span>Paste</span>
+                <span>PASTE</span>
               </button>
               {url && (
                 <button
                   type="button"
                   onClick={handleCopyUrl}
-                  className="text-[11px] font-medium text-zinc-400 hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors flex items-center gap-1 cursor-pointer"
-                  title="Copy URL"
+                  className="text-[10px] font-mono-tabular text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200 transition-colors flex items-center gap-1 cursor-pointer"
                 >
                   {copiedUrl ? <Check className="w-3 h-3 text-emerald-500" /> : <Copy className="w-3 h-3" />}
-                  <span>{copiedUrl ? 'Copied' : 'Copy'}</span>
+                  <span>{copiedUrl ? 'COPIED' : 'COPY'}</span>
                 </button>
               )}
             </div>
           </div>
-          <div className="flex items-center rounded-lg bg-zinc-50/80 dark:bg-zinc-950/60 border border-zinc-200 dark:border-zinc-800 focus-within:border-emerald-500 focus-within:ring-2 focus-within:ring-emerald-500/15 focus-within:bg-white dark:focus-within:bg-zinc-950 transition-all overflow-hidden px-3 py-1.5">
-            <Link2 className="w-3.5 h-3.5 text-zinc-400 dark:text-zinc-500 mr-2 shrink-0" />
+          <div className="flex items-center border border-zinc-300 dark:border-zinc-700 bg-zinc-50/50 dark:bg-zinc-950/50 focus-within:border-black dark:focus-within:border-white transition-colors px-2.5 py-1">
+            <Link2 className="w-3.5 h-3.5 text-zinc-400 mr-2 shrink-0" />
             <input
               type="text"
               required
               autoFocus={!url}
-              placeholder="Paste or enter download link (e.g. https://...)"
+              placeholder="Paste download link (https://...)"
               value={url}
               onChange={(e) => setUrl(e.target.value)}
-              className="flex-1 text-[11px] font-mono text-zinc-900 dark:text-zinc-100 bg-transparent focus:outline-none placeholder:text-zinc-400 dark:placeholder:text-zinc-500"
+              className="flex-1 text-[11px] font-mono-tabular text-zinc-900 dark:text-zinc-100 bg-transparent focus:outline-none placeholder:text-zinc-400"
             />
             {url && (
               <button
                 type="button"
                 onClick={() => setUrl('')}
-                className="p-1 text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200 rounded transition-colors ml-1 cursor-pointer"
+                className="p-0.5 text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200 cursor-pointer ml-1"
                 title="Clear URL"
               >
                 <X className="w-3 h-3" />
@@ -665,66 +734,203 @@ export const DownloadDialogWindow: React.FC = () => {
       </div>
 
       {/* Bottom Bar: Quick Options & Actions */}
-      <div className="px-4.5 py-3 bg-zinc-50/95 dark:bg-zinc-950/80 border-t border-zinc-200/80 dark:border-zinc-800/80 flex items-center justify-between shrink-0">
-        <label className="flex items-center gap-2 cursor-pointer select-none group">
+      <div className="px-3.5 py-2.5 bg-zinc-50 dark:bg-zinc-950 border-t border-zinc-200 dark:border-zinc-800 flex items-center justify-between shrink-0 mt-auto">
+        <label className="flex items-center gap-2 cursor-pointer select-none">
           <input
             type="checkbox"
             checked={rememberPath}
             onChange={(e) => setRememberPath(e.target.checked)}
-            className="w-4 h-4 rounded border-zinc-300 text-emerald-600 accent-emerald-500 cursor-pointer"
+            className="w-3.5 h-3.5 rounded-none border-zinc-300 accent-black dark:accent-white cursor-pointer"
           />
-          <span className="text-xs text-zinc-600 dark:text-zinc-400 group-hover:text-zinc-900 dark:group-hover:text-zinc-200 transition-colors">
-            Remember this folder
+          <span className="text-[11px] text-zinc-600 dark:text-zinc-400 font-mono-tabular">
+            Remember folder
           </span>
         </label>
 
-        <div className="flex items-center gap-2">
-          {/* Cancel Button */}
-          <Button
+        <div className="flex items-center gap-1.5">
+          <button
             type="button"
-            variant="ghost"
-            size="md"
             onClick={handleClose}
+            className="h-7.5 px-3 border border-zinc-300 dark:border-zinc-700 text-zinc-700 dark:text-zinc-300 font-mono-tabular text-[11px] uppercase tracking-wider hover:bg-zinc-100 dark:hover:bg-zinc-800 cursor-pointer"
           >
             Cancel
-          </Button>
+          </button>
 
-          {/* Download Later Button (Paused Queue) */}
-          <Button
+          <button
             type="button"
-            variant="secondary"
-            size="md"
-            icon={<Clock className="w-3.5 h-3.5" />}
             disabled={!url.trim()}
             onClick={() => handleStartDownload(false)}
+            className="h-7.5 px-3 border border-zinc-300 dark:border-zinc-700 text-zinc-700 dark:text-zinc-300 font-mono-tabular text-[11px] uppercase tracking-wider hover:bg-zinc-100 dark:hover:bg-zinc-800 disabled:opacity-50 cursor-pointer"
             title="Add to queue in paused state"
           >
             Later
-          </Button>
+          </button>
 
-          {/* Start Download Button (Primary Emerald) */}
-          <Button
+          <button
             type="button"
-            variant="primary-emerald"
-            size="md"
-            icon={<Download className="w-3.5 h-3.5 stroke-[2.5]" />}
-            loading={submitting}
-            loadingText="Starting download"
-            disabled={!url.trim()}
+            disabled={!url.trim() || submitting}
             onClick={() => handleStartDownload(true)}
+            className={`h-7.5 px-3.5 font-mono-tabular text-[11px] uppercase tracking-wider font-semibold cursor-pointer border disabled:opacity-50 ${
+              submitting
+                ? 'bg-zinc-400 text-white border-zinc-400'
+                : 'bg-black text-white border-black hover:bg-zinc-800 dark:bg-white dark:text-zinc-950 dark:border-white dark:hover:bg-zinc-200'
+            }`}
           >
-            Start Download
-          </Button>
+            {submitting ? 'Starting...' : 'Start Download'}
+          </button>
         </div>
       </div>
     </div>
   );
 
+  const BannedDialogContent = (
+    <div className="w-full h-full flex flex-col justify-between bg-white dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 font-sans select-none overflow-hidden border border-zinc-200 dark:border-zinc-800 shadow-2xl">
+      {/* Title Bar Strip - Matching OG modal subtlety */}
+      <div
+        data-tauri-drag-region
+        className="h-8 px-3.5 flex items-center justify-between border-b border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900 select-none cursor-move shrink-0"
+      >
+        <div data-tauri-drag-region className="flex items-center gap-2">
+          <span
+            data-tauri-drag-region
+            className="font-mono-tabular text-[10.5px] uppercase tracking-wider text-red-500 dark:text-red-400 font-semibold"
+          >
+            DOWNLOAD RESTRICTED
+          </span>
+        </div>
+        <button
+          onClick={handleClose}
+          title="Close (Esc)"
+          className="p-1 text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 cursor-pointer focus:outline-none"
+        >
+          <X className="w-3.5 h-3.5 stroke-[1.8]" />
+        </button>
+      </div>
+
+      {/* Subtle & Symmetric Banned Body (Evenly spaced, inspired by Download Manager Banned UI) */}
+      <div className="px-5 py-1 flex flex-col items-center justify-evenly text-center flex-1 overflow-hidden">
+        {/* Top Group: BAN! + Heading + Highlighted Readable Subtitle with Read more */}
+        <div className="flex flex-col items-center gap-1.5 max-w-[440px]">
+          <span className="inline-flex items-center px-5 py-1 bg-red-500 text-white font-mono-tabular text-[11px] font-black uppercase tracking-widest rounded-xs select-none mb-0.5">
+            BAN!
+          </span>
+          <h2 className="text-[15px] font-bold text-zinc-950 dark:text-zinc-50 tracking-tight font-sans">
+            You have been banned from ADMIN
+          </h2>
+          <p className="text-[12px] text-zinc-800 dark:text-zinc-200 font-medium leading-[1.5] max-w-[385px]">
+            {banSubtitle === 'This is hardware patched. Formatting System and reinstalling App will not bypass this.' ? (
+              <>
+                <span className="font-semibold text-zinc-950 dark:text-white">This is hardware patched.</span>{' '}
+                Formatting System and reinstalling App will not bypass this.
+              </>
+            ) : (
+              <span>{banSubtitle}</span>
+            )}{' '}
+            <a
+              href={hardwarePatchUrl}
+              onClick={handleOpenHardwarePatch}
+              className="text-zinc-950 dark:text-white hover:text-red-600 dark:hover:text-red-400 font-semibold underline underline-offset-2 cursor-pointer font-mono-tabular text-[11px] inline-flex items-center gap-0.5 transition-colors whitespace-nowrap"
+              title="Learn why formatting will not bypass this ban"
+            >
+              <span>Read more</span>
+              <ArrowRight className="w-2.5 h-2.5 stroke-[2.2]" />
+            </a>
+          </p>
+        </div>
+
+        {/* Full-Width Intercepted File Preview */}
+        {(fileBaseName.trim() || url.trim()) && (
+          <div
+            className="w-full max-w-[450px] px-3 py-1.5 bg-zinc-50 dark:bg-zinc-900/70 border border-zinc-200 dark:border-zinc-800 text-[11px] font-mono-tabular flex items-center justify-start gap-2.5 rounded-xs text-left overflow-hidden"
+            style={{ textAlign: 'left' }}
+          >
+            <Lock className="w-3.5 h-3.5 text-red-500 dark:text-red-400 shrink-0" />
+            <MarqueeFileName name={(fileBaseName.trim() + fileExtension.trim()) || url.trim()} />
+            <span className="text-[9.5px] uppercase font-bold text-red-500 dark:text-red-400 px-1.5 py-0.5 bg-red-500/10 rounded-xs shrink-0 font-mono-tabular">
+              Blocked
+            </span>
+          </div>
+        )}
+
+        {/* Terms & Policies Pill Buttons */}
+        <div className="flex items-center justify-center gap-2">
+          <a
+            href={termsUrl}
+            onClick={handleOpenTerms}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xs bg-zinc-100 hover:bg-zinc-200/80 dark:bg-zinc-800/60 dark:hover:bg-zinc-800 text-zinc-700 dark:text-zinc-300 hover:text-zinc-950 dark:hover:text-zinc-50 transition-colors cursor-pointer border border-zinc-200/80 dark:border-zinc-700/60 text-[10.5px] font-mono-tabular font-medium"
+          >
+            <FileText className="w-3 h-3" />
+            <span>Terms</span>
+          </a>
+          <span className="text-zinc-300 dark:text-zinc-700 text-xs">&bull;</span>
+          <a
+            href={policiesUrl}
+            onClick={handleOpenPolicies}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xs bg-zinc-100 hover:bg-zinc-200/80 dark:bg-zinc-800/60 dark:hover:bg-zinc-800 text-zinc-700 dark:text-zinc-300 hover:text-zinc-950 dark:hover:text-zinc-50 transition-colors cursor-pointer border border-zinc-200/80 dark:border-zinc-700/60 text-[10.5px] font-mono-tabular font-medium"
+          >
+            <Shield className="w-3 h-3" />
+            <span>Policies</span>
+          </a>
+        </div>
+
+        {/* Owner Contact (Evenly spaced independently) */}
+        <div className="text-[10.5px] font-mono-tabular text-zinc-600 dark:text-zinc-400 flex items-center justify-center gap-1.5">
+          <Mail className="w-3 h-3 text-zinc-400 dark:text-zinc-500" />
+          <span>Owner Contact:</span>
+          <a
+            href="mailto:hello@gauravpatil.site"
+            className="text-zinc-950 dark:text-zinc-100 hover:text-red-600 dark:hover:text-red-400 hover:underline font-semibold transition-colors"
+          >
+            hello@gauravpatil.site
+          </a>
+        </div>
+
+        {/* ID Footer Row (Evenly spaced above bottom bar) */}
+        {hwid && (
+          <div className="inline-flex items-center gap-1.5 text-[10px] font-mono-tabular text-zinc-500 dark:text-zinc-400 select-text">
+            <span className="text-zinc-400 dark:text-zinc-500 text-[9px] uppercase tracking-wider font-semibold">ID:</span>
+            <span className="text-zinc-800 dark:text-zinc-200 font-medium">{hwid}</span>
+            <button
+              type="button"
+              onClick={handleCopyId}
+              title={copiedId ? 'Copied to clipboard!' : 'Copy ID'}
+              className="p-0.5 text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 cursor-pointer transition-colors"
+            >
+              {copiedId ? <Check className="w-2.5 h-2.5 text-emerald-500" /> : <Copy className="w-2.5 h-2.5" />}
+            </button>
+          </div>
+        )}
+      </div>
+
+      {/* Bottom Bar Strip - Matching OG modal footer height */}
+      <div className="px-3.5 py-2.5 bg-zinc-50 dark:bg-zinc-950 border-t border-zinc-200 dark:border-zinc-800 flex items-center justify-between shrink-0">
+        <div className="flex items-center gap-1.5 text-[10.5px] font-mono-tabular text-zinc-500 dark:text-zinc-400">
+          <Lock className="w-3 h-3 text-red-500 dark:text-red-400" />
+          <span>Download disabled</span>
+        </div>
+        <button
+          type="button"
+          onClick={handleOpenManager}
+          className="h-7.5 px-3.5 font-mono-tabular text-[10.5px] uppercase tracking-wider font-semibold cursor-pointer bg-zinc-900 text-white hover:bg-zinc-800 dark:bg-zinc-200 dark:text-zinc-950 dark:hover:bg-white rounded-xs transition-colors flex items-center gap-1.5"
+        >
+          <span>Open Download Manager</span>
+          <ArrowRight className="w-3 h-3 stroke-[2]" />
+        </button>
+      </div>
+    </div>
+  );
+
+  const ActiveDialogContent = isBanned ? BannedDialogContent : DialogContent;
+
   // If running natively in Tauri desktop, render pure frameless window directly
   if (isTauri) {
     return (
       <div className="w-screen h-screen flex flex-col bg-white dark:bg-zinc-900 text-zinc-900 dark:text-zinc-100 font-sans select-none overflow-hidden">
-        {DialogContent}
+        {ActiveDialogContent}
       </div>
     );
   }
@@ -733,7 +939,7 @@ export const DownloadDialogWindow: React.FC = () => {
   return (
     <div className="min-h-screen w-full bg-gradient-to-br from-zinc-900 via-zinc-950 to-black text-zinc-100 flex flex-col items-center justify-center p-4 sm:p-6 relative font-sans selection:bg-emerald-500 selection:text-white">
       {/* Floating Dev Sandbox Navigation Bar */}
-      <div className="w-[580px] max-w-full mb-3 px-3 py-2 rounded-xl bg-zinc-900/90 border border-zinc-800/90 backdrop-blur-md flex flex-wrap items-center justify-between gap-2 shadow-xl ring-1 ring-white/5">
+      <div className="w-[540px] max-w-full mb-3 px-3 py-2 rounded bg-zinc-900/90 border border-zinc-800/90 backdrop-blur-md flex flex-wrap items-center justify-between gap-2 shadow-xl ring-1 ring-white/5">
         <div className="flex items-center gap-2">
           <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
           <span className="text-xs font-semibold tracking-tight text-zinc-200">
@@ -742,11 +948,23 @@ export const DownloadDialogWindow: React.FC = () => {
         </div>
 
         <div className="flex items-center gap-1.5 text-xs">
+          {/* Toggle Banned Mode */}
+          <button
+            type="button"
+            onClick={() => useHardwareBanStore.getState().setBannedLive(!isBanned)}
+            className={`px-2 py-1 rounded text-[11px] font-medium font-mono-tabular transition-colors cursor-pointer ${
+              isBanned ? 'bg-red-600 text-white' : 'text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800'
+            }`}
+            title="Toggle Banned State Preview"
+          >
+            {isBanned ? 'BAN: ON' : 'BAN: OFF'}
+          </button>
+
           {/* Theme Toggle */}
           <button
             type="button"
             onClick={() => setIsDarkTheme(!isDarkTheme)}
-            className="p-1.5 rounded-lg text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800 transition-colors cursor-pointer"
+            className="p-1.5 rounded text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800 transition-colors cursor-pointer"
             title={isDarkTheme ? 'Switch to Light Theme' : 'Switch to Dark Theme'}
           >
             {isDarkTheme ? <Sun className="w-3.5 h-3.5" /> : <Moon className="w-3.5 h-3.5" />}
@@ -756,7 +974,7 @@ export const DownloadDialogWindow: React.FC = () => {
           <button
             type="button"
             onClick={handleClearForm}
-            className="p-1.5 rounded-lg text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800 transition-colors cursor-pointer"
+            className="p-1.5 rounded text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800 transition-colors cursor-pointer"
             title="Clear Form / Test Blank State"
           >
             <RotateCcw className="w-3.5 h-3.5" />
@@ -765,7 +983,7 @@ export const DownloadDialogWindow: React.FC = () => {
           {/* Link to Download Complete Modal */}
           <a
             href="/?window=download_complete"
-            className="px-2 py-1 rounded-lg text-[11px] font-medium text-zinc-300 hover:text-white hover:bg-zinc-800 transition-colors flex items-center gap-1 cursor-pointer"
+            className="px-2 py-1 rounded text-[11px] font-medium text-zinc-300 hover:text-white hover:bg-zinc-800 transition-colors flex items-center gap-1 cursor-pointer"
             title="Inspect Download Complete Window"
           >
             <span>Complete Modal</span>
@@ -775,7 +993,7 @@ export const DownloadDialogWindow: React.FC = () => {
           {/* Link to Full Main App */}
           <a
             href="/"
-            className="px-2 py-1 rounded-lg text-[11px] font-medium text-emerald-400 hover:text-emerald-300 hover:bg-emerald-950/50 border border-emerald-900/60 transition-colors flex items-center gap-1 cursor-pointer"
+            className="px-2 py-1 rounded text-[11px] font-medium text-emerald-400 hover:text-emerald-300 hover:bg-emerald-950/50 border border-emerald-900/60 transition-colors flex items-center gap-1 cursor-pointer"
             title="Go to Main Downex Dashboard"
           >
             <Monitor className="w-3 h-3" />
@@ -785,7 +1003,7 @@ export const DownloadDialogWindow: React.FC = () => {
       </div>
 
       {/* Scenario Pills Selector */}
-      <div className="w-[580px] max-w-full mb-3 flex items-center gap-1.5 overflow-x-auto pb-1 text-xs select-none scrollbar-none">
+      <div className="w-[540px] max-w-full mb-3 flex items-center gap-1.5 overflow-x-auto pb-1 text-xs select-none scrollbar-none">
         <span className="text-[11px] font-semibold text-zinc-400 shrink-0 mr-1">
           Preset:
         </span>
@@ -796,7 +1014,7 @@ export const DownloadDialogWindow: React.FC = () => {
               key={key}
               type="button"
               onClick={() => applyScenario(key)}
-              className={`px-2.5 py-1 rounded-lg text-[11px] font-medium transition-all whitespace-nowrap cursor-pointer shrink-0 border ${
+              className={`px-2 py-0.5 text-[10px] font-mono-tabular transition-all whitespace-nowrap cursor-pointer shrink-0 border ${
                 isActive
                   ? 'bg-emerald-600 text-white border-emerald-500 shadow-xs'
                   : 'bg-zinc-900/80 hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200 border-zinc-800'
@@ -809,14 +1027,14 @@ export const DownloadDialogWindow: React.FC = () => {
       </div>
 
       {/* Realistic Windows 11 Desktop Window Wrapper */}
-      <div className="w-[580px] max-w-full rounded-xl shadow-2xl border border-zinc-300/80 dark:border-zinc-800 bg-white dark:bg-zinc-900 overflow-hidden ring-1 ring-black/5 dark:ring-white/10 transition-all">
+      <div className="w-[540px] max-w-full shadow-2xl border border-zinc-300/80 dark:border-zinc-800 bg-white dark:bg-zinc-950 overflow-hidden ring-1 ring-black/5 dark:ring-white/10 transition-all">
         {DialogContent}
       </div>
 
       {/* Dimension Label */}
-      <div className="w-[580px] max-w-full mt-2.5 px-2 flex items-center justify-between text-[11px] text-zinc-500 font-mono">
-        <span>Native Dialog Size: 580 × 380 px</span>
-        <span>Press <kbd className="px-1 py-0.5 rounded bg-zinc-800 text-zinc-300 border border-zinc-700 text-[10px]">Enter</kbd> to Start • <kbd className="px-1 py-0.5 rounded bg-zinc-800 text-zinc-300 border border-zinc-700 text-[10px]">Esc</kbd> to Cancel</span>
+      <div className="w-[540px] max-w-full mt-2.5 px-2 flex items-center justify-between text-[11px] text-zinc-500 font-mono-tabular">
+        <span>Dialog Size: 540 px</span>
+        <span>Enter: Start • Esc: Cancel</span>
       </div>
 
       {/* Interactive Feedback Toast */}

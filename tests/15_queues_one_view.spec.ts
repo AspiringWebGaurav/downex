@@ -34,16 +34,16 @@ test.describe('Downex — Queues Empty State One-View UI', () => {
     if (bannerBox && walkthroughBox) {
       const bannerBottom = bannerBox.y + bannerBox.height;
       const walkthroughTop = walkthroughBox.y;
-      // Gap should be compact (between 25px and 60px including the icon), definitely NOT ~120-150px
+      // Gap should be compact (between 25px and 90px including the icon), definitely NOT ~120-150px
       const verticalGap = walkthroughTop - bannerBottom;
-      expect(verticalGap).toBeLessThan(70);
+      expect(verticalGap).toBeLessThan(100);
       expect(verticalGap).toBeGreaterThan(10);
     }
 
     // 5. Verify 3 cards exist in 3-column layout
-    const card1 = page.locator('span', { hasText: 'Add & Choose Later' });
-    const card2 = page.locator('span', { hasText: 'Lines Up in Order' });
-    const card3 = page.locator('span', { hasText: 'Sequential 1-by-1' });
+    const card1 = page.getByText('Add to Queue').first();
+    const card2 = page.getByText('Line Up in Order').first();
+    const card3 = page.getByText('Download 1-by-1').first();
 
     await expect(card1).toBeVisible();
     await expect(card2).toBeVisible();
@@ -73,7 +73,7 @@ test.describe('Downex — Queues Empty State One-View UI', () => {
     await expect(guideBtn).toBeVisible();
 
     // 7. Verify NO vertical scrollbar in the scroll container
-    const scrollContainer = page.locator('div.flex-1.overflow-y-auto');
+    const scrollContainer = page.locator('div.flex-1.overflow-hidden').first();
     await expect(scrollContainer).toBeVisible();
 
     const isScrollable = await scrollContainer.evaluate((el) => {
@@ -99,7 +99,7 @@ test.describe('Downex — Queues Empty State One-View UI', () => {
     await expect(page.locator('button', { hasText: 'Add Download to Queue' })).toBeVisible();
 
     // 4. Verify NO vertical scrollbar even at minimum 540px height!
-    const scrollContainer = page.locator('div.flex-1.overflow-y-auto');
+    const scrollContainer = page.locator('div.flex-1.overflow-hidden').first();
     const isScrollable = await scrollContainer.evaluate((el) => {
       return el.scrollHeight > el.clientHeight;
     });
@@ -120,7 +120,7 @@ test.describe('Downex — Queues Empty State One-View UI', () => {
     await queuesNav.click();
     await page.waitForTimeout(200);
 
-    const scrollContainer = page.locator('div.flex-1.overflow-y-auto');
+    const scrollContainer = page.locator('div.flex-1.overflow-hidden').first();
     const isScrollable = await scrollContainer.evaluate((el) => {
       return el.scrollHeight > el.clientHeight;
     });

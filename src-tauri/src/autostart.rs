@@ -86,16 +86,13 @@ pub fn sync_autostart_on_boot(db: &DatabaseManager) {
 
     match setting.as_deref() {
         Some("false") => {
-            eprintln!("[Downex Autostart] Startup setting is disabled by user preference.");
             let _ = set_autostart_registered(false);
         }
         Some("true") => {
-            eprintln!("[Downex Autostart] Startup setting is enabled. Refreshing registry pointer...");
             let _ = set_autostart_registered(true);
         }
         _ => {
             // Unset (first run): Default to enabled (IDM / GPN pattern)
-            eprintln!("[Downex Autostart] Startup setting unconfigured. Enabling by default...");
             let _ = db.set_setting("autostart_enabled", "true");
             let _ = set_autostart_registered(true);
         }

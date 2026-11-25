@@ -1,0 +1,28 @@
+================================================================================
+DOWNEX DOWNLOAD MANAGER — THE DOWNEX ZERO-SURVEILLANCE PRIVACY GUARANTEE
+Architect: Gaurav Patil | https://gauravpatil.site
+================================================================================
+
+1. ZERO ADVERTISING TRACKERS
+Downex does not contain Google Analytics, Facebook Pixels, telemetry SDKs, or
+advertising identifiers. We believe your software should be a quiet utility,
+not a tracking billboard.
+
+2. ZERO DATA HARVESTING
+We do not collect, store, or sell:
+- The URLs or files you download.
+- The websites you visit.
+- Your personal IP address or location history.
+- Your file names or system directories.
+
+3. LOCAL STORAGE IS YOURS
+All download records, queues, and settings stay 100% on your local hard drive.
+When you delete a download record or clear your history in Downex, it is deleted
+from your disk completely.
+
+Gaurav Patil stands firmly behind the principle that privacy is a fundamental
+human right in software.
+
+================================================================================
+Official Product Portal: https://downex.apps.gauravpatil.site
+================================================================================

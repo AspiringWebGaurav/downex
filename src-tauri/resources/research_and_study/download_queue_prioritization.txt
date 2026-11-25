@@ -1,0 +1,27 @@
+================================================================================
+DOWNEX RESEARCH & STUDY ESSAY #27
+Title: SMART DOWNLOAD QUEUE PRIORITIZATION
+Author & Architect: Gaurav Patil (https://gauravpatil.site)
+Official Project: https://downex.apps.gauravpatil.site
+================================================================================
+
+When you need to download twenty files at once—such as a series of work assets,
+video lectures, or project libraries—downloading all 20 simultaneously can choke
+your connection.
+
+When 20 files fight for bandwidth at the same time:
+- None of them finish quickly.
+- Every file crawls along at 5% progress.
+- If your computer needs to shut down, you are left with twenty half-finished files
+  instead of ten completed ones.
+
+Downex uses Smart Queue Prioritization:
+- You can tell Downex to download 2 or 3 files at a time.
+- The highest-priority downloads get 100% of your bandwidth and finish rapidly.
+- As each download completes, Downex automatically moves to the next file in line.
+
+Get the files you need now, and let the rest finish smoothly in the background.
+
+================================================================================
+Copyright (C) 2026 Gaurav Patil. All Rights Reserved.
+================================================================================

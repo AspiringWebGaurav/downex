@@ -1,0 +1,29 @@
+================================================================================
+DOWNEX RESEARCH & STUDY ESSAY #01
+Title: THE PROBLEM WITH MODERN DOWNLOAD MANAGERS
+Author & Architect: Gaurav Patil (https://gauravpatil.site)
+Official Project: https://downex.apps.gauravpatil.site
+================================================================================
+
+If you have ever used a download manager on Windows over the past fifteen years,
+you know the familiar disappointment:
+- The app takes ten seconds just to launch because it is loading advertising scripts.
+- The interface looks like Windows XP from 2001, crammed with tiny icons, ugly
+  menus, and confusing technical dialogs.
+- Popups interrupt your work asking you to buy a "Pro" license every single day.
+- Worse yet, installers often attempt to bundle adware, browser toolbars, or
+  cryptocurrency miners behind confusing "Custom Install" checkboxes.
+
+How did a utility as simple as downloading files become so bloated?
+
+The answer is misaligned incentives. When software companies prioritize ad
+revenue over user experience, every extra screen becomes an opportunity to show
+a banner. The software stops serving the user and starts serving the advertiser.
+
+Downex was designed to be the antidote to this era of bloat. It proves that a
+download manager can be blisteringly fast, visually calm, completely honest, and
+respectful of your computer.
+
+================================================================================
+Copyright (C) 2026 Gaurav Patil. All Rights Reserved.
+================================================================================

@@ -1,0 +1,27 @@
+================================================================================
+DOWNEX DOWNLOAD MANAGER — OFFICIAL END-USER LICENSE AGREEMENT
+Architect: Gaurav Patil | https://gauravpatil.site
+================================================================================
+
+1. GRANT OF LICENSE
+Downex is created and maintained by Gaurav Patil ("Creator & Architect").
+By installing and using Downex, you are granted a personal, non-exclusive,
+non-transferable license to execute and enjoy the software on personal and
+work computers for lawful download management purposes.
+
+2. INTELLECTUAL PROPERTY RIGHTS
+All title, code, brand assets, interface designs, icons, algorithms, and
+architectural systems in Downex are the sole intellectual property of Gaurav
+Patil. You may not claim ownership, sell, sub-license, or redistribute this
+software without explicit written permission from the Creator.
+
+3. USAGE RESTRICTIONS
+You agree to use Downex only for downloading files, media, and data that you
+have legal authorization to access. The Creator assumes no responsibility for
+how individual users utilize network download functionality.
+
+Copyright (C) 2026 Gaurav Patil. All Rights Reserved.
+
+================================================================================
+Official Product Portal: https://downex.apps.gauravpatil.site
+================================================================================

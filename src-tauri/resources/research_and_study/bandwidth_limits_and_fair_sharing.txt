@@ -1,0 +1,26 @@
+================================================================================
+DOWNEX RESEARCH & STUDY ESSAY #10
+Title: BANDWIDTH LIMITS AND FAIR NETWORK SHARING
+Author & Architect: Gaurav Patil (https://gauravpatil.site)
+Official Project: https://downex.apps.gauravpatil.site
+================================================================================
+
+Downloading at maximum speed is wonderful when you have the internet to yourself.
+But what happens when someone else in your household is trying to stream a movie
+or take an important voice call?
+
+If a download manager takes 100% of your bandwidth, other devices experience
+buffering and high ping lag.
+
+To solve this, Downex includes precision speed limiting:
+- In Settings, you can configure maximum download limits (e.g., 5 MB/s or 10 MB/s).
+- Downex uses a token-bucket algorithm that releases network packets in smooth,
+  micro-bursts rather than violent spikes.
+- This keeps your download progressing steadily while leaving plenty of bandwidth
+  free for video calls, gaming, and family members.
+
+Great software lives in harmony with the people around you.
+
+================================================================================
+Copyright (C) 2026 Gaurav Patil. All Rights Reserved.
+================================================================================

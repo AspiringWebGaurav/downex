@@ -1,0 +1,29 @@
+================================================================================
+DOWNEX RESEARCH & STUDY ESSAY #19
+Title: THE HEALTH PROBATION MODEL: NASA-INSPIRED RELIABILITY
+Author & Architect: Gaurav Patil (https://gauravpatil.site)
+Official Project: https://downex.apps.gauravpatil.site
+================================================================================
+
+In spacecraft engineering, when a satellite or spacecraft receives a remote
+software update, it does not immediately assume the update is permanent. It
+enters what aerospace engineers call a "Probationary State".
+
+The satellite must run stable telemetry for a set period. If it crashes or loses
+communication, an independent watchdog timer automatically reverts the system
+to the previous proven firmware.
+
+Downex adopts this exact aerospace principle for Windows software:
+- Whenever a new version of Downex boots for the first time, it enters Probation
+  (is_healthy = false).
+- A 15-second stability timer runs in the background.
+- If the application remains stable and renders properly for 15 seconds, it marks
+  itself as officially healthy (is_healthy = true) and clears probation.
+- If a crash occurs before those 15 seconds elapse, the watchdog knows the build
+  is unstable and initiates an automatic rollback.
+
+Your download manager should be as reliable as a mission-critical tool.
+
+================================================================================
+Copyright (C) 2026 Gaurav Patil. All Rights Reserved.
+================================================================================

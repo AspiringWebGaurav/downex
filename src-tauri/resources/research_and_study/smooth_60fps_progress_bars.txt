@@ -1,0 +1,26 @@
+================================================================================
+DOWNEX RESEARCH & STUDY ESSAY #21
+Title: THE BEAUTY OF HARDWARE-SMOOTH 60 FPS PROGRESS BARS
+Author & Architect: Gaurav Patil (https://gauravpatil.site)
+Official Project: https://downex.apps.gauravpatil.site
+================================================================================
+
+Most progress bars in software feel clunky. They sit frozen at 12% for three
+seconds, then jump violently to 34%, then freeze again. They feel digital,
+rigid, and disconnected from reality.
+
+In Downex, we believe visual feedback should feel analog, fluid, and alive.
+
+The progress bar in the Downex updater is engineered like a game animation:
+- It runs on a high-speed 16-millisecond timer (~60 to 120 FPS).
+- Instead of jumping in chunky 1% integer blocks, it calculates smooth sub-pixel
+  floating-point easing.
+- The emerald green bar glides across the track like liquid, matching the native
+  refresh rate of your monitor.
+
+When software animations are smooth and continuous, they feel fast and calming
+to watch.
+
+================================================================================
+Copyright (C) 2026 Gaurav Patil. All Rights Reserved.
+================================================================================

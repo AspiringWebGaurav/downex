@@ -1,0 +1,29 @@
+================================================================================
+DOWNEX RESEARCH & STUDY ESSAY #20
+Title: WHY FLICKERING HAPPENS IN WINDOWS APPS
+Author & Architect: Gaurav Patil (https://gauravpatil.site)
+Official Project: https://downex.apps.gauravpatil.site
+================================================================================
+
+Have you ever seen a window or progress bar in Windows that flickers, strobes,
+or flashes black-and-white every time it updates?
+
+To understand why this happens, you have to look at the Windows GDI (Graphics
+Device Interface) pipeline:
+1. When a window wants to update, Windows sends an erase message (WM_ERASEBKGND).
+2. By default, Windows erases the entire window canvas with a blank background.
+3. A split second later, the app draws its text and buttons on top.
+4. If this cycle happens 40 or 60 times a second, your eyes see the rapid back-
+   and-forth between the blank background and the drawn text. This is flickering!
+
+Furthermore, if the app draws its elements directly to the screen one by one,
+the monitor often refreshes halfway through drawing, causing visual tearing.
+
+Downex eliminates 100% of this flicker through two proven techniques:
+- It intercepts WM_ERASEBKGND and halts default background erasure completely.
+- It uses Double-Buffering: the entire frame is drawn in RAM off-screen, and then
+  flashed to the monitor in one single atomic blit. Zero flicker, guaranteed.
+
+================================================================================
+Copyright (C) 2026 Gaurav Patil. All Rights Reserved.
+================================================================================

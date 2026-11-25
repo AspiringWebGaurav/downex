@@ -12,6 +12,7 @@ use tokio::net::TcpListener;
 pub struct ExtensionDownloadRequest {
     pub url: String,
     pub filename: Option<String>,
+    pub total_bytes: Option<u64>,
     pub cookies: Option<String>,
     pub referer: Option<String>,
     pub user_agent: Option<String>,
@@ -544,10 +545,11 @@ Connection: close\r\n\r\n",
                             });
 
                             let handle = self.app_handle.as_ref().unwrap().clone();
+                            let detected_size = req.total_bytes.or_else(|| crate::engine::probe::extract_size_from_url(&req.url));
                             let initial_payload = serde_json::json!({
                                 "url": req.url,
                                 "filename": initial_filename,
-                                "total_bytes": serde_json::Value::Null,
+                                "total_bytes": detected_size,
                                 "supports_ranges": true,
                                 "cookies": req.cookies,
                                 "referer": req.referer,

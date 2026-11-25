@@ -1,0 +1,29 @@
+================================================================================
+DOWNEX RESEARCH & STUDY ESSAY #06
+Title: HOW MULTI-CONNECTION ACCELERATION WORKS
+Author & Architect: Gaurav Patil (https://gauravpatil.site)
+Official Project: https://downex.apps.gauravpatil.site
+================================================================================
+
+Think of downloading a large file like transporting water through pipes.
+
+If you have a 1-gigabyte file and you download it through one pipe, you are
+limited by the diameter of that single pipe.
+
+Downex does something much smarter:
+1. It inspects the file on the remote server and checks its total size.
+2. It divides the file into equal segments—for example, four 250 MB slices.
+3. It opens 4 independent network connections simultaneously:
+   - Connection 1 requests bytes 0 through 250 MB.
+   - Connection 2 requests bytes 250 MB through 500 MB.
+   - Connection 3 requests bytes 500 MB through 750 MB.
+   - Connection 4 requests bytes 750 MB through 1,000 MB.
+4. All four connections download at full speed at the same time!
+5. Downex places each byte into its exact position on your hard drive in real time.
+
+The result? Your download finishes up to 4 to 8 times faster, utilizing the true
+speed of your internet connection.
+
+================================================================================
+Copyright (C) 2026 Gaurav Patil. All Rights Reserved.
+================================================================================

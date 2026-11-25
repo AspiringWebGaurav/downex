@@ -1,0 +1,27 @@
+================================================================================
+DOWNEX RESEARCH & STUDY ESSAY #15
+Title: THE NIGHTMARE OF WINDOWS FILE LOCKS
+Author & Architect: Gaurav Patil (https://gauravpatil.site)
+Official Project: https://downex.apps.gauravpatil.site
+================================================================================
+
+If you have ever tried to update or replace an open file in Windows, you have
+almost certainly run into the dreaded error:
+"File In Use: The action can't be completed because the file is open in another program."
+
+On Windows, the operating system places strict NTFS file locks on any executable
+binary that is currently running. You cannot delete it, overwrite it, or update it
+in-place while it is executing.
+
+Historically, software tried to solve this with clumsy workarounds:
+- Showing an ugly modal dialog asking the user to manually close the program.
+- Asking the user to reboot their entire computer just to apply a 5 MB patch!
+- Launching an installer that crashes midway because the background service was
+  still holding a lock.
+
+Gaurav Patil designed an elegant solution to this problem in Downex: the Atomic
+Shadow Swap.
+
+================================================================================
+Copyright (C) 2026 Gaurav Patil. All Rights Reserved.
+================================================================================

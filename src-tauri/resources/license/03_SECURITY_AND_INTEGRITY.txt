@@ -1,0 +1,24 @@
+================================================================================
+DOWNEX DOWNLOAD MANAGER — SECURITY, PRIVACY & INTEGRITY GUARANTEE
+Architect: Gaurav Patil | https://gauravpatil.site
+================================================================================
+
+1. CRYPTOGRAPHIC SIGNING
+Every release of Downex is signed with cryptographic keys (Ed25519) before it
+leaves our build servers. Your local Downex installation verifies these
+cryptographic signatures before accepting any update. If an update file has been
+altered by even one byte, it is rejected instantly.
+
+2. MEMORY AND LOCAL STORAGE PROTECTION
+Downex saves your download history and queue preferences in a secure, local
+database stored on your machine. We never upload your download list, links, or
+saved paths to the cloud.
+
+3. SAFEGUARD AGAINST ROGUE DOWNLOADS
+Downex inspects incoming files and helps you avoid accidental execution of
+hidden scripts by displaying the verified final file extension clearly before
+you click to open.
+
+================================================================================
+Official Product Portal: https://downex.apps.gauravpatil.site
+================================================================================

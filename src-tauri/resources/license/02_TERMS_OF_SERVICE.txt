@@ -1,0 +1,25 @@
+================================================================================
+DOWNEX DOWNLOAD MANAGER — TERMS OF SERVICE & FAIR USAGE GUIDELINES
+Architect: Gaurav Patil | https://gauravpatil.site
+================================================================================
+
+1. FAIR NETWORK CITIZENSHIP
+Downex is designed to maximize download speeds using multi-connection streams.
+When configuring simultaneous connection limits in Settings, please be mindful
+of your network environment. Do not set connection limits so aggressive that
+they cause denial-of-service stress to shared home networks or small servers.
+
+2. THIRD-PARTY CONTENT
+Downex is a tool for transferring data over standard internet protocols (HTTP,
+HTTPS). Downex does not host, curate, or index content downloaded by users.
+All rights in downloaded content belong to their respective copyright holders.
+
+3. AS-IS PROVISION
+Downex is provided free of bloatware on an "as is" and "as available" basis.
+While the software is built to high standards of reliability and tested
+extensively, Gaurav Patil makes no warranties regarding uninterrupted service
+or compatibility with every custom Windows configuration.
+
+================================================================================
+Official Product Portal: https://downex.apps.gauravpatil.site
+================================================================================

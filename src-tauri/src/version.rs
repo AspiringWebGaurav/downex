@@ -127,6 +127,24 @@ pub fn read_db_installed_version(db: &crate::db::DatabaseManager) -> Option<Stri
     None
 }
 
+pub fn read_updater_sync_version(current_exe: &Path) -> Option<String> {
+    let parent = current_exe.parent()?;
+    let state_file = parent.join("updater").join("sync_state.dat");
+    if state_file.exists() {
+        if let Ok(content) = std::fs::read_to_string(&state_file) {
+            if let Ok(json) = serde_json::from_str::<serde_json::Value>(&content) {
+                if let Some(v) = json.get("active_version").and_then(|v| v.as_str()) {
+                    let clean = v.trim().trim_start_matches('v');
+                    if !clean.is_empty() && clean != "0.0.0" {
+                        return Some(clean.to_string());
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
 pub fn read_sidecar_version<R: tauri::Runtime>(app: &AppHandle<R>) -> Option<String> {
     let app_data = app.path().app_data_dir().ok()?;
     let version_file = app_data.join("installed_version.json");
@@ -226,58 +244,23 @@ pub fn resolve_installed_version<R: tauri::Runtime>(
 
     #[cfg(not(debug_assertions))]
     {
-        // 1. Ground Truth: PE Header of currently executing binary
-        let pe_resolved = if let Ok(current_exe) = std::env::current_exe() {
-            if let Some(pe_ver) = extract_pe_version(&current_exe) {
-                if pe_ver != "0.0.0" {
-                    Some(pe_ver)
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
-        } else {
-            None
-        };
+        let current_exe = std::env::current_exe().ok();
+        let pe_resolved = current_exe
+            .as_ref()
+            .and_then(|p| extract_pe_version(p))
+            .filter(|v| v != "0.0.0");
 
+        // The physical PE header of the running binary is the absolute, authoritative ground truth.
+        // If a binary is physically v0.0.1 on disk (e.g. fresh base install), it MUST report v0.0.1,
+        // and immediately purge/reset any superseded version state from previous runs.
         let resolved = if let Some(pe) = pe_resolved {
             pe
         } else {
-            // Fallback: check candidates if PE header extraction was unavailable
-            let mut candidates: Vec<String> = Vec::new();
-            if let Some(sidecar_ver) = read_sidecar_version(app) {
-                if sidecar_ver != "0.0.0" {
-                    candidates.push(sidecar_ver);
-                }
-            }
-            if let Some(db_mgr) = db {
-                if let Some(db_ver) = read_db_installed_version(db_mgr) {
-                    if db_ver != "0.0.0" {
-                        candidates.push(db_ver);
-                    }
-                }
-            } else if let Some(state) = app.try_state::<crate::AppState>() {
-                if let Some(db_ver) = read_db_installed_version(&state.db) {
-                    if db_ver != "0.0.0" {
-                        candidates.push(db_ver);
-                    }
-                }
-            }
-            #[cfg(target_os = "windows")]
-            if let Some(reg_ver) = read_registry_installed_version() {
-                if reg_ver != "0.0.0" {
-                    candidates.push(reg_ver);
-                }
-            }
-
-            let mut highest = base_version.clone();
-            for cand in candidates {
-                if compare_semver(&cand, &highest) == std::cmp::Ordering::Greater {
-                    highest = cand;
-                }
-            }
-            highest
+            let sync_resolved = current_exe
+                .as_ref()
+                .and_then(|p| read_updater_sync_version(p))
+                .filter(|v| v != "0.0.0");
+            sync_resolved.unwrap_or(base_version)
         };
 
         if resolved != "0.0.0" {

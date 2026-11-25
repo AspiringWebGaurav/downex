@@ -14,14 +14,18 @@ import {
   Sun,
   RotateCcw,
   HelpCircle,
-
   Sparkles,
   Command,
   Download,
   FolderOpen,
   Gauge,
+  Crown,
+  Globe,
 } from 'lucide-react';
 import { useDownloadStore } from '../stores/downloadStore';
+import { useAppVersionStore } from '../stores/appVersionStore';
+import { updateService } from '../services/updateService';
+import { openExternalUrl } from '../services/tauriService';
 
 import { formatBytes } from '../utils/format';
 
@@ -29,7 +33,7 @@ export type SearchLifecycle = 'idle' | 'searching' | 'success' | 'empty';
 
 export interface InAppSearchResult {
   id: string;
-  layer: 'downloads' | 'navigation' | 'actions';
+  layer: 'downloads' | 'navigation' | 'actions' | 'owner';
   layerLabel: string;
   title: string;
   subtitle: string;
@@ -51,18 +55,43 @@ export const InAppSearchBar: React.FC<InAppSearchBarProps> = ({ darkMode, setDar
 
   const setSelectedView = useDownloadStore((state) => state.setSelectedView);
   const setNewModalOpen = useDownloadStore((state) => state.setNewModalOpen);
-  const setQueueGuideOpen = useDownloadStore((state) => state.setQueueGuideOpen);
   const openSettingsSubView = useDownloadStore((state) => state.openSettingsSubView);
   const isQueueRunning = useDownloadStore((state) => state.isQueueRunning);
   const startQueue = useDownloadStore((state) => state.startQueue);
   const pauseQueue = useDownloadStore((state) => state.pauseQueue);
+  const setQueueGuideOpen = useDownloadStore((state) => state.setQueueGuideOpen);
 
   const [isFocused, setIsFocused] = useState(false);
+  const [isPulsing, setIsPulsing] = useState(false);
   const [isDebouncing, setIsDebouncing] = useState(false);
   const [selectedIndex, setSelectedIndex] = useState(0);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  // Trigger search focus attention glow pulse
+  const triggerFocusPulse = () => {
+    setIsPulsing(true);
+    setTimeout(() => {
+      setIsPulsing(false);
+    }, 650);
+  };
+
+  // Global Ctrl+K / '/' listener to trigger visible focus animation
+  useEffect(() => {
+    const handleGlobalKeyDown = (e: KeyboardEvent) => {
+      const isSearchTrigger =
+        ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') ||
+        (e.key === '/' &&
+          document.activeElement?.tagName !== 'INPUT' &&
+          document.activeElement?.tagName !== 'TEXTAREA');
+      if (isSearchTrigger) {
+        triggerFocusPulse();
+      }
+    };
+    window.addEventListener('keydown', handleGlobalKeyDown);
+    return () => window.removeEventListener('keydown', handleGlobalKeyDown);
+  }, []);
 
   // Debounced search typing lifecycle simulation (120ms)
   useEffect(() => {
@@ -82,6 +111,7 @@ export const InAppSearchBar: React.FC<InAppSearchBarProps> = ({ darkMode, setDar
     const handleClickOutside = (e: MouseEvent) => {
       if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
         setIsFocused(false);
+        setIsPulsing(false);
       }
     };
     document.addEventListener('mousedown', handleClickOutside);
@@ -89,12 +119,95 @@ export const InAppSearchBar: React.FC<InAppSearchBarProps> = ({ darkMode, setDar
   }, []);
 
   const cleanQuery = searchQuery.trim().toLowerCase();
+  const normalizedQuery = cleanQuery.replace(/[,]+/g, ' ').replace(/\s+/g, ' ').trim();
 
-  // Multi-Layer Search Index Engine
-  const { downloadMatches, navMatches, actionMatches, flatResults } = useMemo(() => {
+  // Multi-Layer Search Index Engine (Owner, Downloads, Sections, Actions)
+  const { ownerMatches, downloadMatches, navMatches, actionMatches, flatResults } = useMemo(() => {
     if (!cleanQuery) {
-      return { downloadMatches: [], navMatches: [], actionMatches: [], flatResults: [] };
+      return { ownerMatches: [], downloadMatches: [], navMatches: [], actionMatches: [], flatResults: [] };
     }
+
+    // 0. Layer: App Owner & Creator (Gaurav Patil) - Robust Multi-Keyword Resolution
+    const ownerCatalog = [
+      {
+        id: 'owner-gaurav-patil',
+        title: 'Gaurav Patil',
+        subtitle: 'Owner & Creator of Downex • https://gauravpatil.site',
+        badge: 'APP OWNER',
+        badgeColor:
+          'bg-amber-50 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 border-amber-300/80 dark:border-amber-800/80',
+        keywords: [
+          'gaurav',
+          'patil',
+          'gaurav patil',
+          'gauravpatil',
+          'gauravpatil.site',
+          'owner',
+          'creator',
+          'author',
+          'developer',
+          'founder',
+          'who made',
+          'who is owner',
+          'app owner',
+          'portfolio',
+        ],
+        icon: <Crown className="w-4 h-4 text-amber-500" />,
+        action: () => {
+          openExternalUrl('https://gauravpatil.site');
+          setIsFocused(false);
+        },
+      },
+      {
+        id: 'owner-gauravpatil-portal',
+        title: 'Downex Official Website',
+        subtitle: 'Official Downex portal hosted on gauravpatil.site',
+        badge: 'OFFICIAL',
+        badgeColor:
+          'bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border-emerald-300/80 dark:border-emerald-800/80',
+        keywords: [
+          'gaurav',
+          'patil',
+          'gauravpatil',
+          'gauravpatil.site',
+          'portal',
+          'official website',
+          'homepage',
+          'official site',
+        ],
+        icon: <Globe className="w-4 h-4 text-emerald-500" />,
+        action: () => {
+          openExternalUrl('https://downex.apps.gauravpatil.site');
+          setIsFocused(false);
+        },
+      },
+    ];
+
+    const queryWords = normalizedQuery.split(' ').filter(Boolean);
+    const ownerMatches: InAppSearchResult[] = ownerCatalog
+      .filter((entry) => {
+        if (entry.title.toLowerCase().includes(cleanQuery)) return true;
+        if (entry.subtitle.toLowerCase().includes(cleanQuery)) return true;
+        return entry.keywords.some(
+          (k) =>
+            k.includes(cleanQuery) ||
+            cleanQuery.includes(k) ||
+            k.includes(normalizedQuery) ||
+            normalizedQuery.includes(k) ||
+            queryWords.some((w) => k.includes(w) || w.includes(k))
+        );
+      })
+      .map((entry) => ({
+        id: entry.id,
+        layer: 'owner',
+        layerLabel: 'App Owner',
+        title: entry.title,
+        subtitle: entry.subtitle,
+        badge: entry.badge,
+        badgeColor: entry.badgeColor,
+        icon: entry.icon,
+        action: entry.action,
+      }));
 
     // 1. Layer: Downloads (Match filename, URL, path, extension, status)
     const downloadMatches: InAppSearchResult[] = items
@@ -135,7 +248,7 @@ export const InAppSearchBar: React.FC<InAppSearchBarProps> = ({ darkMode, setDar
       {
         id: 'all',
         title: 'All Downloads',
-        subtitle: 'View all active, completed, and queued downloads',
+        subtitle: 'View all active and completed downloads',
         keywords: ['all', 'downloads', 'home', 'files', 'everything', 'main'],
         icon: <File className="w-4 h-4 text-emerald-500" />,
       },
@@ -232,8 +345,8 @@ export const InAppSearchBar: React.FC<InAppSearchBarProps> = ({ darkMode, setDar
       },
       {
         id: 'action-queue-guide',
-        title: 'How 1-by-1 Queue Works?',
-        subtitle: 'Interactive tutorial on sequential download acceleration',
+        title: 'How 1-by-1 Queue Works',
+        subtitle: 'Official guide on sequential download acceleration & safeguards',
         keywords: ['how it works', 'queue guide', 'help', 'tutorial', 'learn', 'guide'],
         icon: <HelpCircle className="w-4 h-4 text-purple-500" />,
         action: () => setQueueGuideOpen(true),
@@ -280,20 +393,21 @@ export const InAppSearchBar: React.FC<InAppSearchBarProps> = ({ darkMode, setDar
         },
       }));
 
-    const flatResults = [...downloadMatches, ...navMatches, ...actionMatches];
-    return { downloadMatches, navMatches, actionMatches, flatResults };
+    const flatResults = [...ownerMatches, ...downloadMatches, ...navMatches, ...actionMatches];
+    return { ownerMatches, downloadMatches, navMatches, actionMatches, flatResults };
   }, [
     cleanQuery,
+    normalizedQuery,
     items,
     darkMode,
     isQueueRunning,
     setSelectedView,
     setNewModalOpen,
-    setQueueGuideOpen,
     openSettingsSubView,
     setDarkMode,
     startQueue,
     pauseQueue,
+    setQueueGuideOpen,
   ]);
 
   // Determine current search lifecycle
@@ -344,23 +458,31 @@ export const InAppSearchBar: React.FC<InAppSearchBarProps> = ({ darkMode, setDar
 
   const totalMatchesCount = flatResults.length;
   const activeLayersCount = [
+    ownerMatches.length > 0,
     downloadMatches.length > 0,
     navMatches.length > 0,
     actionMatches.length > 0,
   ].filter(Boolean).length;
 
   return (
-    <div ref={containerRef} className="relative flex-1 max-w-md select-none">
-      {/* Search Input Bar */}
-      <div className="relative flex items-center">
-        {/* Left Status Icon depending on lifecycle */}
-        <div className="absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none flex items-center justify-center">
+    <div ref={containerRef} className="relative flex-1 max-w-sm select-none">
+      {/* Search Input Bar with Focus Glow Pulse Animation */}
+      <div
+        data-testid="in-app-search-container"
+        className={`relative flex items-center rounded-lg transition-all duration-200 ${
+          isPulsing ? 'animate-search-focus' : ''
+        }`}
+      >
+        {/* Left Status Icon depending on lifecycle & focus */}
+        <div className="absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none flex items-center justify-center transition-colors">
           {lifecycle === 'searching' ? (
             <Loader2 className="w-3.5 h-3.5 text-emerald-500 animate-spin" />
           ) : lifecycle === 'empty' ? (
             <SearchX className="w-3.5 h-3.5 text-amber-500" />
           ) : lifecycle === 'success' ? (
             <Search className="w-3.5 h-3.5 text-emerald-500 stroke-[2.2]" />
+          ) : isFocused ? (
+            <Search className="w-3.5 h-3.5 text-emerald-500 stroke-[2.2] animate-pulse" />
           ) : (
             <Search className="w-3.5 h-3.5 text-zinc-400 dark:text-zinc-500" />
           )}
@@ -370,18 +492,37 @@ export const InAppSearchBar: React.FC<InAppSearchBarProps> = ({ darkMode, setDar
           ref={inputRef}
           id="search-input"
           type="text"
-          placeholder="Search in app... (Ctrl+K)"
+          placeholder={isFocused ? 'Type to search...' : 'Search in app... (Ctrl+K)'}
           aria-label="Search in app"
           value={searchQuery}
-          onFocus={() => setIsFocused(true)}
-          onChange={(e) => setSearchQuery(e.target.value)}
+          onFocus={() => {
+            setIsFocused(true);
+            triggerFocusPulse();
+            updateService.recordUserActivity();
+            const verState = useAppVersionStore.getState();
+            if (verState.status.state === 'idle') {
+              verState
+                .checkForUpdates(true)
+                .then(() => {
+                  verState.evaluateAndApplyUpdate();
+                })
+                .catch(() => {});
+            }
+          }}
+          onBlur={() => {
+            setIsPulsing(false);
+          }}
+          onChange={(e) => {
+            updateService.recordUserActivity();
+            setSearchQuery(e.target.value);
+          }}
           onKeyDown={handleKeyDown}
-          className={`w-full px-3 py-1.5 pl-8 pr-20 text-xs font-mono rounded-lg bg-zinc-100 dark:bg-zinc-900 border transition-all placeholder:text-zinc-400 dark:placeholder:text-zinc-500 focus:outline-none ${
-            lifecycle === 'empty'
-              ? 'border-amber-300 dark:border-amber-800/80 focus:border-amber-500'
-              : lifecycle === 'success'
-              ? 'border-emerald-300/80 dark:border-emerald-800/80 focus:border-emerald-500'
-              : 'border-transparent focus:border-zinc-300 dark:focus:border-zinc-700'
+          className={`w-full h-8 px-3 py-1.5 pl-8 pr-24 text-xs font-mono rounded-lg transition-all placeholder:text-zinc-400 dark:placeholder:text-zinc-500 focus:outline-none ${
+            isPulsing
+              ? 'ring-2 ring-emerald-500/60 dark:ring-emerald-400/60 shadow-[0_0_14px_rgba(16,185,129,0.3)] bg-white dark:bg-zinc-950 border-emerald-500'
+              : isFocused
+              ? 'ring-2 ring-emerald-500/30 dark:ring-emerald-400/30 shadow-[0_0_10px_rgba(16,185,129,0.15)] bg-white dark:bg-zinc-950 border-emerald-500/80 dark:border-emerald-500/80'
+              : 'bg-zinc-100 dark:bg-zinc-900 border-transparent hover:border-zinc-300 dark:hover:border-zinc-700'
           }`}
         />
 
@@ -414,6 +555,19 @@ export const InAppSearchBar: React.FC<InAppSearchBarProps> = ({ darkMode, setDar
                 <X className="w-3.5 h-3.5" />
               </button>
             </>
+          ) : isFocused ? (
+            <div className="flex items-center gap-1" data-testid="search-focus-indicator">
+              <span className="flex items-center gap-1 text-[10px] font-mono font-medium px-1.5 py-0.5 rounded bg-emerald-50 dark:bg-emerald-950/80 text-emerald-600 dark:text-emerald-400 border border-emerald-300/80 dark:border-emerald-700/80 shadow-xs animate-in fade-in zoom-in-95 duration-150">
+                <span className="relative flex h-1.5 w-1.5">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                  <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-emerald-500"></span>
+                </span>
+                READY
+              </span>
+              <kbd className="hidden sm:inline-block text-[9px] font-mono px-1 py-0.5 rounded bg-zinc-200/60 dark:bg-zinc-800 text-zinc-400 dark:text-zinc-500 border border-zinc-300/60 dark:border-zinc-700/60 select-none">
+                Esc
+              </kbd>
+            </div>
           ) : (
             <kbd className="hidden sm:inline-block text-[10px] font-mono px-1.5 py-0.5 rounded bg-zinc-200/70 dark:bg-zinc-800 text-zinc-500 border border-zinc-300/60 dark:border-zinc-700/60 select-none">
               Ctrl+K
@@ -424,24 +578,80 @@ export const InAppSearchBar: React.FC<InAppSearchBarProps> = ({ darkMode, setDar
 
       {/* In-App Search Popover Dropdown (Lifecycles & All Layers) */}
       {isFocused && cleanQuery && (
-        <div className="absolute top-full left-0 right-0 mt-1.5 p-1.5 bg-white dark:bg-zinc-900 border border-zinc-200/90 dark:border-zinc-800/90 rounded-xl shadow-2xl z-50 max-h-96 overflow-y-auto animate-in fade-in-50 zoom-in-95 duration-150">
+        <div className="absolute top-full left-0 w-[420px] max-w-[calc(100vw-32px)] mt-1.5 p-1.5 bg-white dark:bg-zinc-900 border border-zinc-200/90 dark:border-zinc-800/90 rounded-xl shadow-2xl z-50 max-h-96 overflow-y-auto animate-in fade-in-50 zoom-in-95 duration-150">
           {/* Header Lifecycle Indicator */}
-          <div className="px-2.5 py-1.5 flex items-center justify-between border-b border-zinc-100 dark:border-zinc-800/80 mb-1">
-            <span className="text-[10px] font-semibold tracking-wider uppercase text-zinc-400 dark:text-zinc-500">
+          <div className="px-2.5 py-1.5 flex items-center justify-between border-b border-zinc-100 dark:border-zinc-800/80 mb-1 gap-2">
+            <span className="text-[10px] font-semibold tracking-wider uppercase text-zinc-400 dark:text-zinc-500 truncate">
               {lifecycle === 'searching'
-                ? 'Searching all app layers...'
+                ? 'Searching...'
                 : lifecycle === 'empty'
-                ? 'Search Fail • No Matches'
-                : `Search in App • ${totalMatchesCount} Results across ${activeLayersCount} Layers`}
+                ? 'No Matches'
+                : `${totalMatchesCount} Results across ${activeLayersCount} Layers`}
             </span>
-            <span className="text-[10px] font-mono text-zinc-400 dark:text-zinc-500">
-              ↑↓ Navigate • ↵ Select • Esc Clear
+            <span className="text-[10px] font-mono text-zinc-400 dark:text-zinc-500 shrink-0">
+              ↑↓ Move • ↵ Select • Esc
             </span>
           </div>
 
           {/* SUCCESS STATE: Results grouped by layer */}
           {lifecycle === 'success' && (
             <div className="space-y-2">
+              {/* Layer 0: App Owner & Creator */}
+              {ownerMatches.length > 0 && (
+                <div>
+                  <div className="px-2.5 py-1 text-[10px] font-bold text-amber-600 dark:text-amber-400 uppercase tracking-wider flex items-center gap-1.5">
+                    <Crown className="w-3 h-3 text-amber-500" />
+                    <span>App Owner ({ownerMatches.length})</span>
+                  </div>
+                  <div className="space-y-0.5">
+                    {ownerMatches.map((item) => {
+                      const itemIndex = flatResults.findIndex((r) => r.id === item.id);
+                      const isSelected = itemIndex === selectedIndex;
+                      const isMainOwner = item.id === 'owner-gaurav-patil';
+                      return (
+                        <div
+                          key={item.id}
+                          data-testid={`search-result-${item.id}`}
+                          onClick={item.action}
+                          onMouseEnter={() => setSelectedIndex(itemIndex)}
+                          className={`px-2.5 py-2 rounded-lg flex items-center justify-between gap-2.5 cursor-pointer transition-colors ${
+                            isSelected
+                              ? 'bg-amber-50/80 dark:bg-amber-950/40 text-amber-900 dark:text-amber-100 ring-1 ring-amber-300 dark:ring-amber-700/60'
+                              : 'hover:bg-zinc-100 dark:hover:bg-zinc-800/60 text-zinc-800 dark:text-zinc-200'
+                          }`}
+                        >
+                          <div className="flex items-center gap-2.5 min-w-0">
+                            <div className="p-1 rounded-md bg-amber-100/70 dark:bg-amber-900/50 text-amber-600 dark:text-amber-300 shrink-0">
+                              {item.icon}
+                            </div>
+                            <div className="min-w-0">
+                              <p className="text-xs font-semibold truncate leading-tight flex items-center gap-1.5">
+                                <span>{item.title}</span>
+                                {isMainOwner && (
+                                  <span className="text-[10px] font-mono font-normal text-amber-600 dark:text-amber-400 bg-amber-100/60 dark:bg-amber-900/40 px-1 py-0.2 rounded">
+                                    Owner of the app
+                                  </span>
+                                )}
+                              </p>
+                              <p className="text-[10px] text-zinc-400 dark:text-zinc-500 truncate mt-0.5 font-mono">
+                                {item.subtitle}
+                              </p>
+                            </div>
+                          </div>
+                          {item.badge && (
+                            <span
+                              className={`px-1.5 py-0.5 rounded text-[9px] font-mono font-semibold border shrink-0 ${item.badgeColor}`}
+                            >
+                              {item.badge}
+                            </span>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
               {/* Layer 1: Downloads */}
               {downloadMatches.length > 0 && (
                 <div>

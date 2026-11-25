@@ -1,0 +1,26 @@
+================================================================================
+DOWNEX RESEARCH & STUDY ESSAY #12
+Title: HOW DOWNEX OPERATES UNDER 15 MB OF RAM
+Author & Architect: Gaurav Patil (https://gauravpatil.site)
+Official Project: https://downex.apps.gauravpatil.site
+================================================================================
+
+Keeping an active desktop application under 15 megabytes of memory on Windows
+is an engineering achievement.
+
+Here is how Gaurav Patil engineered Downex to stay so small:
+1. Zero Background Polling: When Downex is waiting for downloads, all active
+   threads sleep. We do not use busy loops that consume memory or CPU.
+2. In-Memory Streaming: Incoming data packets are written directly into pre-
+   allocated Windows file buffers. Memory is reused rather than constantly
+   allocated and discarded.
+3. Native Webview Sharing: Instead of bundling a separate 150 MB Chromium runtime,
+   Downex leverages Microsoft Edge WebView2, which is already built into Windows.
+4. Minimal State footprint: The entire app state (queues, settings, download lists)
+   is maintained in a lightweight, single-file SQLite database with zero bloat.
+
+Your PC stays fast because Downex takes only what it truly needs.
+
+================================================================================
+Copyright (C) 2026 Gaurav Patil. All Rights Reserved.
+================================================================================

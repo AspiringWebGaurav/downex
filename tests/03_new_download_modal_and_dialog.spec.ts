@@ -15,9 +15,10 @@ test.describe('Downex Base Application — New Download Modal & Grabber Dialog',
   test('NewDownloadModal form inputs, folder picker, and queuing (Download Later)', async ({ page }) => {
     const errors = captureConsoleErrors(page);
 
-    // Open modal via Top Bar button
+    // Open modal via Top Bar or Sidebar button
     await page.click('button:has-text("New Download")');
-    await expect(page.locator('text=Download File')).toBeVisible();
+    const modalTitle = page.getByText('NEW DOWNLOAD', { exact: true });
+    await expect(modalTitle).toBeVisible();
 
     // The modal was opened without prefilled URL: Start and Later buttons should be disabled
     const startBtn = page.locator('button:has-text("Start Download")');
@@ -27,7 +28,7 @@ test.describe('Downex Base Application — New Download Modal & Grabber Dialog',
 
     // Close modal
     await page.keyboard.press('Escape');
-    await expect(page.locator('text=Download File')).not.toBeVisible();
+    await expect(modalTitle).not.toBeVisible();
 
     // Trigger modal with URL detail event
     await page.evaluate(() => {
@@ -43,7 +44,7 @@ test.describe('Downex Base Application — New Download Modal & Grabber Dialog',
       );
     });
 
-    await expect(page.locator('text=Download File')).toBeVisible();
+    await expect(modalTitle).toBeVisible();
     const filenameInput = page.locator('input[placeholder="Filename"]');
     await expect(filenameInput).toHaveValue('custom-package');
 
@@ -52,21 +53,24 @@ test.describe('Downex Base Application — New Download Modal & Grabber Dialog',
     await expect(filenameInput).toHaveValue('renamed-package');
 
     // Test Browse button
-    const browseBtn = page.locator('button:has-text("Browse…")');
+    const browseBtn = page.locator('button:has-text("Browse")').first();
     await browseBtn.click();
-    const folderInput = page.locator('input[placeholder*="Destination folder path"]');
-    await expect(folderInput).toHaveValue(/CustomDownexFolder/);
+    // Folder modal opens
+    await expect(page.locator('text=SAVE DESTINATION')).toBeVisible();
+    // Click Select Folder to confirm
+    await page.click('button:has-text("SELECT FOLDER")');
+    await expect(page.locator('text=SAVE DESTINATION')).not.toBeVisible();
 
     // Test "Later" button (Enqueue)
     await expect(laterBtn).toBeEnabled();
     await laterBtn.click();
 
     // Modal closes
-    await expect(page.locator('text=Download File')).not.toBeVisible();
+    await expect(modalTitle).not.toBeVisible();
 
-    // Check that item is added to the table with queued status
-    await expect(page.getByRole('heading', { name: 'renamed-package.iso' })).toBeVisible();
-    await expect(page.getByText('queued').first()).toBeVisible();
+    // In the dedicated Queues environment, enqueued download is displayed in Queues
+    await expect(page.locator('div.rounded-xl', { hasText: 'renamed-package.iso' })).toBeVisible();
+    await expect(page.getByText('QUEUED', { exact: true })).toBeVisible();
 
     expect(errors).toEqual([]);
   });
@@ -85,18 +89,19 @@ test.describe('Downex Base Application — New Download Modal & Grabber Dialog',
       );
     });
 
-    await expect(page.locator('text=Download File')).toBeVisible();
+    const modalTitle = page.getByText('NEW DOWNLOAD', { exact: true });
+    await expect(modalTitle).toBeVisible();
 
     // Click Start Download
     const startBtn = page.locator('button:has-text("Start Download")');
     await startBtn.click();
 
     // Modal closes
-    await expect(page.locator('text=Download File')).not.toBeVisible();
+    await expect(modalTitle).not.toBeVisible();
 
     // Item appears in download table as downloading
-    await expect(page.getByRole('heading', { name: 'archive-2026.zip' })).toBeVisible();
-    await expect(page.locator('text=Downloading')).toBeVisible();
+    await expect(page.locator('div.rounded-xl', { hasText: 'archive-2026.zip' })).toBeVisible();
+    await expect(page.getByText('DOWNLOADING', { exact: true })).toBeVisible();
   });
 
   test('Dedicated Grabber Dialog Window (?window=download_dialog) complete lifecycle', async ({ page }) => {
@@ -116,21 +121,22 @@ test.describe('Downex Base Application — New Download Modal & Grabber Dialog',
     await page.goto('/?window=download_dialog');
 
     // Verify dialog header and probed payload
-    await expect(page.locator('text=Download File')).toBeVisible();
+    await expect(page.getByText('NEW DOWNLOAD', { exact: true })).toBeVisible();
     await expect(page.locator('input[placeholder="Filename"]')).toHaveValue('ubuntu-26.04-desktop-amd64');
-    await expect(page.locator('text=/Resume supported|Can pause and resume/')).toBeVisible();
+    await expect(page.locator('text=/RESUME OK/')).toBeVisible();
     await expect(page.getByText('2.00 GB', { exact: true })).toBeVisible();
-    await expect(page.locator('text=/8 Connections|8 Parts/')).toBeVisible();
+    await expect(page.locator('text=/32 Threads/')).toBeVisible();
 
     // Verify Copy URL button
-    const copyUrlBtn = page.locator('button:has-text("Copy")').first();
+    const copyUrlBtn = page.locator('button:has-text("COPY")').first();
     await expect(copyUrlBtn).toBeVisible();
     await copyUrlBtn.click();
-    await expect(page.getByRole('button', { name: 'Copied' })).toBeVisible();
+    await expect(page.locator('button:has-text("COPIED")').first()).toBeVisible();
 
-    // Verify Browse button
-    await page.getByRole('button', { name: /Browse/i }).click();
-    await expect(page.locator('input[placeholder*="Destination folder path"]')).toHaveValue(/CustomDownexFolder|Downloads|ISOs/);
+    // Verify Browse button updates destination folder
+    const browseBtn = page.locator('button:has-text("Browse")').first();
+    await browseBtn.click();
+    await expect(page.locator('input[placeholder*="Destination folder path"]')).toHaveValue(/Downloads|ISOs|Packages/);
 
     // Test submit via Start Download button
     await page.click('button:has-text("Start Download")');

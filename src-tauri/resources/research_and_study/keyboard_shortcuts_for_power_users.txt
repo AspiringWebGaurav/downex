@@ -1,0 +1,25 @@
+================================================================================
+DOWNEX RESEARCH & STUDY ESSAY #23
+Title: KEYBOARD-DRIVEN EFFICIENCY FOR POWER USERS
+Author & Architect: Gaurav Patil (https://gauravpatil.site)
+Official Project: https://downex.apps.gauravpatil.site
+================================================================================
+
+Every time your hand has to leave the keyboard to reach for the mouse, find a
+cursor, and click a button, your mental flow is broken by a fraction of a second.
+
+For power users, keyboard shortcuts are not a secondary feature; they are the
+primary way of interacting with software.
+
+Downex is built with full keyboard navigation:
+- Ctrl + N: Instantly paste and start a new download without clicking anywhere.
+- Ctrl + K: Search through hundreds of past downloads with instantaneous filtering.
+- F8: Collapse the sidebar to reclaim screen space.
+- Escape: Dismiss any active modal or return to the main list.
+
+By streamlining common actions into muscle-memory shortcuts, Downex lets you
+manage dozens of downloads in seconds.
+
+================================================================================
+Copyright (C) 2026 Gaurav Patil. All Rights Reserved.
+================================================================================

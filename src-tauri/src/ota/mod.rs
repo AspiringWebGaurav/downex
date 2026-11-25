@@ -68,7 +68,7 @@ pub async fn check_latest_release(
                 }
             }
         }
-        if is_newer_version(&manifest.version, current_version) {
+        if is_newer_version(&manifest.version, current_version) && !is_version_quarantined(&manifest.version) {
             return Ok(Some(manifest));
         }
     }
@@ -245,11 +245,42 @@ pub fn execute_signed_remote_task(
             }
             Ok(format!("Storage cleaned successfully (removed {} stale artifacts) for task {}", cleaned, task.id))
         }
+        "quarantine_version" | "blacklist_version" => {
+            let ver = task.target_version.as_deref()
+                .or_else(|| task.payload.as_ref().and_then(|p| p.as_str()))
+                .unwrap_or("0.0.0");
+            let clean_ver = ver.trim().trim_start_matches('v');
+            if let Ok(current_exe) = std::env::current_exe() {
+                if let Some(parent) = current_exe.parent() {
+                    let state_file = parent.join("updater").join("sync_state.dat");
+                    if state_file.exists() {
+                        if let Ok(content) = std::fs::read_to_string(&state_file) {
+                            if let Ok(mut json) = serde_json::from_str::<serde_json::Value>(&content) {
+                                if let Some(obj) = json.as_object_mut() {
+                                    let mut q_list = obj.get("quarantined_versions").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+                                    let v_val = serde_json::Value::String(clean_ver.to_string());
+                                    if !q_list.contains(&v_val) {
+                                        q_list.push(v_val);
+                                    }
+                                    obj.insert("quarantined_versions".to_string(), serde_json::Value::Array(q_list));
+                                }
+                                let _ = std::fs::write(&state_file, serde_json::to_string_pretty(&json).unwrap_or_default());
+                            }
+                        }
+                    }
+                }
+            }
+            Ok(format!("Version v{} quarantined via remote directive for task {}", clean_ver, task.id))
+        }
         "diagnostics" => {
             let pid = std::process::id();
             let info = format!("OS: Windows, PID: {}, Action: diagnostics", pid);
             eprintln!("[Downex Diagnostics] {}", info);
             Ok(format!("Diagnostics logged: {} for task {}", info, task.id))
+        }
+        "update_docs" | "sync_manifest" => {
+            let updated = crate::doc_sync::apply_remote_doc_updates(task.payload.as_ref())?;
+            Ok(format!("Documentation synced ({} file(s) updated) for task {}", updated, task.id))
         }
         "reset_to_base" => {
             eprintln!("[Downex Remote Task] Executing signed emergency Reset to Base foundation...");
@@ -273,6 +304,49 @@ pub fn execute_signed_remote_task(
                 Ok(format!("Self-healing repair executed for task {}", task.id))
             } else {
                 Ok(format!("Deferred clean restart due to active downloads for task {}", task.id))
+            }
+        }
+        "hardware_ban" | "ban_machine" | "ban" => {
+            let my_hwid = crate::hardware::get_or_init_silicon_hardware_id(Some(&state.db));
+            let target_hwid = task.payload.as_ref().and_then(|p| {
+                p.get("target_hwid").and_then(|v| v.as_str()).or_else(|| p.get("hwid").and_then(|v| v.as_str()))
+            });
+
+            if let Some(target) = target_hwid {
+                if target.trim().eq_ignore_ascii_case(&my_hwid) {
+                    let reason = task.payload.as_ref()
+                        .and_then(|p| p.get("reason").and_then(|v| v.as_str()))
+                        .unwrap_or("Hardware restriction enforced by ecosystem administrator.");
+                    crate::hardware::enforce_local_hardware_ban(reason, Some(&state.db));
+                    let _ = tauri::Emitter::emit(app, "downex-hardware-ban-changed", serde_json::json!({ "is_banned": true, "reason": reason }));
+                    Ok(format!("Hardware ban enforced for HWID {} (Task {})", my_hwid, task.id))
+                } else {
+                    Ok(format!("Directive ignored: target HWID {} does not match machine {}", target, my_hwid))
+                }
+            } else {
+                crate::hardware::enforce_local_hardware_ban("Hardware restriction enforced by ecosystem administrator.", Some(&state.db));
+                let _ = tauri::Emitter::emit(app, "downex-hardware-ban-changed", serde_json::json!({ "is_banned": true }));
+                Ok(format!("Global hardware ban enforced for task {}", task.id))
+            }
+        }
+        "hardware_unban" | "unban_machine" | "unban" => {
+            let my_hwid = crate::hardware::get_or_init_silicon_hardware_id(Some(&state.db));
+            let target_hwid = task.payload.as_ref().and_then(|p| {
+                p.get("target_hwid").and_then(|v| v.as_str()).or_else(|| p.get("hwid").and_then(|v| v.as_str()))
+            });
+
+            if let Some(target) = target_hwid {
+                if target.trim().eq_ignore_ascii_case(&my_hwid) {
+                    crate::hardware::lift_local_hardware_ban(Some(&state.db));
+                    let _ = tauri::Emitter::emit(app, "downex-hardware-ban-changed", serde_json::json!({ "is_banned": false }));
+                    Ok(format!("Hardware ban lifted for HWID {} (Task {})", my_hwid, task.id))
+                } else {
+                    Ok(format!("Unban ignored: target HWID {} does not match machine {}", target, my_hwid))
+                }
+            } else {
+                crate::hardware::lift_local_hardware_ban(Some(&state.db));
+                let _ = tauri::Emitter::emit(app, "downex-hardware-ban-changed", serde_json::json!({ "is_banned": false }));
+                Ok(format!("Global hardware ban lifted for task {}", task.id))
             }
         }
         "sync_extension" => Ok(format!("Extension sync deprecated, task {} acknowledged", task.id)),
@@ -314,4 +388,446 @@ pub fn execute_signed_remote_task(
         }
         other => Err(format!("Unknown remote task action: '{}'", other)),
     }
+}
+
+pub fn is_version_quarantined(version: &str) -> bool {
+    let clean = version.trim().trim_start_matches('v');
+    let state_file = if let Ok(current_exe) = std::env::current_exe() {
+        if let Some(parent) = current_exe.parent() {
+            parent.join("updater").join("sync_state.dat")
+        } else {
+            std::path::PathBuf::from("updater").join("sync_state.dat")
+        }
+    } else {
+        std::path::PathBuf::from("updater").join("sync_state.dat")
+    };
+
+    if state_file.exists() {
+        if let Ok(content) = std::fs::read_to_string(&state_file) {
+            if let Ok(json) = serde_json::from_str::<serde_json::Value>(&content) {
+                if let Some(list) = json.get("quarantined_versions").and_then(|v| v.as_array()) {
+                    return list.iter().any(|v| v.as_str().map(|s| s.trim_start_matches('v')) == Some(clean));
+                }
+            }
+        }
+    }
+    false
+}
+
+pub const OTA_SEED_MATERIAL: &str = "downex-internal-ota-key-com.downex.manager.ota.payload.v1";
+
+pub fn decrypt_ota_container(data: &[u8]) -> Result<Vec<u8>, String> {
+    if data.len() >= 2 && data[0] == b'M' && data[1] == b'Z' {
+        return Ok(data.to_vec());
+    }
+    if data.len() < 60 || !data.starts_with(b"DWNX_OTA") {
+        return Err("Invalid Downex OTA container header: missing DWNX_OTA magic".to_string());
+    }
+
+    let iv = &data[32..44];
+    let tag = &data[44..60];
+    let ciphertext = &data[60..];
+
+    use aes_gcm::{
+        aead::{Aead, KeyInit},
+        Aes256Gcm, Nonce,
+    };
+    use sha2::{Digest, Sha256};
+
+    let key = Sha256::digest(OTA_SEED_MATERIAL.as_bytes());
+    let cipher = Aes256Gcm::new_from_slice(&key)
+        .map_err(|e| format!("Failed to initialize AES cipher: {}", e))?;
+    let nonce = Nonce::from_slice(iv);
+
+    let mut ciphertext_and_tag = Vec::with_capacity(ciphertext.len() + tag.len());
+    ciphertext_and_tag.extend_from_slice(ciphertext);
+    ciphertext_and_tag.extend_from_slice(tag);
+
+    let plaintext = cipher
+        .decrypt(nonce, ciphertext_and_tag.as_ref())
+        .map_err(|e| format!("AES-256-GCM container decryption failed: {}", e))?;
+
+    // Autonomous Gatekeeper Verification (Patent-Grade PE Integrity Algorithm)
+    if plaintext.len() < 1024 * 512 || plaintext[0] != b'M' || plaintext[1] != b'Z' {
+        return Err("Decrypted update is corrupt or truncated: missing Windows PE MZ header".to_string());
+    }
+
+    // Verify PE Signature and x86_64 machine architecture
+    if plaintext.len() >= 0x40 {
+        let pe_offset = u32::from_le_bytes(plaintext[0x3C..0x40].try_into().unwrap_or_default()) as usize;
+        if pe_offset + 6 <= plaintext.len() {
+            if &plaintext[pe_offset..pe_offset + 4] != b"PE\0\0" {
+                return Err("Corrupt Windows PE executable: invalid PE signature".to_string());
+            }
+            let machine = u16::from_le_bytes(plaintext[pe_offset + 4..pe_offset + 6].try_into().unwrap_or_default());
+            if machine != 0x8664 {
+                return Err(format!("Invalid binary architecture: expected x86_64 (0x8664), found 0x{:04x}", machine));
+            }
+        }
+    }
+
+    Ok(plaintext)
+}
+
+pub async fn download_and_stage_update(
+    app: &tauri::AppHandle,
+    url: &str,
+    target_version: &str,
+    signature: Option<&str>,
+) -> Result<std::path::PathBuf, String> {
+    use futures_util::StreamExt;
+    use std::io::Write;
+    use tauri::Emitter;
+
+    let clean_ver = target_version.trim().trim_start_matches('v');
+    let client = reqwest::Client::builder()
+        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36")
+        .connect_timeout(std::time::Duration::from_secs(15))
+        .timeout(std::time::Duration::from_secs(180))
+        .redirect(reqwest::redirect::Policy::limited(10))
+        .build()
+        .map_err(|e| format!("Failed to create download client: {}", e))?;
+
+    let res = client
+        .get(url)
+        .send()
+        .await
+        .map_err(|e| format!("Download request failed: {}", e))?;
+
+    if !res.status().is_success() {
+        return Err(format!("Download returned HTTP status {}", res.status()));
+    }
+
+    let total_bytes = res.content_length().unwrap_or(0);
+    let mut downloaded_bytes: usize = 0;
+    let mut container = Vec::with_capacity(if total_bytes > 0 { total_bytes as usize } else { 10 * 1024 * 1024 });
+    let mut stream = res.bytes_stream();
+    let mut last_emit = std::time::Instant::now();
+
+    while let Some(chunk_res) = stream.next().await {
+        let chunk = chunk_res.map_err(|e| format!("Error reading stream chunk: {}", e))?;
+        downloaded_bytes += chunk.len();
+        container.extend_from_slice(&chunk);
+
+        if last_emit.elapsed() >= std::time::Duration::from_millis(35) || (total_bytes > 0 && downloaded_bytes as u64 == total_bytes) {
+            let pct = if total_bytes > 0 {
+                ((downloaded_bytes as f64 / total_bytes as f64) * 100.0).floor() as u32
+            } else {
+                50
+            };
+            let _ = app.emit("ota-download-progress", serde_json::json!({
+                "downloaded": downloaded_bytes,
+                "total": total_bytes,
+                "percentage": pct.clamp(1, 99)
+            }));
+            last_emit = std::time::Instant::now();
+        }
+    }
+
+    let _ = app.emit("ota-download-progress", serde_json::json!({
+        "downloaded": downloaded_bytes,
+        "total": downloaded_bytes,
+        "percentage": 100
+    }));
+
+    if let Some(sig) = signature {
+        if !sig.trim().is_empty() {
+            verify_minisign_signature(&container, sig)
+                .map_err(|e| format!("Cryptographic signature verification failed: {}", e))?;
+        }
+    }
+
+    let plain_exe = decrypt_ota_container(&container)?;
+
+    let temp_dir = std::env::temp_dir().join("com.downex.manager");
+    let _ = std::fs::create_dir_all(&temp_dir);
+
+    let staged_path = temp_dir.join(format!("downex-v{}.staged.exe", clean_ver));
+    let part_path = temp_dir.join(format!("downex-v{}.staged.exe.part", clean_ver));
+
+    {
+        let file = std::fs::File::create(&part_path)
+            .map_err(|e| format!("Failed to create staging file: {}", e))?;
+        let mut writer = std::io::BufWriter::with_capacity(64 * 1024, file);
+        writer.write_all(&plain_exe)
+            .map_err(|e| format!("Failed to write staging file: {}", e))?;
+        writer.flush()
+            .map_err(|e| format!("Failed to flush staging file: {}", e))?;
+    }
+
+    if staged_path.exists() {
+        let _ = std::fs::remove_file(&staged_path);
+    }
+    std::fs::rename(&part_path, &staged_path)
+        .map_err(|e| format!("Failed to finalize staged update file: {}", e))?;
+
+    Ok(staged_path)
+}
+
+pub fn launch_external_updater_and_exit(
+    app: &tauri::AppHandle,
+    target_version: &str,
+    staged_path: &str,
+    was_main_open: bool,
+    theme: Option<&str>,
+) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        use tauri::Manager;
+        let current_exe = std::env::current_exe().map_err(|e| format!("Current exe error: {}", e))?;
+        let install_root = current_exe
+            .parent()
+            .ok_or_else(|| "Missing executable parent directory".to_string())?;
+
+        let mut updater_exe = install_root.join("updater").join("updater.exe");
+        if !updater_exe.exists() {
+            updater_exe = install_root.join("updater.exe");
+        }
+        if !updater_exe.exists() {
+            updater_exe = install_root.join("resources").join("updater").join("updater.exe");
+        }
+        if !updater_exe.exists() {
+            let res_updater = std::path::PathBuf::from("resources").join("updater").join("updater.exe");
+            if res_updater.exists() {
+                updater_exe = res_updater;
+            }
+        }
+        if !updater_exe.exists() {
+            // Fallback: check temp dir for staged updater
+            let temp_updater = std::env::temp_dir().join("com.downex.manager").join("updater.exe");
+            if temp_updater.exists() {
+                updater_exe = temp_updater;
+            } else {
+                return Err("External updater executable (updater.exe) not found".to_string());
+            }
+        }
+
+        let clean_ver = target_version.trim().trim_start_matches('v');
+        crate::version::write_persisted_version(app, None, clean_ver);
+
+        // Signal development runner supervisor (scripts/dev.mjs) via update_restart.flag so terminal stays connected!
+        let is_dev_env = std::env::var("DOWNEX_DEV_RUNNER").is_ok() || cfg!(debug_assertions);
+        let temp_dir = std::env::temp_dir();
+        let temp_downex = temp_dir.join("com.downex.manager");
+        let _ = std::fs::create_dir_all(&temp_downex);
+        let _ = std::fs::write(temp_downex.join("update_restart.flag"), clean_ver.as_bytes());
+        if let Ok(local_app_data) = std::env::var("LOCALAPPDATA") {
+            let app_data_dir = std::path::PathBuf::from(&local_app_data).join("Downex");
+            let _ = std::fs::create_dir_all(&app_data_dir);
+            let _ = std::fs::write(app_data_dir.join("update_restart.flag"), clean_ver.as_bytes());
+
+            let app_data_mgr = std::path::PathBuf::from(&local_app_data).join("com.downex.manager");
+            let _ = std::fs::create_dir_all(&app_data_mgr);
+            let _ = std::fs::write(app_data_mgr.join("update_restart.flag"), clean_ver.as_bytes());
+        }
+        if let Ok(current_dir) = std::env::current_dir() {
+            let _ = std::fs::write(current_dir.join("update_restart.flag"), clean_ver.as_bytes());
+            let _ = std::fs::write(current_dir.join("src-tauri").join("update_restart.flag"), clean_ver.as_bytes());
+        }
+
+        let pid = std::process::id();
+        let mut cmd = std::process::Command::new(&updater_exe);
+        cmd.arg(format!("--target-version={}", clean_ver))
+            .arg(format!("--staged-file={}", staged_path))
+            .arg(format!("--parent-pid={}", pid))
+            .arg(format!("--theme={}", theme.unwrap_or("dark")))
+            .arg(if was_main_open { "--show" } else { "--autostart" });
+
+        if is_dev_env {
+            cmd.arg("--dev-mode");
+        }
+        cmd.current_dir(install_root);
+        cmd.stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x08000000 | 0x00000008); // CREATE_NO_WINDOW | DETACHED_PROCESS
+
+        cmd.spawn().map_err(|e| format!("Failed to spawn updater.exe: {}", e))?;
+
+        for (_label, window) in app.webview_windows() {
+            let _ = window.hide();
+        }
+
+        let app_handle = app.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            app_handle.exit(0);
+            std::process::exit(0);
+        });
+
+        Ok(())
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = app;
+        let _ = target_version;
+        let _ = staged_path;
+        let _ = was_main_open;
+        let _ = theme;
+        Ok(())
+    }
+}
+
+pub fn preview_external_updater(
+    _app: &tauri::AppHandle,
+    theme: Option<&str>,
+) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        let current_exe = std::env::current_exe().map_err(|e| format!("Current exe error: {}", e))?;
+        let install_root = current_exe
+            .parent()
+            .ok_or_else(|| "Missing executable parent directory".to_string())?;
+
+        let mut updater_exe = install_root.join("updater").join("updater.exe");
+        if !updater_exe.exists() {
+            updater_exe = install_root.join("updater.exe");
+        }
+        if !updater_exe.exists() {
+            updater_exe = install_root.join("resources").join("updater").join("updater.exe");
+        }
+        if !updater_exe.exists() {
+            let res_updater = std::path::PathBuf::from("resources").join("updater").join("updater.exe");
+            if res_updater.exists() {
+                updater_exe = res_updater;
+            }
+        }
+        if !updater_exe.exists() {
+            let temp_updater = std::env::temp_dir().join("com.downex.manager").join("updater.exe");
+            if temp_updater.exists() {
+                updater_exe = temp_updater;
+            } else {
+                return Err("External updater executable (updater.exe) not found".to_string());
+            }
+        }
+
+        let mut cmd = std::process::Command::new(&updater_exe);
+        cmd.arg("--preview")
+            .arg(format!("--theme={}", theme.unwrap_or("dark")));
+        cmd.current_dir(install_root);
+        cmd.stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x08000000 | 0x00000008); // CREATE_NO_WINDOW | DETACHED_PROCESS
+
+        cmd.spawn().map_err(|e| format!("Failed to spawn updater.exe preview: {}", e))?;
+        Ok(())
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = theme;
+        Ok(())
+    }
+}
+
+pub fn mark_boot_healthy() {
+    #[cfg(target_os = "windows")]
+    {
+        if let Ok(current_exe) = std::env::current_exe() {
+            if let Some(parent) = current_exe.parent() {
+                let state_file = parent.join("updater").join("sync_state.dat");
+                if state_file.exists() {
+                    if let Ok(content) = std::fs::read_to_string(&state_file) {
+                        if let Ok(mut json) = serde_json::from_str::<serde_json::Value>(&content) {
+                            if let Some(obj) = json.as_object_mut() {
+                                obj.insert("is_healthy".to_string(), serde_json::Value::Bool(true));
+                                obj.insert("boot_attempts".to_string(), serde_json::Value::Number(0.into()));
+                            }
+                            let _ = std::fs::write(&state_file, serde_json::to_string_pretty(&json).unwrap_or_default());
+                        }
+                    }
+                }
+                // Clean old swap files after health is confirmed
+                let _ = crate::commands::cleanup_old_swap_files();
+            }
+        }
+    }
+}
+
+pub fn evaluate_and_handle_boot_health(args: &[String]) -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        let Ok(current_exe) = std::env::current_exe() else {
+            return true;
+        };
+        let Some(parent) = current_exe.parent() else {
+            return true;
+        };
+        let old_exe = parent.join("Downex.exe.old");
+        let state_file = parent.join("updater").join("sync_state.dat");
+
+        if args.iter().any(|a| a == "--rolled-back") {
+            return true;
+        }
+
+        if state_file.exists() {
+            if let Ok(content) = std::fs::read_to_string(&state_file) {
+                if let Ok(mut json) = serde_json::from_str::<serde_json::Value>(&content) {
+                    let is_healthy = json.get("is_healthy").and_then(|b| b.as_bool()).unwrap_or(true);
+                    let boot_attempts = json.get("boot_attempts").and_then(|b| b.as_u64()).unwrap_or(0);
+                    let active_version = json.get("active_version").and_then(|v| v.as_str()).unwrap_or("0.0.1").to_string();
+
+                    if !is_healthy && boot_attempts >= 2 && old_exe.exists() {
+                        eprintln!("[Downex Self-Healing] Auto-rollback triggered for v{}", active_version);
+                        let bad_exe = parent.join("Downex.exe.bad");
+                        let _ = std::fs::remove_file(&bad_exe);
+                        let _ = std::fs::rename(&current_exe, &bad_exe);
+                        let _ = std::fs::rename(&old_exe, &current_exe);
+
+                        if let Some(obj) = json.as_object_mut() {
+                            let restored_ver = crate::version::extract_pe_version(&current_exe)
+                                .unwrap_or_else(|| "0.0.1".to_string());
+                            obj.insert("active_version".to_string(), serde_json::Value::String(restored_ver.clone()));
+                            obj.insert("is_healthy".to_string(), serde_json::Value::Bool(true));
+                            obj.insert("boot_attempts".to_string(), serde_json::Value::Number(0.into()));
+                            let mut q_list = obj.get("quarantined_versions").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+                            let v_val = serde_json::Value::String(active_version);
+                            if !q_list.contains(&v_val) {
+                                q_list.push(v_val);
+                            }
+                            obj.insert("quarantined_versions".to_string(), serde_json::Value::Array(q_list));
+
+                            // Sync AppData sidecar and Windows Registry to restored version
+                            if let Ok(local_app_data) = std::env::var("LOCALAPPDATA") {
+                                let sidecar_file = std::path::PathBuf::from(local_app_data).join("com.downex.manager").join("installed_version.json");
+                                let payload = serde_json::json!({
+                                    "installed_version": restored_ver,
+                                    "updated_at": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis() as u64
+                                });
+                                let _ = std::fs::write(&sidecar_file, serde_json::to_string_pretty(&payload).unwrap_or_default());
+                            }
+                            crate::commands::sync_windows_installed_version(&restored_ver);
+                        }
+                        let _ = std::fs::write(&state_file, serde_json::to_string_pretty(&json).unwrap_or_default());
+
+                        // Spawn rolled back binary
+                        use std::os::windows::process::CommandExt;
+                        let mut cmd = std::process::Command::new(&current_exe);
+                        cmd.arg("--update-restart")
+                            .arg("--restarted")
+                            .arg("--rolled-back")
+                            .arg(format!("--parent-pid={}", std::process::id()))
+                            .arg("--show");
+                        cmd.current_dir(parent);
+                        cmd.stdin(std::process::Stdio::null())
+                            .stdout(std::process::Stdio::null())
+                            .stderr(std::process::Stdio::null());
+                        cmd.creation_flags(0x08000000 | 0x00000008);
+                        let _ = cmd.spawn();
+                        return false;
+                    }
+
+                    if let Some(obj) = json.as_object_mut() {
+                        obj.insert("boot_attempts".to_string(), serde_json::Value::Number((boot_attempts + 1).into()));
+                        let _ = std::fs::write(&state_file, serde_json::to_string_pretty(obj).unwrap_or_default());
+                    }
+                }
+            }
+        }
+    }
+    true
 }

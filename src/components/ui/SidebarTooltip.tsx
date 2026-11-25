@@ -155,22 +155,22 @@ export const SidebarTooltip: React.FC<SidebarTooltipProps> = ({
             }`}
           >
             <div className="flex items-center gap-2 whitespace-nowrap">
-              <span className="text-[12px] font-semibold tracking-tight">{label}</span>
+              <span className="text-[11.5px] font-semibold tracking-tight font-mono-tabular">{label}</span>
               {badge !== undefined && (
                 <span
-                  className={`text-[9.5px] font-mono font-bold px-1.5 py-0.5 rounded-full leading-none ${badgeBgClass}`}
+                  className={`text-[9.5px] font-mono-tabular font-bold px-1.5 py-0.5 rounded-full leading-none ${badgeBgClass}`}
                 >
                   {badge}
                 </span>
               )}
               {shortcut && (
-                <kbd className="text-[9.5px] font-mono px-1.5 py-0.5 rounded bg-zinc-800/90 text-zinc-300 border border-zinc-700/80 leading-none">
+                <kbd className="text-[9.5px] font-mono-tabular px-1.5 py-0.5 rounded bg-zinc-800/90 text-zinc-300 border border-zinc-700/80 leading-none">
                   {shortcut}
                 </kbd>
               )}
             </div>
             {subLabel && (
-              <div className="text-[10px] text-zinc-400 mt-0.5 whitespace-nowrap leading-tight">
+              <div className="text-[10px] font-mono-tabular text-zinc-400 mt-0.5 whitespace-nowrap leading-tight">
                 {subLabel}
               </div>
             )}

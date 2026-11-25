@@ -123,6 +123,34 @@ pub fn cmd_set_download_speed_limit(
 }
 
 #[tauri::command]
+pub fn cmd_save_custom_speed_limit(
+    limit_mbps: Option<f64>,
+    state: State<'_, AppState>,
+) -> Result<bool, String> {
+    match limit_mbps {
+        Some(mbps) if mbps > 0.0 => {
+            let _ = state.db.set_setting("saved_custom_speed_limit", &mbps.to_string());
+        }
+        _ => {
+            let _ = state.db.delete_setting("saved_custom_speed_limit");
+        }
+    }
+    Ok(true)
+}
+
+#[tauri::command]
+pub fn cmd_get_saved_custom_speed_limit(
+    state: State<'_, AppState>,
+) -> Result<Option<f64>, String> {
+    if let Ok(Some(val)) = state.db.get_setting("saved_custom_speed_limit") {
+        if let Ok(num) = val.parse::<f64>() {
+            return Ok(Some(num));
+        }
+    }
+    Ok(None)
+}
+
+#[tauri::command]
 pub async fn cmd_get_downloads(state: State<'_, AppState>) -> Result<Vec<DownloadRecord>, String> {
     let mut records = state.db.get_all_downloads().map_err(|e| e.to_string())?;
     for r in &mut records {
@@ -238,8 +266,9 @@ pub fn cmd_open_folder_picker() -> Result<Option<String>, String> {
         let output = Command::new("powershell")
             .args(&[
                 "-NoProfile",
+                "-Sta",
                 "-Command",
-                "Add-Type -AssemblyName System.Windows.Forms; $f = New-Object System.Windows.Forms.FolderBrowserDialog; $f.Description = 'Select Downex Download Folder'; if ($f.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { Write-Output $f.SelectedPath }",
+                "$null = [System.Reflection.Assembly]::LoadWithPartialName('System.windows.forms'); $f = New-Object System.Windows.Forms.FolderBrowserDialog; $f.Description = 'Select Downex Download Folder'; $f.ShowNewFolderButton = $true; if ($f.ShowDialog((New-Object System.Windows.Forms.NativeWindow)) -eq [System.Windows.Forms.DialogResult]::OK) { Write-Output $f.SelectedPath }",
             ])
             .creation_flags(0x08000000) // CREATE_NO_WINDOW
             .output()
@@ -351,6 +380,44 @@ pub async fn cmd_download_update_container(app: AppHandle, url: String) -> Resul
 }
 
 #[tauri::command]
+pub async fn cmd_download_and_stage_update(
+    app: AppHandle,
+    url: String,
+    target_version: String,
+    signature: Option<String>,
+) -> Result<String, String> {
+    let path = crate::ota::download_and_stage_update(&app, &url, &target_version, signature.as_deref()).await?;
+    Ok(path.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+pub fn cmd_launch_updater_and_exit(
+    app: AppHandle,
+    target_version: String,
+    staged_path: String,
+    theme: Option<String>,
+) -> Result<(), String> {
+    let was_main_open = app
+        .get_webview_window("main")
+        .and_then(|w| w.is_visible().ok())
+        .unwrap_or(true);
+    crate::ota::launch_external_updater_and_exit(&app, &target_version, &staged_path, was_main_open, theme.as_deref())
+}
+
+#[tauri::command]
+pub fn cmd_preview_external_updater(
+    app: AppHandle,
+    theme: Option<String>,
+) -> Result<(), String> {
+    crate::ota::preview_external_updater(&app, theme.as_deref())
+}
+
+#[tauri::command]
+pub fn cmd_mark_boot_healthy() {
+    crate::ota::mark_boot_healthy();
+}
+
+#[tauri::command]
 pub async fn cmd_check_updates(app: AppHandle, state: State<'_, AppState>) -> Result<Option<ReleaseManifest>, String> {
     let current_version = crate::version::resolve_installed_version(&app, Some(&state.db));
     let inst_id = state.db.get_or_create_installation_id();
@@ -361,7 +428,45 @@ pub async fn cmd_check_updates(app: AppHandle, state: State<'_, AppState>) -> Re
 
 #[tauri::command]
 pub fn cmd_get_installation_id(state: State<'_, AppState>) -> Result<String, String> {
-    Ok(state.db.get_or_create_installation_id())
+    Ok(crate::hardware::get_or_init_silicon_hardware_id(Some(&state.db)))
+}
+
+#[tauri::command]
+pub fn cmd_get_silicon_hardware_id(state: State<'_, AppState>) -> Result<String, String> {
+    Ok(crate::hardware::get_or_init_silicon_hardware_id(Some(&state.db)))
+}
+
+#[tauri::command]
+pub fn cmd_check_is_hardware_banned(state: State<'_, AppState>) -> Result<bool, String> {
+    Ok(crate::hardware::check_is_hardware_banned(Some(&state.db)))
+}
+
+#[tauri::command]
+pub fn cmd_enforce_hardware_ban(app: AppHandle, state: State<'_, AppState>, reason: Option<String>) -> Result<(), String> {
+    let r = reason.unwrap_or_else(|| "Hardware restriction enforced by ecosystem administrator.".to_string());
+    crate::hardware::enforce_local_hardware_ban(&r, Some(&state.db));
+    if let Some(tray) = app.tray_by_id("main-tray") {
+        let _ = tray.set_tooltip(Some("Banned"));
+    }
+    let _ = crate::tray::refresh_tray_menu(&app);
+    let _ = app.emit("downex-hardware-ban-changed", serde_json::json!({
+        "is_banned": true,
+        "reason": &r
+    }));
+    Ok(())
+}
+
+#[tauri::command]
+pub fn cmd_lift_hardware_ban(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+    crate::hardware::lift_local_hardware_ban(Some(&state.db));
+    if let Some(tray) = app.tray_by_id("main-tray") {
+        let _ = tray.set_tooltip(Some("Downex Download Manager"));
+    }
+    let _ = crate::tray::refresh_tray_menu(&app);
+    let _ = app.emit("downex-hardware-ban-changed", serde_json::json!({
+        "is_banned": false
+    }));
+    Ok(())
 }
 
 #[tauri::command]
@@ -1146,7 +1251,7 @@ pub fn prewarm_secondary_dialogs<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
             tauri::WebviewUrl::default(),
         )
         .title("Downex - Download File Info")
-        .inner_size(580.0, 440.0)
+        .inner_size(540.0, 318.0)
         .decorations(false)
         .transparent(false)
         .shadow(true)
@@ -1171,7 +1276,7 @@ pub fn prewarm_secondary_dialogs<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
             tauri::WebviewUrl::default(),
         )
         .title("Download complete")
-        .inner_size(580.0, 249.0)
+        .inner_size(540.0, 282.0)
         .decorations(false)
         .transparent(false)
         .shadow(true)
@@ -1220,6 +1325,10 @@ pub fn show_download_dialog<R: tauri::Runtime>(app: &tauri::AppHandle<R>, payloa
             use tauri::Emitter;
             let _ = window.emit("open-download-info-modal", p);
         }
+        let _ = window.set_size(tauri::Size::Logical(tauri::LogicalSize {
+            width: 480.0,
+            height: 338.0,
+        }));
         let _ = window.unminimize();
         let _ = window.center();
         let _ = window.show();
@@ -1238,7 +1347,7 @@ pub fn show_download_dialog<R: tauri::Runtime>(app: &tauri::AppHandle<R>, payloa
                 tauri::WebviewUrl::default(),
             )
             .title("Downex - Download File Info")
-            .inner_size(580.0, 440.0)
+            .inner_size(540.0, 318.0)
             .decorations(false)
             .transparent(false)
             .shadow(true)
@@ -1416,6 +1525,58 @@ pub fn cmd_get_disk_free_space(path: String) -> Result<u64, String> {
         }
     }
     Ok(0)
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+pub struct DiskVolumeInfo {
+    pub letter: String,
+    pub path: String,
+    pub free_bytes: u64,
+    pub total_bytes: u64,
+    pub is_default: bool,
+}
+
+#[tauri::command]
+pub fn cmd_get_available_disks() -> Result<Vec<DiskVolumeInfo>, String> {
+    #[cfg(target_os = "windows")]
+    {
+        use std::ffi::OsStr;
+        use std::os::windows::ffi::OsStrExt;
+        let mut volumes = Vec::new();
+        unsafe {
+            let drives_mask = windows_sys::Win32::Storage::FileSystem::GetLogicalDrives();
+            for i in 0..26 {
+                if (drives_mask & (1 << i)) != 0 {
+                    let letter = (b'A' + i) as char;
+                    let path = format!("{}:\\", letter);
+                    let mut wide: Vec<u16> = OsStr::new(&path).encode_wide().collect();
+                    wide.push(0);
+                    let mut free_bytes_available: u64 = 0;
+                    let mut total_bytes: u64 = 0;
+                    let mut total_free_bytes: u64 = 0;
+
+                    let res = windows_sys::Win32::Storage::FileSystem::GetDiskFreeSpaceExW(
+                        wide.as_ptr(),
+                        &mut free_bytes_available,
+                        &mut total_bytes,
+                        &mut total_free_bytes,
+                    );
+                    if res != 0 && total_bytes > 0 {
+                        volumes.push(DiskVolumeInfo {
+                            letter: letter.to_string(),
+                            path: path.clone(),
+                            free_bytes: free_bytes_available,
+                            total_bytes,
+                            is_default: letter == 'C',
+                        });
+                    }
+                }
+            }
+        }
+        return Ok(volumes);
+    }
+    #[allow(unreachable_code)]
+    Ok(Vec::new())
 }
 
 #[tauri::command]
@@ -1608,8 +1769,8 @@ pub fn show_download_complete<R: tauri::Runtime>(app: &tauri::AppHandle<R>, payl
         let _ = window.eval(&eval_script);
 
         let _ = window.set_size(tauri::Size::Logical(tauri::LogicalSize {
-            width: 580.0,
-            height: 249.0,
+            width: 540.0,
+            height: 282.0,
         }));
         let _ = window.unminimize();
         let _ = window.center();
@@ -1631,7 +1792,7 @@ pub fn show_download_complete<R: tauri::Runtime>(app: &tauri::AppHandle<R>, payl
             tauri::WebviewUrl::default(),
         )
         .title("Download complete")
-        .inner_size(580.0, 249.0)
+        .inner_size(540.0, 282.0)
         .decorations(false)
         .transparent(false)
         .shadow(true)

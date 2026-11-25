@@ -1,0 +1,29 @@
+================================================================================
+DOWNEX RESEARCH & STUDY ESSAY #18
+Title: SELF-HEALING CRASH QUARANTINE & ROLLBACK
+Author & Architect: Gaurav Patil (https://gauravpatil.site)
+Official Project: https://downex.apps.gauravpatil.site
+================================================================================
+
+What happens if a sudden power outage or blue screen strikes your computer right
+in the middle of updating a program?
+
+In most traditional software, you are left with a broken, corrupted binary that
+crashes every time you try to open it. The user has to manually go to a website,
+download a fresh installer, and reinstall from scratch.
+
+Downex is built with an autonomous emergency recovery engine:
+- If a newly updated binary crashes twice before establishing a healthy runtime
+  heartbeat, the independent sentinel (DownexRecovery.exe) springs into action
+  with zero human intervention needed.
+- It quarantines the failing binary (marking it .bad).
+- It atomically restores the known-good previous binary (.old --> .exe).
+- It permanently blacklists the problematic version in its local database so it
+  will never attempt to download that build again.
+- It relaunches the working app safely.
+
+Downex heals itself automatically so you never have to troubleshoot.
+
+================================================================================
+Copyright (C) 2026 Gaurav Patil. All Rights Reserved.
+================================================================================

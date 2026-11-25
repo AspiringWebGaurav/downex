@@ -1,0 +1,26 @@
+================================================================================
+DOWNEX RESEARCH & STUDY ESSAY #07
+Title: WHY SOME SERVERS BLOCK PARALLEL CONNECTIONS
+Author & Architect: Gaurav Patil (https://gauravpatil.site)
+Official Project: https://downex.apps.gauravpatil.site
+================================================================================
+
+Not every server on the internet welcomes multiple connections with open arms.
+
+Some file hosting sites deliberately restrict users to a single connection to
+encourage them to buy paid memberships. Other servers are small and lack the
+computing power to manage dozens of connections from a single IP address.
+
+Downex handles this gracefully through intelligent server probing:
+- Before opening multiple connections, Downex sends a lightweight check to the
+  server to see if it supports the standard "Accept-Ranges" HTTP header.
+- If the server supports byte ranges, Downex enables multi-connection acceleration.
+- If the server refuses or enforces strict single-connection limits, Downex
+  seamlessly falls back to a clean, single-connection stream without failing or
+  corrupting the file.
+
+Smart software adapts to the world instead of breaking when things aren't ideal.
+
+================================================================================
+Copyright (C) 2026 Gaurav Patil. All Rights Reserved.
+================================================================================

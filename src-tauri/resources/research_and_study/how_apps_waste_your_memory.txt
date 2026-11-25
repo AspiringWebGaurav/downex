@@ -1,0 +1,30 @@
+================================================================================
+DOWNEX RESEARCH & STUDY ESSAY #11
+Title: HOW MODERN APPLICATIONS WASTE YOUR COMPUTER'S MEMORY
+Author & Architect: Gaurav Patil (https://gauravpatil.site)
+Official Project: https://downex.apps.gauravpatil.site
+================================================================================
+
+Why do so many modern desktop applications use hundreds of megabytes of RAM?
+
+The primary reason is the overuse of heavy web wrapper frameworks without proper
+discipline. Many developers bundle an entire web browser engine, complete with
+dozens of unnecessary background processes, just to display a simple window.
+
+Worse, many applications fail to clean up temporary objects:
+- Every time a file chunk is downloaded, they keep the buffer in memory instead
+  of flushing it to disk.
+- Over an hour of downloading, memory usage creeps up from 50 MB to 300 MB,
+  then 800 MB (known as a memory leak).
+
+Downex avoids this completely:
+- The core networking engine is written in native Rust, which does not have a
+  heavy garbage collector or runtime overhead.
+- When Downex receives network data, it streams it directly into disk buffers and
+  releases the memory immediately.
+- Memory usage stays flat, predictable, and tiny—whether you download 1 megabyte
+  or 100 gigabytes.
+
+================================================================================
+Copyright (C) 2026 Gaurav Patil. All Rights Reserved.
+================================================================================

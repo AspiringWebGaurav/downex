@@ -228,6 +228,9 @@ impl DownloadEnginePool {
             Self::evaluate_progress(&segs, total_bytes).0
         };
 
+        let max_downloaded = Arc::new(AtomicU64::new(initial_downloaded));
+        let p_max_downloaded = max_downloaded.clone();
+
         let telemetry_handle = tauri::async_runtime::spawn(async move {
             let mut last_bytes = initial_downloaded;
             let mut last_time = Instant::now();
@@ -242,6 +245,16 @@ impl DownloadEnginePool {
                     _ = tokio::time::sleep(Duration::from_millis(150)) => {
                         let segs = p_segments.read().await;
                         let (current_total, is_all_complete) = Self::evaluate_progress(&segs, p_total_bytes);
+
+                        // Monotonic high-water mark: reported progress must never flicker backwards
+                        let mut cur_max = p_max_downloaded.load(Ordering::SeqCst);
+                        while current_total > cur_max {
+                            match p_max_downloaded.compare_exchange_weak(cur_max, current_total, Ordering::SeqCst, Ordering::SeqCst) {
+                                Ok(_) => { cur_max = current_total; break; }
+                                Err(actual) => { cur_max = actual; }
+                            }
+                        }
+                        let monotonic_total = cur_max;
 
                         // If all bytes have been downloaded, trigger completion immediately!
                         if is_all_complete {
@@ -288,7 +301,7 @@ impl DownloadEnginePool {
 
                         let now = Instant::now();
                         let elapsed = now.duration_since(last_time).as_secs_f64();
-                        let bytes_delta = current_total.saturating_sub(last_bytes);
+                        let bytes_delta = monotonic_total.saturating_sub(last_bytes);
 
                         let instant_speed = if elapsed > 0.0 {
                             bytes_delta as f64 / elapsed
@@ -324,16 +337,16 @@ impl DownloadEnginePool {
                             speed = active_limit;
                         }
                         if should_checkpoint {
-                            let _ = p_db.update_download_progress(&p_task_id, current_total, speed);
+                            let _ = p_db.update_download_progress(&p_task_id, monotonic_total, speed);
                         }
-                        last_bytes = current_total;
+                        last_bytes = monotonic_total;
                         last_time = now;
 
                         // Calculate ETA with IDM-style damped low-pass filter
                         if speed > 100 {
                             if let Some(total) = p_total_bytes {
-                                if total > current_total {
-                                    let instant_eta = ((total - current_total) as f64 / speed as f64).max(1.0);
+                                if total > monotonic_total {
+                                    let instant_eta = ((total - monotonic_total) as f64 / speed as f64).max(1.0);
                                     persistent_eta = match persistent_eta {
                                         Some(prev_eta) => {
                                             // Heavy dampening: 90% previous, 10% instant new estimate
@@ -350,9 +363,9 @@ impl DownloadEnginePool {
 
                         // Strictly clamp reported downloaded bytes so it NEVER exceeds total_bytes
                         let clamped_downloaded = if let Some(total) = p_total_bytes {
-                            current_total.min(total)
+                            monotonic_total.min(total)
                         } else {
-                            current_total
+                            monotonic_total
                         };
 
                         let event = DownloadProgressEvent {
@@ -469,10 +482,11 @@ impl DownloadEnginePool {
         self.persist_segments_to_db(&task_id, &segments).await;
 
         if cancel_token.is_cancelled() {
-            let (downloaded_bytes, _) = {
+            let (raw_downloaded, _) = {
                 let segs = segments.read().await;
                 Self::evaluate_progress(&segs, total_bytes)
             };
+            let downloaded_bytes = max_downloaded.load(Ordering::SeqCst).max(raw_downloaded);
             let _ = self.db.update_download_status(&task_id, "paused", 0, None);
             let _ = progress_tx.send(DownloadProgressEvent {
                 task_id: task_id.clone(),
@@ -488,10 +502,11 @@ impl DownloadEnginePool {
         }
 
         // Complete Verification Phase (REA / IDM Specification)
-        let (verified_downloaded, is_done) = {
+        let (raw_verified, is_done) = {
             let segs = segments.read().await;
             Self::evaluate_progress(&segs, total_bytes)
         };
+        let verified_downloaded = max_downloaded.load(Ordering::SeqCst).max(raw_verified);
 
         if !is_done && total_bytes.is_some() {
             let expected = total_bytes.unwrap();
@@ -789,6 +804,17 @@ impl DownloadEnginePool {
                     _ = tokio::time::sleep(Duration::from_millis(2000)) => {}
                 }
                 continue;
+            } else if status == reqwest::StatusCode::NOT_FOUND
+                || status == reqwest::StatusCode::FORBIDDEN
+                || status == reqwest::StatusCode::UNAUTHORIZED
+                || status == reqwest::StatusCode::GONE
+            {
+                let err_msg = format!("Server returned HTTP {} ({})", status.as_u16(), status.canonical_reason().unwrap_or("Error"));
+                eprintln!("[Downex Worker {}] Fatal HTTP error: {}", segment_idx, err_msg);
+                let _ = db.update_download_status(&task_id, "error", 0, Some(&err_msg));
+                is_active_atomic.store(false, Ordering::SeqCst);
+                completion_token.cancel();
+                return;
             } else if !status.is_success() && status != reqwest::StatusCode::PARTIAL_CONTENT {
                 eprintln!("[Downex Worker {}] Server HTTP {}: retrying in 1s...", segment_idx, status);
                 is_active_atomic.store(false, Ordering::SeqCst);

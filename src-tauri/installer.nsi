@@ -2,11 +2,8 @@ Unicode true
 ManifestDPIAware true
 ManifestDPIAwareness PerMonitorV2
 
-!if "{{compression}}" == "none"
-  SetCompress off
-!else
-  SetCompressor /SOLID "{{compression}}"
-!endif
+; 10MB+ Enterprise Installer Packaging (Fast instant unpack, uncompressed suite)
+SetCompress off
 
 {{#if signed_plugins_path}}
 !addplugindir "{{signed_plugins_path}}"
@@ -81,7 +78,7 @@ ${StrLoc}
 !define MAINBINARYNAME "{{main_binary_name}}"
 !define MAINBINARYSRCPATH "{{main_binary_path}}"
 !define BUNDLEID "{{bundle_id}}"
-!define COPYRIGHT "{{copyright}}"
+!define COPYRIGHT "Copyright © 2026 Gaurav Patil"
 !define OUTFILE "{{out_file}}"
 !define ARCH "{{arch}}"
 !define ADDITIONALPLUGINSPATH "{{additional_plugins_path}}"
@@ -670,10 +667,6 @@ Section Install
     File /a "/oname={{this.[1]}}" "{{no-escape @key}}"
   {{/each}}
 
-  {{#each binaries}}
-    File /a "/oname={{this}}" "{{no-escape @key}}"
-  {{/each}}
-
   {{#each file_associations as |association| ~}}
     {{#each association.ext as |ext| ~}}
        !insertmacro APP_ASSOCIATE "{{ext}}" "{{or association.name ext}}" "{{association-description association.description ext}}" "$\"$INSTDIR\${MAINBINARYNAME}.exe$\",0" "Open with ${PRODUCTNAME}" "$\"$INSTDIR\${MAINBINARYNAME}.exe$\" $\"%1$\""
@@ -874,10 +867,6 @@ Section Uninstall
     Delete "$INSTDIR\\{{this.[1]}}"
   {{/each}}
 
-  {{#each binaries}}
-    Delete "$INSTDIR\\{{this}}"
-  {{/each}}
-
   {{#each file_associations as |association| ~}}
     {{#each association.ext as |ext| ~}}
       !insertmacro APP_UNASSOCIATE "{{ext}}" "{{or association.name ext}}"
@@ -947,21 +936,20 @@ Section Uninstall
     RmDir /r "$APPDATA\${BUNDLEID}"
     RmDir /r "$LOCALAPPDATA\${BUNDLEID}"
     RmDir /r "$LOCALAPPDATA\Downex"
+    RmDir /r "$LOCALAPPDATA\Temp\com.downex.manager"
+    RmDir /r "$TEMP\com.downex.manager"
     DeleteRegKey SHCTX "${MANUPRODUCTKEY}"
     DeleteRegKey /ifempty SHCTX "${MANUKEY}"
     DeleteRegKey HKCU "Software\Downex"
+    DeleteRegKey HKLM "Software\Downex"
+    DeleteRegKey HKCU "Software\Classes\downex"
+    DeleteRegKey HKLM "Software\Classes\downex"
     nsExec::ExecToLog 'netsh advfirewall firewall delete rule name="${PRODUCTNAME}"'
   ${EndIf}
 
   !ifmacrodef NSIS_HOOK_POSTUNINSTALL
     !insertmacro NSIS_HOOK_POSTUNINSTALL
   !endif
-
-  ; Launch uninstallation confirmation page on successful interactive removal
-  ${If} $UpdateMode <> 1
-  ${AndIf} $PassiveMode <> 1
-    ExecShell "open" "https://downex.apps.gauravpatil.site/uninstalled"
-  ${EndIf}
 
   ; Auto-close uninstaller upon completion (frictionless zero-click finish, never stuck on Next/Finish/Close)
   SetAutoClose true

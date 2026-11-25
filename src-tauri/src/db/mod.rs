@@ -143,12 +143,13 @@ impl DatabaseManager {
             .query_row("PRAGMA user_version;", [], |row| row.get(0))
             .unwrap_or(0);
 
+        let mut applied_count = 0;
+        let mut last_version = current_version;
+
         for migration in schema::MIGRATIONS {
             if migration.version > current_version {
-                eprintln!(
-                    "[Downex DB] Applying migration v{}: {}",
-                    migration.version, migration.description
-                );
+                applied_count += 1;
+                last_version = migration.version;
 
                 let tx = conn.transaction()?;
                 if migration.version == 2 {
@@ -175,8 +176,11 @@ impl DatabaseManager {
                 }
                 tx.execute_batch(&format!("PRAGMA user_version = {};", migration.version))?;
                 tx.commit()?;
-                eprintln!("[Downex DB] Successfully applied migration v{}", migration.version);
             }
+        }
+
+        if applied_count > 0 {
+            eprintln!("[Downex DB] Initialized schema v{}", last_version);
         }
 
         Ok(())

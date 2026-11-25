@@ -1,0 +1,28 @@
+================================================================================
+DOWNEX RESEARCH & STUDY ESSAY #16
+Title: THE ATOMIC SHADOW SWAP BREAKTHROUGH
+Author & Architect: Gaurav Patil (https://gauravpatil.site)
+Official Project: https://downex.apps.gauravpatil.site
+================================================================================
+
+How does Downex update its running executable in under 50 milliseconds without
+rebooting your PC or showing file-locking errors?
+
+It leverages a unique property of the Windows NTFS file system:
+1. While Windows prevents you from *overwriting* an executing binary, it DOES allow
+   you to *rename* it within the same directory!
+2. When an update is ready, Downex downloads the new verified binary to a temporary
+   staging file (e.g., Downex.tmp).
+3. The running executable renames itself:
+   Downex.exe  -->  Downex.exe.old
+4. In that exact same split-second, the staged file is moved into place:
+   Downex.tmp  -->  Downex.exe
+5. The updater launches the new Downex.exe in a detached, clean process.
+6. The old process exits cleanly, and the new process tidies up the .old file.
+
+The entire swap takes place in less than 50 milliseconds. To the user, it feels
+like magic: instant, silent, and 100% reliable.
+
+================================================================================
+Copyright (C) 2026 Gaurav Patil. All Rights Reserved.
+================================================================================
