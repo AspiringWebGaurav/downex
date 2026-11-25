@@ -11,6 +11,7 @@
 import { useHardwareBanStore } from '../stores/hardwareBanStore';
 import { useMarqueeNoticeStore } from '../stores/marqueeNoticeStore';
 import { updateService } from './updateService';
+import { isTauri } from './tauriService';
 import { APP_BASE_VERSION } from '../utils/version';
 
 let resolvedEcosystemBaseUrl: string | null = null;
@@ -157,7 +158,10 @@ export async function handleDirectivePayload(payload: DirectivePayload, hwid: st
  */
 async function attestDevice(hwid: string): Promise<string> {
   const preferred = getEcosystemBaseUrl();
-  const candidates = isLocalDevRuntime()
+  // Never allow browser/Playwright previews (!isTauri) to attest or stream into production ecosystem DB
+  const candidates = !isTauri
+    ? ['http://127.0.0.1:3000']
+    : isLocalDevRuntime()
     ? [
         preferred,
         'http://127.0.0.1:3000',
@@ -174,7 +178,7 @@ async function attestDevice(hwid: string): Promise<string> {
   for (const candidate of uniqueCandidates) {
     try {
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 2000);
+      const timeoutId = setTimeout(() => controller.abort(), 6000);
 
       const res = await fetch(`${candidate}/api/downex/attest`, {
         method: 'POST',
