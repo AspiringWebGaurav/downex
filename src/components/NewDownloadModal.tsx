@@ -85,6 +85,7 @@ export const NewDownloadModal: React.FC<{ isStandalone?: boolean }> = ({ isStand
   const [supportsRanges, setSupportsRanges] = useState(true);
   const [isProbing, setIsProbing] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
   const [copiedUrl, setCopiedUrl] = useState(false);
   const [isFolderModalOpen, setIsFolderModalOpen] = useState(false);
   const urlInputRef = useRef<HTMLInputElement>(null);
@@ -219,7 +220,10 @@ export const NewDownloadModal: React.FC<{ isStandalone?: boolean }> = ({ isStand
       return;
     }
 
+    setSubmitError(null);
     if (!trimmedUrl.startsWith('http://') && !trimmedUrl.startsWith('https://')) {
+      setTotalBytes(undefined);
+      setIsProbing(false);
       return;
     }
 
@@ -308,7 +312,7 @@ export const NewDownloadModal: React.FC<{ isStandalone?: boolean }> = ({ isStand
 
   // Keyboard navigation: Enter starts download, Escape closes modal
   useEffect(() => {
-    if (!isNewModalOpen) return;
+    if (!isNewModalOpen || isFolderModalOpen) return;
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         e.preventDefault();
@@ -319,7 +323,9 @@ export const NewDownloadModal: React.FC<{ isStandalone?: boolean }> = ({ isStand
           handleCloseModal();
           return;
         }
-        if (url.trim()) {
+        const tag = document.activeElement?.tagName;
+        if (tag === 'BUTTON' || tag === 'A') return;
+        if (url.trim() && !submitting) {
           e.preventDefault();
           handleCreateDownload(true);
         }
@@ -327,21 +333,35 @@ export const NewDownloadModal: React.FC<{ isStandalone?: boolean }> = ({ isStand
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isNewModalOpen, isStandalone, isBanned, url, fileBaseName, fileExtension, savePath]);
+  }, [isNewModalOpen, isFolderModalOpen, submitting, isStandalone, isBanned, url, fileBaseName, fileExtension, savePath, rememberPath, initialModalData]);
 
   const handleCreateDownload = async (startImmediately: boolean) => {
-    if (isBanned || !url.trim()) return;
+    if (isBanned || submitting || !url.trim()) return;
+    setSubmitError(null);
+    try {
+      const parsed = new URL(url.trim());
+      if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+        setSubmitError('Only http:// and https:// download URLs are supported.');
+        return;
+      }
+    } catch {
+      setSubmitError('Please enter a valid http:// or https:// download URL.');
+      return;
+    }
 
     setSubmitting(true);
     try {
       const customHeaders: Record<string, string> = {};
-      if (initialModalData) {
+      if (initialModalData && initialModalData.url?.trim() === url.trim()) {
         if (initialModalData.cookies) customHeaders['Cookie'] = initialModalData.cookies;
         if (initialModalData.referer) customHeaders['Referer'] = initialModalData.referer;
         if (initialModalData.user_agent) customHeaders['User-Agent'] = initialModalData.user_agent;
       }
       const headersOpt = Object.keys(customHeaders).length > 0 ? customHeaders : undefined;
-      const fullFilename = (fileBaseName.trim() + fileExtension.trim()) || undefined;
+      const sanitizedRawName = (fileBaseName.trim() + fileExtension.trim())
+        .replace(/[\\/:*?"<>|\x00-\x1f]/g, '_')
+        .trim();
+      const fullFilename = sanitizedRawName || undefined;
 
       // Persist chosen directory if "Remember this folder" is checked
       if (rememberPath && savePath.trim()) {
@@ -374,7 +394,7 @@ export const NewDownloadModal: React.FC<{ isStandalone?: boolean }> = ({ isStand
       }
       setNewModalOpen(false);
     } catch (err) {
-      alert('Failed to initiate download: ' + err);
+      setSubmitError(`Failed to initiate download: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
       setSubmitting(false);
     }
@@ -622,6 +642,23 @@ export const NewDownloadModal: React.FC<{ isStandalone?: boolean }> = ({ isStand
           <X className="w-3.5 h-3.5 stroke-[1.8]" />
         </button>
       </div>
+
+      {submitError && (
+        <div
+          role="alert"
+          className="px-3.5 py-2 bg-rose-50 dark:bg-rose-950/40 border-b border-rose-200 dark:border-rose-900/60 text-rose-700 dark:text-rose-300 text-[11px] font-medium flex items-center justify-between gap-2"
+        >
+          <span>{submitError}</span>
+          <button
+            type="button"
+            onClick={() => setSubmitError(null)}
+            className="text-rose-500 hover:text-rose-700 dark:hover:text-rose-200 cursor-pointer shrink-0"
+            aria-label="Dismiss error"
+          >
+            <X className="w-3 h-3" />
+          </button>
+        </div>
+      )}
 
       {/* Form Body */}
       <div className="p-3.5 space-y-2.5 flex-1">

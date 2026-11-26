@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useDownloadStore } from '../stores/downloadStore';
 import { 
   getExtensionInfo,
@@ -34,7 +34,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ darkMode = false }) 
   const [maxSegments, setMaxSegments] = useState<number>(() => {
     try {
       const saved = localStorage.getItem('downex_max_segments');
-      return saved ? parseInt(saved, 10) : 32;
+      const parsed = saved ? parseInt(saved, 10) : NaN;
+      return Number.isFinite(parsed) && parsed > 0 ? parsed : 32;
     } catch {
       return 32;
     }
@@ -42,7 +43,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ darkMode = false }) 
   const [clipboardWatch, setClipboardWatch] = useState<boolean>(() => {
     try {
       const saved = localStorage.getItem('downex_clipboard_watch');
-      return saved === 'true';
+      return saved !== 'false';
     } catch {
       return true;
     }
@@ -70,6 +71,24 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ darkMode = false }) 
   const [maintenanceMessage, setMaintenanceMessage] = useState<string | null>(null);
   const [pendingAction, setPendingAction] = useState<RecoveryActionType>(null);
   const [isFolderModalOpen, setIsFolderModalOpen] = useState(false);
+  const timersRef = useRef<number[]>([]);
+
+  useEffect(() => {
+    return () => {
+      for (const t of timersRef.current) {
+        window.clearTimeout(t);
+      }
+      timersRef.current = [];
+    };
+  }, []);
+
+  const scheduleUiReset = (fn: () => void, ms: number) => {
+    const id = window.setTimeout(() => {
+      timersRef.current = timersRef.current.filter((t: number) => t !== id);
+      fn();
+    }, ms);
+    timersRef.current.push(id);
+  };
 
   useEffect(() => {
     getExtensionInfo().then(setExtInfo).catch(console.warn);
@@ -95,7 +114,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ darkMode = false }) 
     if (extInfo?.canonical_dir) {
       navigator.clipboard.writeText(extInfo.canonical_dir);
       setCopiedExtPath(true);
-      setTimeout(() => setCopiedExtPath(false), 2000);
+      scheduleUiReset(() => setCopiedExtPath(false), 2000);
     }
   };
 
@@ -109,7 +128,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ darkMode = false }) 
       const updated = await setDefaultDownloadDir(chosenPath);
       setDefaultDir(updated);
       setFolderFeedback(`Saved: ${updated}`);
-      setTimeout(() => setFolderFeedback(null), 4000);
+      scheduleUiReset(() => setFolderFeedback(null), 4000);
     } catch (e) {
       console.warn('Failed to update download folder:', e);
     }
@@ -127,14 +146,18 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ darkMode = false }) 
   };
 
   const handleToggleCloseToTray = async () => {
-    const next = !closeToTray;
+    const prev = closeToTray;
+    const next = !prev;
     setCloseToTray(next);
     try {
       localStorage.setItem('downex_close_to_tray', String(next));
       await apiSetCloseToTray(next);
     } catch (e) {
       console.warn(e);
-      setCloseToTray(!next);
+      try {
+        localStorage.setItem('downex_close_to_tray', String(prev));
+      } catch {}
+      setCloseToTray(prev);
     }
   };
 
@@ -153,12 +176,17 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ darkMode = false }) 
   };
 
   const handleUpdateMaxSegments = async (val: number) => {
+    const prev = maxSegments;
     setMaxSegments(val);
     try {
       localStorage.setItem('downex_max_segments', String(val));
       await apiSetMaxSegments(val);
     } catch (e) {
       console.warn(e);
+      try {
+        localStorage.setItem('downex_max_segments', String(prev));
+      } catch {}
+      setMaxSegments(prev);
     }
   };
 
@@ -181,7 +209,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ darkMode = false }) 
       setShowTelemetryOnHome(false);
 
       setMaintenanceMessage('All preferences reset to recommended defaults.');
-      setTimeout(() => setMaintenanceMessage(null), 4000);
+      scheduleUiReset(() => setMaintenanceMessage(null), 4000);
     } catch (e: any) {
       setMaintenanceMessage(`Reset error: ${e?.message || e}`);
     }
@@ -198,8 +226,9 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ darkMode = false }) 
       try {
         await repairApplication();
       } catch (err: any) {
-        setIsRepairing(false);
         setMaintenanceMessage(`Repair error: ${err?.message || err}`);
+      } finally {
+        setIsRepairing(false);
       }
     } else if (action === 'reset-base') {
       setIsResettingBase(true);
@@ -207,8 +236,9 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ darkMode = false }) 
       try {
         await resetToBaseVersion();
       } catch (err: any) {
-        setIsResettingBase(false);
         setMaintenanceMessage(`Revert error: ${err?.message || err}`);
+      } finally {
+        setIsResettingBase(false);
       }
     } else if (action === 'uninstall') {
       setIsUninstalling(true);
@@ -216,8 +246,9 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ darkMode = false }) 
       try {
         await triggerUninstall();
       } catch (err: any) {
-        setIsUninstalling(false);
         setMaintenanceMessage(`Uninstall launch error: ${err?.message || err}`);
+      } finally {
+        setIsUninstalling(false);
       }
     } else if (action === 'reset-defaults') {
       setIsResettingDefaults(true);
@@ -589,7 +620,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ darkMode = false }) 
             if (hardwareId) {
               navigator.clipboard.writeText(hardwareId);
               setCopiedHwid(true);
-              setTimeout(() => setCopiedHwid(false), 2000);
+              scheduleUiReset(() => setCopiedHwid(false), 2000);
             }
           }}
         >

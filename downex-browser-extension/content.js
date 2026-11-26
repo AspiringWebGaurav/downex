@@ -141,7 +141,8 @@ document.addEventListener('click', (event) => {
     event.preventDefault();
     event.stopPropagation();
 
-    const suggestedName = anchor.getAttribute('download') || anchor.textContent?.trim().slice(0, 100) || undefined;
+    const dlAttr = anchor.getAttribute('download')?.trim();
+    const suggestedName = dlAttr || undefined;
     const anchorTarget = anchor.target || undefined;
 
     try {

@@ -244,30 +244,32 @@ pub fn resolve_installed_version<R: tauri::Runtime>(
 
     #[cfg(not(debug_assertions))]
     {
-        let current_exe = std::env::current_exe().ok();
-        let pe_resolved = current_exe
-            .as_ref()
-            .and_then(|p| extract_pe_version(p))
-            .filter(|v| v != "0.0.0");
+        static CACHED_PROD_VERSION: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+        CACHED_PROD_VERSION
+            .get_or_init(|| {
+                let current_exe = std::env::current_exe().ok();
+                let pe_resolved = current_exe
+                    .as_ref()
+                    .and_then(|p| extract_pe_version(p))
+                    .filter(|v| v != "0.0.0");
 
-        // The physical PE header of the running binary is the absolute, authoritative ground truth.
-        // If a binary is physically v0.0.1 on disk (e.g. fresh base install), it MUST report v0.0.1,
-        // and immediately purge/reset any superseded version state from previous runs.
-        let resolved = if let Some(pe) = pe_resolved {
-            pe
-        } else {
-            let sync_resolved = current_exe
-                .as_ref()
-                .and_then(|p| read_updater_sync_version(p))
-                .filter(|v| v != "0.0.0");
-            sync_resolved.unwrap_or(base_version)
-        };
+                let resolved = if let Some(pe) = pe_resolved {
+                    pe
+                } else {
+                    let sync_resolved = current_exe
+                        .as_ref()
+                        .and_then(|p| read_updater_sync_version(p))
+                        .filter(|v| v != "0.0.0");
+                    sync_resolved.unwrap_or(base_version)
+                };
 
-        if resolved != "0.0.0" {
-            write_persisted_version(app, db, &resolved);
-        }
+                if resolved != "0.0.0" {
+                    write_persisted_version(app, db, &resolved);
+                }
 
-        resolved
+                resolved
+            })
+            .clone()
     }
 }
 

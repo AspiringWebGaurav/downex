@@ -51,6 +51,7 @@ pub fn run() {
     let client = reqwest::Client::builder()
         .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36")
         .http1_only() // Force HTTP/1.1: Every worker opens an independent TCP socket (IDM architecture)
+        .connect_timeout(std::time::Duration::from_secs(10))
         .pool_max_idle_per_host(64)
         .tcp_nodelay(true)
         .tcp_keepalive(Some(std::time::Duration::from_secs(30)))
@@ -72,6 +73,10 @@ pub fn run() {
             });
             let is_stop = argv.iter().any(|arg| arg == "--stop" || arg == "--quit");
             if is_stop {
+                crate::tray::clean_all_task_trays(app);
+                let _ = app.remove_tray_by_id("main-tray");
+                #[cfg(target_os = "windows")]
+                crate::tray::sweep_windows_zombie_tray_icons_force();
                 app.exit(0);
                 return;
             }
@@ -97,7 +102,7 @@ pub fn run() {
                         true
                     };
 
-                    if should_close_to_tray {
+                    if should_close_to_tray || window.label() != "main" {
                         api.prevent_close();
                         let _ = window.set_always_on_top(false);
                         let _ = window.hide();
@@ -112,10 +117,16 @@ pub fn run() {
                             let _ = crate::tray::refresh_tray_menu(window.app_handle());
                         }
                     } else {
-                        // User explicitly turned off keep running in tray: exit application
+                        // User explicitly turned off keep running in tray: flush tray cleanup cleanly, then exit
+                        api.prevent_close();
+                        let _ = window.hide();
                         let app_handle = window.app_handle().clone();
                         std::thread::spawn(move || {
                             std::thread::sleep(std::time::Duration::from_millis(50));
+                            crate::tray::clean_all_task_trays(&app_handle);
+                            let _ = app_handle.remove_tray_by_id("main-tray");
+                            #[cfg(target_os = "windows")]
+                            crate::tray::sweep_windows_zombie_tray_icons_force();
                             app_handle.exit(0);
                         });
                     }
@@ -133,17 +144,25 @@ pub fn run() {
             }
         })
         .setup(move |app| {
-            // Initialize SQLite DB
+            // Initialize SQLite DB (fallback safely into %LOCALAPPDATA%/temp rather than read-only System32 CWD)
             let app_data_dir = app
                 .path()
                 .app_data_dir()
-                .unwrap_or_else(|_| std::path::PathBuf::from("."));
+                .or_else(|_| {
+                    std::env::var("LOCALAPPDATA")
+                        .map(|p| std::path::PathBuf::from(p).join("com.downex.manager"))
+                })
+                .unwrap_or_else(|_| std::env::temp_dir().join("com.downex.manager"));
             let db_path = app_data_dir.join("downex.db");
 
-            let db = DatabaseManager::new(&db_path).unwrap_or_else(|err| {
-                eprintln!("[Downex DB] Primary db init failed: {}. Using local fallback...", err);
-                DatabaseManager::new("downex_local.db").expect("Failed to initialize fallback database")
-            });
+            let db = match DatabaseManager::new(&db_path) {
+                Ok(db) => db,
+                Err(err) => {
+                    eprintln!("[Downex DB] Primary db init failed: {}. Trying temp fallback...", err);
+                    let fallback = std::env::temp_dir().join("com.downex.manager").join("downex_local.db");
+                    DatabaseManager::new(&fallback).map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?
+                }
+            };
 
             #[cfg(debug_assertions)]
             {
@@ -167,6 +186,15 @@ pub fn run() {
                 progress_tx,
             ));
             queue_manager.set_app_handle(app.handle().clone());
+
+            // Sweep orphaned unconfirmed staging files and retry interrupted tombstone deletions in background
+            let reconcile_qm = queue_manager.clone();
+            tauri::async_runtime::spawn_blocking(move || {
+                let swept = reconcile_qm.reconcile_orphaned_staging_files();
+                if swept > 0 {
+                    eprintln!("[Downex Lifecycle] Boot reconciliation cleaned {} orphaned staging file(s).", swept);
+                }
+            });
 
             app.manage(AppState {
                 db: db.clone(),
@@ -235,21 +263,17 @@ pub fn run() {
                             if consecutive_failures >= 2 {
                                 println!("[Downex Dev Watchdog] Dev server (127.0.0.1:1420) closed. Terminal closed. Exiting dev instance now.");
                                 spawn_dev_restore_installed_service();
+                                crate::tray::clean_all_task_trays(&app_handle);
+                                let _ = app_handle.remove_tray_by_id("main-tray");
+                                #[cfg(target_os = "windows")]
+                                crate::tray::sweep_windows_zombie_tray_icons_force();
                                 app_handle.exit(0);
-                                std::process::exit(0);
+                                break;
                             }
                         }
                     }
                 });
             }
-
-            // Zero background OTA supervisor: Updates detect strictly on UI open (user interaction)
-
-            // Confirm boot health 3 seconds after successful startup
-            tauri::async_runtime::spawn(async move {
-                tokio::time::sleep(std::time::Duration::from_secs(3)).await;
-                crate::ota::mark_boot_healthy();
-            });
 
             // Setup system tray AFTER AppState is managed so dynamic stats are accessible
             if let Ok(tray) = tray::setup_system_tray(app.handle()) {
@@ -258,7 +282,25 @@ pub fn run() {
 
             // Sync Windows Startup autostart entry with current executable and SQLite setting (production only)
             #[cfg(not(debug_assertions))]
-            crate::autostart::sync_autostart_on_boot(&db);
+            {
+                // Respect explicit installer unchecked autostart choice on initial boot
+                if db.get_setting("autostart_enabled").ok().flatten().is_none() {
+                    #[cfg(target_os = "windows")]
+                    {
+                        use winreg::enums::*;
+                        use winreg::RegKey;
+                        let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+                        if let Ok(key) = hkcu.open_subkey("Software\\Downex") {
+                            if let Ok(val) = key.get_value::<String, _>("AutoStart") {
+                                if val.trim() == "0" || val.trim().eq_ignore_ascii_case("false") {
+                                    let _ = db.set_setting("autostart_enabled", "false");
+                                }
+                            }
+                        }
+                    }
+                }
+                crate::autostart::sync_autostart_on_boot(&db);
+            }
 
             #[cfg(debug_assertions)]
             {
@@ -292,8 +334,6 @@ pub fn run() {
 
             #[cfg(target_os = "windows")]
             {
-                crate::commands::touch_user_shortcuts();
-                crate::commands::refresh_windows_shell_icon_cache();
                 crate::tray::clean_all_task_trays(app.handle());
                 crate::tray::sweep_windows_zombie_tray_icons();
             }
@@ -387,9 +427,9 @@ pub fn run() {
             });
 
             // Self-Healing Rollback Recovery Handler: If watchdog rolled back bad update
-            let is_rollback_recovery = std::env::args().any(|arg| arg == "--rollback-recovery");
+            let is_rollback_recovery = std::env::args().any(|arg| arg == "--rollback-recovery" || arg == "--rolled-back");
             if is_rollback_recovery {
-                println!("[Downex OTA Recovery] Started in SELF-HEALING RECOVERY MODE (--rollback-recovery). Previous version safely preserved!");
+                println!("[Downex OTA Recovery] Started in SELF-HEALING RECOVERY MODE. Previous version safely preserved!");
                 let current_exe = std::env::current_exe().unwrap_or_default();
                 let actual_ver = crate::version::extract_pe_version(&current_exe)
                     .unwrap_or_else(|| app.package_info().version.to_string());
@@ -398,29 +438,28 @@ pub fn run() {
                 let _ = app.handle().emit("ota-rollback-recovered", serde_json::json!({ "version": actual_ver }));
             }
 
-            #[cfg(debug_assertions)]
-            {
-                // In development mode, purge staged update binaries & sidecars on boot
-                // so Downex always launches cleanly as base 0.0.1 foundation
-                let _ = db.set_setting("installed_app_version", "0.0.1");
-                let _ = db.delete_setting("pending_update_manifest");
-                if let Ok(app_data) = app.path().app_data_dir() {
-                    let _ = std::fs::remove_file(app_data.join("installed_version.json"));
-                    let _ = std::fs::remove_file(app_data.join("update_restart.flag"));
-                    let _ = std::fs::remove_file(app_data.join("executed_tasks.json"));
-                }
-            }
-
             // Dynamically resolve and persist runtime installed version (GPN 1:1 REA pattern)
             let resolved_version = crate::version::resolve_installed_version(&app.handle(), Some(&db));
             println!("[Downex Version] Dynamically resolved installed version: {}", resolved_version);
             commands::sync_windows_installed_version(&resolved_version);
 
-            // Mark boot healthy after 10 seconds of stable uptime and clean old binaries
+            // Mark boot healthy only after 15s runtime stability AND WebView UI DOM readiness;
+            // if UI fails to mount during OTA probation within 20s, automatically roll back!
             if !is_rollback_recovery {
-                std::thread::spawn(|| {
-                    std::thread::sleep(std::time::Duration::from_secs(10));
-                    crate::ota::mark_boot_healthy();
+                let probation_app = app.handle().clone();
+                std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_secs(15));
+                    for _ in 0..20 {
+                        if crate::ota::is_ui_dom_ready() {
+                            crate::ota::mark_boot_healthy();
+                            return;
+                        }
+                        std::thread::sleep(std::time::Duration::from_millis(250));
+                    }
+                    if crate::ota::is_on_probation() {
+                        eprintln!("[Downex OTA Probation] UI failed to signal DOM ready within 20s! Triggering self-healing rollback...");
+                        crate::ota::trigger_ui_failure_rollback(&probation_app);
+                    }
                 });
             }
 

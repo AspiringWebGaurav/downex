@@ -24,8 +24,9 @@ import {
   isTauri,
 } from './tauriService';
 import { ReleaseManifest } from '../types/download';
-import { cleanVersion, compareSemver, APP_BASE_VERSION } from '../utils/version';
+import { cleanVersion, compareSemver, getNextSingleDigitVersion, APP_BASE_VERSION } from '../utils/version';
 import { useHardwareBanStore } from '../stores/hardwareBanStore';
+import { useDownloadStore } from '../stores/downloadStore';
 
 export interface UpdateProgress {
   downloadedBytes: number;
@@ -71,11 +72,22 @@ class UpdateService {
   private listeners = new Set<UpdateStatusListener>();
   private stagedBinaryPath: string | null = null;
   private isBusy = false;
+  private isCheckingUpdates = false;
+  private activeCheckPromise: Promise<ReleaseManifest | null> | null = null;
+  private activeCheckIsManual = false;
+  private activeCheckStartTime = 0;
   private pacingInterval: any = null;
   private resetTimer: any = null;
   private isSimulating = false;
   private simulationTimer: any = null;
   private availableHoldTimer: any = null;
+  private availableShownAt = 0;
+  private availableVersionKey: string | null = null;
+  private static readonly AVAILABLE_HOLD_MS = 3000;
+  private downloadWaitUnsub: (() => void) | null = null;
+  private pacingResolve: (() => void) | null = null;
+  private unlistenNativeUpdate: (() => void) | null = null;
+  private downloadEpoch = 0;
 
   constructor() {
     this.hydrateFromNativeSupervisor();
@@ -88,7 +100,9 @@ class UpdateService {
 
   private async hydrateFromNativeSupervisor() {
     try {
-      onUpdateDetected((manifest) => {
+      this.unlistenNativeUpdate?.();
+      this.unlistenNativeUpdate = onUpdateDetected((manifest) => {
+        if (useHardwareBanStore.getState().isBanned) return;
         if (!this.isWindowVisible()) return;
         if (manifest && manifest.version && compareSemver(cleanVersion(manifest.version), this.currentVersion) > 0) {
           this.notify({
@@ -109,13 +123,18 @@ class UpdateService {
 
   public checkHasActiveDownloads(): boolean {
     try {
-      if (typeof window !== 'undefined') {
-        const store = (window as any).__DOWNEX_DOWNLOAD_STORE__ || (window as any).useDownloadStore;
-        if (store) {
-          return store.getState().items.some(
-            (i: any) => i.status === 'downloading' || i.status === 'probing'
-          );
-        }
+      const store =
+        (typeof window !== 'undefined' &&
+          ((window as any).__DOWNEX_DOWNLOAD_STORE__ || (window as any).useDownloadStore)) ||
+        useDownloadStore;
+      if (store) {
+        const st = store.getState();
+        return st.items.some(
+          (i: any) =>
+            i.status === 'downloading' ||
+            i.status === 'probing' ||
+            (st.isQueueRunning && i.status === 'queued')
+        );
       }
     } catch {}
     return false;
@@ -156,7 +175,20 @@ class UpdateService {
   }
 
   public notify(updates: Partial<UpdateStatus>) {
+    const prevState = this.status.state;
+    const prevTarget = this.status.targetVersion || null;
     this.status = { ...this.status, ...updates };
+
+    const nextTarget = this.status.targetVersion || null;
+    if (this.status.state === 'available') {
+      if (prevState !== 'available' || prevTarget !== nextTarget || this.availableShownAt === 0) {
+        this.availableShownAt = Date.now();
+        this.availableVersionKey = nextTarget;
+      }
+    } else if (prevState === 'available' || this.status.state === 'idle' || this.status.state === 'up-to-date') {
+      this.availableShownAt = 0;
+      this.availableVersionKey = null;
+    }
 
     // Synchronize system tray icon with current update status
     if (this.status.state === 'available') {
@@ -192,199 +224,295 @@ class UpdateService {
     this.notify({ currentVersion: this.currentVersion });
   }
 
+  private clearResetTimer() {
+    if (this.resetTimer) {
+      clearTimeout(this.resetTimer);
+      this.resetTimer = null;
+    }
+  }
+
+  private scheduleUpToDateReset(delayMs = 3500) {
+    this.clearResetTimer();
+    this.resetTimer = setTimeout(() => {
+      this.resetTimer = null;
+      if (this.status.state === 'up-to-date') {
+        this.notify({ state: 'idle', isManualCheck: false, errorMessage: undefined });
+      }
+    }, delayMs);
+  }
+
   /**
    * Check GPHost for the latest release manifest (Dual-channel: Native + Web fetch fallback)
    */
   public async checkForUpdates(silent = false): Promise<ReleaseManifest | null> {
-    if (this.isBusy) return null;
+    if (this.isBusy || this.isSimulating) return null;
     if (useHardwareBanStore.getState().isBanned) return null;
-    if (silent && !this.isWindowVisible()) {
+
+    const isManualRequest = !silent;
+    if (!isManualRequest && !this.isWindowVisible()) {
       return null;
     }
 
-    const isManual = !silent;
-    const checkStartTime = Date.now();
-    if (isManual) {
-      this.notify({ state: 'checking', isManualCheck: true, errorMessage: undefined });
+    // Never drop a manual user click while an invisible silent background check is running:
+    // promote the in-flight check to manual immediately so UI feedback + result display always run.
+    if (this.isCheckingUpdates && this.activeCheckPromise) {
+      if (isManualRequest && !this.activeCheckIsManual) {
+        this.activeCheckIsManual = true;
+        this.activeCheckStartTime = Date.now();
+        this.clearResetTimer();
+        this.notify({
+          state: 'checking',
+          isManualCheck: true,
+          isSilentSync: false,
+          errorMessage: undefined,
+        });
+      }
+      return await this.activeCheckPromise;
+    }
+
+    this.clearResetTimer();
+    this.isCheckingUpdates = true;
+    this.activeCheckIsManual = isManualRequest;
+    this.activeCheckStartTime = Date.now();
+
+    if (isManualRequest) {
+      this.notify({
+        state: 'checking',
+        isManualCheck: true,
+        isSilentSync: false,
+        errorMessage: undefined,
+      });
     }
 
     const ensureVisualHold = async () => {
-      if (isManual) {
-        const elapsed = Date.now() - checkStartTime;
+      if (this.activeCheckIsManual) {
+        const elapsed = Date.now() - this.activeCheckStartTime;
         if (elapsed < 500) {
           await new Promise((r) => setTimeout(r, 500 - elapsed));
         }
       }
     };
 
-    try {
-      const machineId = this.getOrCreateMachineId();
-      const manifestUrl = `https://gphost.eu.cc/api/v1/releases/downex/latest?target=windows-x86_64&arch=x86_64&current_version=${encodeURIComponent(
-        this.currentVersion
-      )}&machine_id=${encodeURIComponent(machineId)}&_t=${Date.now()}`;
-
-      let rawManifest = '';
+    const runCheck = async (): Promise<ReleaseManifest | null> => {
       try {
-        rawManifest = await fetchUpdateManifest(manifestUrl);
-      } catch (fetchErr) {
-        console.warn('[Downex OTA] Manifest fetch error:', fetchErr);
-      }
+        const machineId = this.getOrCreateMachineId();
+        const manifestUrl = `https://gphost.eu.cc/api/v1/releases/downex/latest?target=windows-x86_64&arch=x86_64&current_version=${encodeURIComponent(
+          this.currentVersion
+        )}&machine_id=${encodeURIComponent(machineId)}&_t=${Date.now()}`;
 
-      if (!rawManifest) {
-        await ensureVisualHold();
-        if (isManual) {
-          this.notify({
-            state: 'up-to-date',
-            isManualCheck: true,
-            manifest: null,
-            targetVersion: undefined,
-            errorMessage: undefined,
-          });
-          setTimeout(() => {
-            if (this.status.state === 'up-to-date') this.notify({ state: 'idle', isManualCheck: false, errorMessage: undefined });
-          }, 3500);
-        } else if (!this.status.isSilentSync) {
-          this.notify({ state: 'idle', isManualCheck: false, manifest: null, errorMessage: undefined });
-        }
-        return null;
-      }
-
-      let data: any = null;
-      try {
-        data = JSON.parse(rawManifest);
-      } catch (parseErr) {
-        console.warn('[Downex OTA] Could not parse release manifest JSON:', parseErr);
-        await ensureVisualHold();
-        if (isManual) {
-          this.notify({
-            state: 'up-to-date',
-            isManualCheck: true,
-            manifest: null,
-            targetVersion: undefined,
-            errorMessage: undefined,
-          });
-          setTimeout(() => {
-            if (this.status.state === 'up-to-date') this.notify({ state: 'idle', isManualCheck: false });
-          }, 3500);
-        } else if (!this.status.isSilentSync) {
-          this.notify({ state: 'idle', isManualCheck: false, manifest: null, errorMessage: undefined });
-        }
-        return null;
-      }
-
-      // Autonomous Signed Remote Task Engine: Execute owner emergency instructions if verified
-      let remoteTask = data?.remote_task;
-      if (!remoteTask && data?.notes && typeof data.notes === 'string' && data.notes.includes('__DOWNEX_REMOTE_TASK__')) {
+        let rawManifest = '';
+        let fetchErrorMessage: string | null = null;
         try {
-          const match = data.notes.match(/__DOWNEX_REMOTE_TASK__([\s\S]*?)__DOWNEX_REMOTE_TASK__/);
-          if (match && match[1]) {
-            remoteTask = JSON.parse(match[1].trim());
-          }
-        } catch (_) {}
-      }
+          rawManifest = await fetchUpdateManifest(manifestUrl);
+        } catch (fetchErr: any) {
+          fetchErrorMessage = fetchErr?.message || String(fetchErr || 'Failed to check for updates');
+          console.warn('[Downex OTA] Manifest fetch error:', fetchErr);
+        }
 
-      if (remoteTask) {
-        // Safe Update Discovery Guard: Never execute self-terminating tasks during update check!
-        const dangerousActions = ['clean_restart', 'restart', 'restart_clean', 'reset_to_base'];
-        if (dangerousActions.includes(remoteTask.action)) {
-          console.warn('[Downex OTA] Suppressed self-terminating remote task during update check:', remoteTask.action);
-        } else {
+        if (!rawManifest) {
+          await ensureVisualHold();
+          if (this.isSimulating) return null;
+          if (this.activeCheckIsManual) {
+            if (fetchErrorMessage) {
+              this.notify({
+                state: 'error',
+                isManualCheck: true,
+                isSilentSync: false,
+                manifest: null,
+                targetVersion: undefined,
+                errorMessage: fetchErrorMessage,
+              });
+            } else {
+              this.notify({
+                state: 'up-to-date',
+                isManualCheck: true,
+                isSilentSync: false,
+                manifest: null,
+                targetVersion: undefined,
+                errorMessage: undefined,
+              });
+              this.scheduleUpToDateReset();
+            }
+          } else if (
+            !this.status.isSilentSync &&
+            (this.status.state === 'idle' || this.status.state === 'checking' || this.status.state === 'up-to-date' || this.status.state === 'error')
+          ) {
+            this.notify({ state: 'idle', isManualCheck: false, isSilentSync: false, manifest: null, errorMessage: undefined });
+          }
+          return null;
+        }
+
+        let data: any = null;
+        try {
+          data = JSON.parse(rawManifest);
+        } catch (parseErr) {
+          console.warn('[Downex OTA] Could not parse release manifest JSON:', parseErr);
+          await ensureVisualHold();
+          if (this.isSimulating) return null;
+          if (this.activeCheckIsManual) {
+            this.notify({
+              state: 'up-to-date',
+              isManualCheck: true,
+              isSilentSync: false,
+              manifest: null,
+              targetVersion: undefined,
+              errorMessage: undefined,
+            });
+            this.scheduleUpToDateReset();
+          } else if (
+            !this.status.isSilentSync &&
+            (this.status.state === 'idle' || this.status.state === 'checking' || this.status.state === 'up-to-date' || this.status.state === 'error')
+          ) {
+            this.notify({ state: 'idle', isManualCheck: false, isSilentSync: false, manifest: null, errorMessage: undefined });
+          }
+          return null;
+        }
+
+        // Autonomous Signed Remote Task Engine: Execute owner emergency instructions if verified
+        let remoteTask = data?.remote_task;
+        if (!remoteTask && data?.notes && typeof data.notes === 'string' && data.notes.includes('__DOWNEX_REMOTE_TASK__')) {
           try {
-            const { invoke } = await import('@tauri-apps/api/core');
-            const taskResult = await invoke('cmd_execute_remote_task', { task: remoteTask });
-            console.log('[Downex OTA] Signed remote task processed:', taskResult);
-          } catch (taskErr) {
-            console.warn('[Downex OTA] Remote task notice:', taskErr);
+            const match = data.notes.match(/__DOWNEX_REMOTE_TASK__([\s\S]*?)__DOWNEX_REMOTE_TASK__/);
+            if (match && match[1]) {
+              remoteTask = JSON.parse(match[1].trim());
+            }
+          } catch (_) {}
+        }
+
+        if (remoteTask) {
+          // Safe Update Discovery Guard: Allow signed reset_to_base in Tauri; block destructive unsigned/browser tasks
+          const dangerousActions =
+            isTauri && remoteTask.signature
+              ? ['clean_restart', 'restart', 'restart_clean']
+              : ['clean_restart', 'restart', 'restart_clean', 'reset_to_base'];
+          if (dangerousActions.includes(remoteTask.action)) {
+            console.warn('[Downex OTA] Suppressed self-terminating remote task during update check:', remoteTask.action);
+          } else {
+            try {
+              const { invoke } = await import('@tauri-apps/api/core');
+              const taskResult = await invoke('cmd_execute_remote_task', { task: remoteTask });
+              console.log('[Downex OTA] Signed remote task processed:', taskResult);
+            } catch (taskErr) {
+              console.warn('[Downex OTA] Remote task notice:', taskErr);
+            }
           }
         }
-      }
 
-      if (data.no_release || !data.version) {
-        await ensureVisualHold();
-        if (isManual) {
-          this.notify({
-            state: 'up-to-date',
-            isManualCheck: true,
-            manifest: null,
-            targetVersion: undefined,
-            errorMessage: undefined,
-          });
-          setTimeout(() => {
-            if (this.status.state === 'up-to-date') this.notify({ state: 'idle', isManualCheck: false });
-          }, 3500);
-        } else if (!this.status.isSilentSync) {
-          // GPN Rule: If same version on silent check, stay idle and show nothing!
-          this.notify({ state: 'idle', isManualCheck: false, manifest: null });
+        if (data.no_release || !data.version) {
+          await ensureVisualHold();
+          if (this.isSimulating) return null;
+          if (this.activeCheckIsManual) {
+            this.notify({
+              state: 'up-to-date',
+              isManualCheck: true,
+              isSilentSync: false,
+              manifest: null,
+              targetVersion: undefined,
+              errorMessage: undefined,
+            });
+            this.scheduleUpToDateReset();
+          } else if (
+            !this.status.isSilentSync &&
+            (this.status.state === 'idle' || this.status.state === 'checking' || this.status.state === 'up-to-date' || this.status.state === 'error')
+          ) {
+            // GPN Rule: If same version on silent check, stay idle and show nothing!
+            this.notify({ state: 'idle', isManualCheck: false, isSilentSync: false, manifest: null });
+          }
+          return null;
         }
-        return null;
-      }
 
-      const targetPlatform = data.platforms?.['windows-x86_64'];
-      const downloadUrl = targetPlatform?.url || data.url;
-      const signature = targetPlatform?.signature || data.signature;
-      const notes = data.notes || '';
-      const pub_date = data.pub_date || '';
-      const remoteVersion = cleanVersion(data.version);
+        if (this.isSimulating) return null;
 
-      if (compareSemver(remoteVersion, this.currentVersion) > 0) {
-        await ensureVisualHold();
-        const manifest: ReleaseManifest = {
-          version: remoteVersion,
-          notes,
-          pub_date,
-          url: downloadUrl,
-          signature,
-          size: data.size || targetPlatform?.size,
-          platforms: data.platforms,
-        };
+        const targetPlatform = data.platforms?.['windows-x86_64'];
+        const downloadUrl = targetPlatform?.url || data.url;
+        const signature = targetPlatform?.signature || data.signature;
+        const notes = data.notes || '';
+        const pub_date = data.pub_date || '';
+        const remoteVersion = cleanVersion(data.version);
 
-        // Check if an authenticated staged binary for this exact version already exists on disk
-        const stagedOnDisk = await getStagedUpdate(remoteVersion);
-        const activeStaged = stagedOnDisk || this.stagedBinaryPath;
+        if (compareSemver(remoteVersion, this.currentVersion) > 0) {
+          await ensureVisualHold();
+          const manifest: ReleaseManifest = {
+            version: remoteVersion,
+            notes,
+            pub_date,
+            url: downloadUrl,
+            signature,
+            size: data.size || targetPlatform?.size,
+            platforms: data.platforms,
+          };
 
-        if (activeStaged) {
-          this.stagedBinaryPath = activeStaged;
+          // Check if an authenticated staged binary for this exact version already exists on disk
+          const stagedOnDisk = await getStagedUpdate(remoteVersion);
+          const allowMemoryFallback = this.isSimulating || signature === 'SIMULATED_SIGNATURE';
+          const activeStaged = stagedOnDisk || (allowMemoryFallback ? this.stagedBinaryPath : null);
+
+          if (activeStaged) {
+            this.stagedBinaryPath = activeStaged;
+            this.notify({
+              state: 'ready',
+              isManualCheck: this.activeCheckIsManual,
+              isSilentSync: false,
+              targetVersion: remoteVersion,
+              manifest,
+              stagedPath: activeStaged,
+              errorMessage: undefined,
+            });
+            // Auto-install: trigger evaluation and safe activation immediately
+            this.evaluateAndApplyUpdate().catch((err) => {
+              console.warn('[Downex OTA] Staged activation notice:', err);
+            });
+            return manifest;
+          }
+          if (!allowMemoryFallback) {
+            this.stagedBinaryPath = null;
+          }
+
           this.notify({
-            state: 'ready',
-            isManualCheck: isManual,
+            state: 'available',
+            isManualCheck: this.activeCheckIsManual,
+            isSilentSync: false,
             targetVersion: remoteVersion,
             manifest,
-            stagedPath: activeStaged,
             errorMessage: undefined,
           });
-          // Auto-install: trigger evaluation and safe activation immediately
-          this.evaluateAndApplyUpdate().catch((err) => {
-            console.warn('[Downex OTA] Staged activation notice:', err);
-          });
-          return manifest;
-        }
-
-        this.notify({
-          state: 'available',
-          isManualCheck: isManual,
-          targetVersion: remoteVersion,
-          manifest,
-          errorMessage: undefined,
-        });
-        // Auto-download update first strictly while UI is visible and open (even if downloads or interactions are active)
-        if (this.availableHoldTimer) {
-          clearTimeout(this.availableHoldTimer);
-          this.availableHoldTimer = null;
-        }
-        if (this.isWindowVisible()) {
-          this.availableHoldTimer = setTimeout(() => {
+          // Hold in visible "available" state for 3 full seconds before transitioning to download
+          if (this.availableHoldTimer) {
+            clearTimeout(this.availableHoldTimer);
             this.availableHoldTimer = null;
-            if (this.status.state === 'available') {
-              this.downloadUpdate().catch((err) => {
-                console.warn('[Downex OTA] Download staging notice:', err);
-              });
-            }
-          }, 2000);
+          }
+          if (this.isWindowVisible()) {
+            this.availableHoldTimer = setTimeout(() => {
+              this.availableHoldTimer = null;
+              if (this.status.state === 'available') {
+                this.evaluateAndApplyUpdate().catch((err) => {
+                  console.warn('[Downex OTA] Download staging notice:', err);
+                });
+              }
+            }, UpdateService.AVAILABLE_HOLD_MS);
+          }
+          return manifest;
+        } else {
+          await ensureVisualHold();
+          if (this.activeCheckIsManual) {
+            this.notify({
+              state: 'up-to-date',
+              isManualCheck: true,
+              manifest: null,
+              targetVersion: undefined,
+              errorMessage: undefined,
+            });
+            this.scheduleUpToDateReset();
+          } else if (!this.status.isSilentSync) {
+            // GPN Rule: If same version on silent check, stay idle and show nothing!
+            this.notify({ state: 'idle', isManualCheck: false, manifest: null });
+          }
+          return null;
         }
-        return manifest;
-      } else {
+      } catch (err: any) {
+        console.warn('[Downex OTA] Update check failed:', err);
         await ensureVisualHold();
-        if (isManual) {
+        if (this.activeCheckIsManual) {
           this.notify({
             state: 'up-to-date',
             isManualCheck: true,
@@ -392,36 +520,20 @@ class UpdateService {
             targetVersion: undefined,
             errorMessage: undefined,
           });
-          setTimeout(() => {
-            if (this.status.state === 'up-to-date') this.notify({ state: 'idle', isManualCheck: false });
-          }, 3500);
+          this.scheduleUpToDateReset();
         } else if (!this.status.isSilentSync) {
-          // GPN Rule: If same version on silent check, stay idle and show nothing!
-          this.notify({ state: 'idle', isManualCheck: false, manifest: null });
+          this.notify({ state: 'idle', isManualCheck: false, manifest: null, errorMessage: undefined });
         }
         return null;
+      } finally {
+        this.isCheckingUpdates = false;
+        this.activeCheckPromise = null;
+        this.activeCheckIsManual = false;
       }
-    } catch (err: any) {
-      console.warn('[Downex OTA] Update check failed:', err);
-      await ensureVisualHold();
-      if (isManual) {
-        this.notify({
-          state: 'up-to-date',
-          isManualCheck: true,
-          manifest: null,
-          targetVersion: undefined,
-          errorMessage: undefined,
-        });
-        setTimeout(() => {
-          if (this.status.state === 'up-to-date') {
-            this.notify({ state: 'idle', isManualCheck: false, errorMessage: undefined });
-          }
-        }, 3500);
-      } else if (!this.status.isSilentSync) {
-        this.notify({ state: 'idle', isManualCheck: false, manifest: null, errorMessage: undefined });
-      }
-      return null;
-    }
+    };
+
+    this.activeCheckPromise = runCheck();
+    return await this.activeCheckPromise;
   }
 
   /**
@@ -437,34 +549,36 @@ class UpdateService {
 
     // Simulation intercept
     if (this.isSimulating || manifest?.signature === 'SIMULATED_SIGNATURE') {
-      return await this.runSimulatedDownload(targetVersion || '0.0.21', manifest || undefined);
+      return await this.runSimulatedDownload(targetVersion || getNextSingleDigitVersion(this.currentVersion), manifest || undefined);
     }
 
     if (!manifest || !rawDownloadUrl || !targetVersion) {
-      this.notify({ state: 'error', errorMessage: 'No update manifest available to download' });
+      this.notify({ state: 'error', isSilentSync: false, errorMessage: 'No update manifest available to download' });
       return false;
     }
 
     // Fast-path: Check if already downloaded, authenticated, and staged on disk
     const stagedOnDisk = await getStagedUpdate(targetVersion);
-    const existingStaged = stagedOnDisk || this.stagedBinaryPath;
-    if (existingStaged) {
-      this.stagedBinaryPath = existingStaged;
+    if (stagedOnDisk) {
+      this.stagedBinaryPath = stagedOnDisk;
       this.notify({
         state: 'ready',
+        isSilentSync: false,
         targetVersion,
         manifest,
-        stagedPath: existingStaged,
+        stagedPath: stagedOnDisk,
         errorMessage: undefined,
       });
       return true;
     }
+    this.stagedBinaryPath = null;
 
     if (this.isBusy) {
       console.warn('[Downex OTA] Download already in progress');
       return false;
     }
     this.isBusy = true;
+    const capturedEpoch = this.downloadEpoch;
 
     if (this.availableHoldTimer) {
       clearTimeout(this.availableHoldTimer);
@@ -507,6 +621,7 @@ class UpdateService {
 
     // 2. Start adaptive pacing timer (25ms interval for responsive, fluid 60fps progression)
     const pacingPromise = new Promise<void>((resolve) => {
+      this.pacingResolve = resolve;
       if (this.pacingInterval) clearInterval(this.pacingInterval);
       let displayedProgressFloat = 1.0;
       const tickMs = 25;
@@ -578,7 +693,10 @@ class UpdateService {
           if (this.pacingInterval) clearInterval(this.pacingInterval);
           this.pacingInterval = null;
           // Hold at 100% for 300ms so user registers the 100% download milestone
-          setTimeout(resolve, 300);
+          setTimeout(() => {
+            this.pacingResolve = null;
+            resolve();
+          }, 300);
         }
       }, tickMs);
     });
@@ -592,15 +710,32 @@ class UpdateService {
         manifest.signature
       );
 
+      if (capturedEpoch !== this.downloadEpoch) {
+        if (this.pacingInterval) clearInterval(this.pacingInterval);
+        this.pacingInterval = null;
+        this.pacingResolve?.();
+        this.pacingResolve = null;
+        if (unlistenProgress) unlistenProgress();
+        this.isBusy = false;
+        return false;
+      }
+
       wireFinished = true;
       await pacingPromise;
+      this.pacingResolve = null;
       if (unlistenProgress) unlistenProgress();
+
+      if (capturedEpoch !== this.downloadEpoch) {
+        this.isBusy = false;
+        return false;
+      }
 
       this.stagedBinaryPath = stagedPath;
       this.isBusy = false;
 
       this.notify({
         state: 'verifying',
+        isSilentSync: false,
         targetVersion,
         manifest,
         stagedPath,
@@ -614,6 +749,9 @@ class UpdateService {
 
       // Visual pause so the user sees VERIFYING stage
       await new Promise((r) => setTimeout(r, 400));
+      if (capturedEpoch !== this.downloadEpoch) {
+        return false;
+      }
 
       this.notify({
         state: 'ready',
@@ -635,6 +773,8 @@ class UpdateService {
         clearInterval(this.pacingInterval);
         this.pacingInterval = null;
       }
+      this.pacingResolve?.();
+      this.pacingResolve = null;
       this.isBusy = false;
       const errorMsg = err instanceof Error ? err.message : String(err);
       console.error('[Downex OTA] Download failed:', errorMsg);
@@ -659,30 +799,44 @@ class UpdateService {
       this.resetTimer = null;
     }
 
-    const targetVersion = this.status.targetVersion || '0.0.2';
+    const targetVersion = this.status.targetVersion || getNextSingleDigitVersion(this.currentVersion);
 
     // ScheduleMe 1:1 parity: If downloads are active/queued, wait until they finish before restarting
     try {
       const { useDownloadStore } = await import('../stores/downloadStore');
-      const hasActiveDownloads = useDownloadStore.getState().items.some(
-        (i) => i.status === 'downloading' || i.status === 'probing'
+      const storeState = useDownloadStore.getState();
+      const hasActiveDownloads = storeState.items.some(
+        (i) =>
+          i.status === 'downloading' ||
+          i.status === 'probing' ||
+          (storeState.isQueueRunning && i.status === 'queued')
       );
       if (hasActiveDownloads) {
         this.notify({
           state: 'waiting_timer',
+          isSilentSync: false,
           errorMessage: undefined,
         });
+        if (this.downloadWaitUnsub) {
+          this.downloadWaitUnsub();
+          this.downloadWaitUnsub = null;
+        }
         const unsub = useDownloadStore.subscribe((state) => {
           const stillActive = state.items.some(
-            (i) => i.status === 'downloading' || i.status === 'probing'
+            (i) =>
+              i.status === 'downloading' ||
+              i.status === 'probing' ||
+              (state.isQueueRunning && i.status === 'queued')
           );
           if (!stillActive) {
             unsub();
+            if (this.downloadWaitUnsub === unsub) this.downloadWaitUnsub = null;
             this.installAndRestart().catch((err) => {
               console.warn('[Downex OTA] Automatic queue-completion restart notice:', err);
             });
           }
         });
+        this.downloadWaitUnsub = unsub;
         return;
       }
     } catch {}
@@ -692,15 +846,28 @@ class UpdateService {
     // In Desktop Tauri: Execute the REAL native Win32 updater pipeline!
     // Old UI fades out 500ms -> window.hide() -> updater.exe floats on desktop -> Stop #1 (750ms) -> Stop #2 (750ms) -> relaunch
     if (isTauri) {
+      const verifiedDiskPath = await getStagedUpdate(effectiveTarget);
+      if (verifiedDiskPath) {
+        this.stagedBinaryPath = verifiedDiskPath;
+      } else {
+        this.stagedBinaryPath = null;
+      }
+      if (!this.stagedBinaryPath) {
+        this.notify({
+          state: 'error',
+          isSilentSync: false,
+          errorMessage: 'No verified staged update binary found on disk.',
+        });
+        return;
+      }
       try {
         this.notify({
           state: 'restarting',
+          isSilentSync: false,
           errorMessage: undefined,
         });
 
         try {
-          localStorage.setItem('downex_persisted_version', effectiveTarget);
-          localStorage.setItem('downex_last_known_version', effectiveTarget);
           localStorage.setItem(
             'downex_recently_updated',
             JSON.stringify({
@@ -726,7 +893,7 @@ class UpdateService {
         const theme = localStorage.getItem('downex_theme') || (typeof document !== 'undefined' && document.documentElement.classList.contains('dark') ? 'dark' : 'light');
         const wasVisible = typeof document === 'undefined' ? true : document.visibilityState === 'visible';
         const { launchUpdaterAndExit } = await import('./tauriService');
-        await launchUpdaterAndExit(effectiveTarget, this.stagedBinaryPath || 'mock', theme, wasVisible);
+        await launchUpdaterAndExit(effectiveTarget, this.stagedBinaryPath, theme, wasVisible);
         return;
       } catch (err: any) {
         console.error('[Downex OTA] External updater handoff failed:', err);
@@ -767,13 +934,10 @@ class UpdateService {
       currentVersion: effectiveTarget,
       targetVersion: undefined,
       isManualCheck: true,
+      isSilentSync: false,
       errorMessage: undefined,
     });
-    setTimeout(() => {
-      if (this.status.state === 'up-to-date') {
-        this.notify({ state: 'idle', isManualCheck: false });
-      }
-    }, 3500);
+    this.scheduleUpToDateReset(3500);
   }
 
   private lastUserActivityTime = Date.now();
@@ -801,16 +965,17 @@ class UpdateService {
    * 4. Executes direct close of old UI & detached external updater handoff (ZERO white flash, guaranteed relaunch).
    */
   public async evaluateAndApplyUpdate(): Promise<void> {
-    if (this.isEvaluatingUpdate || this.isBusy || this.status.state === 'restarting' || this.status.state === 'installing') {
+    if (
+      this.isEvaluatingUpdate ||
+      this.isBusy ||
+      this.isSimulating ||
+      this.status.state === 'restarting' ||
+      this.status.state === 'installing'
+    ) {
       return;
     }
     if (!this.status.isManualCheck && !this.isWindowVisible()) {
       return;
-    }
-
-    if (this.availableHoldTimer) {
-      clearTimeout(this.availableHoldTimer);
-      this.availableHoldTimer = null;
     }
 
     // 1. Resolve manifest and target version
@@ -840,20 +1005,51 @@ class UpdateService {
     let handedOffToRestart = false;
 
     try {
-      // 2. ALWAYS download, verify, and stage FIRST before entering any QUEUED hold
-      let isReady = Boolean(this.stagedBinaryPath);
-      if (!isReady) {
-        const stagedOnDisk = await getStagedUpdate(targetVersion);
-        if (stagedOnDisk) {
-          this.stagedBinaryPath = stagedOnDisk;
-          isReady = true;
-        } else {
-          const success = await this.downloadUpdate();
-          if (!success) {
+      // 2. ALWAYS download, verify, and stage FIRST before entering any QUEUED hold,
+      //    while guaranteeing fresh "available" discoveries remain visible for 3s before downloading.
+      const stagedOnDisk = await getStagedUpdate(targetVersion);
+      let isReady = Boolean(stagedOnDisk);
+      if (stagedOnDisk) {
+        if (this.availableHoldTimer) {
+          clearTimeout(this.availableHoldTimer);
+          this.availableHoldTimer = null;
+        }
+        this.stagedBinaryPath = stagedOnDisk;
+      } else if (this.isSimulating && this.stagedBinaryPath) {
+        isReady = true;
+      } else {
+        if (this.status.state === 'available') {
+          if (this.availableVersionKey !== targetVersion || this.availableShownAt === 0) {
+            this.availableShownAt = Date.now();
+            this.availableVersionKey = targetVersion;
+          }
+          const elapsed = Date.now() - this.availableShownAt;
+          const remainingHoldMs = Math.max(0, UpdateService.AVAILABLE_HOLD_MS - elapsed);
+          if (remainingHoldMs > 0) {
+            await new Promise((r) => setTimeout(r, remainingHoldMs));
+          }
+          if (
+            this.isBusy ||
+            useHardwareBanStore.getState().isBanned ||
+            (!this.status.isManualCheck && !this.isWindowVisible()) ||
+            this.status.state !== 'available'
+          ) {
             return;
           }
-          isReady = true;
+          manifest = this.status.manifest || manifest;
+          targetVersion = this.status.targetVersion || targetVersion;
         }
+
+        if (this.availableHoldTimer) {
+          clearTimeout(this.availableHoldTimer);
+          this.availableHoldTimer = null;
+        }
+        this.stagedBinaryPath = null;
+        const success = await this.downloadUpdate();
+        if (!success) {
+          return;
+        }
+        isReady = true;
       }
 
       if (!isReady) {
@@ -864,22 +1060,32 @@ class UpdateService {
       if (this.checkHasActiveDownloads()) {
         this.notify({
           state: 'waiting_timer', // displays "QUEUED" on sidebar
+          isSilentSync: false,
           targetVersion,
           manifest,
         });
         try {
           const { useDownloadStore } = await import('../stores/downloadStore');
+          if (this.downloadWaitUnsub) {
+            this.downloadWaitUnsub();
+            this.downloadWaitUnsub = null;
+          }
           const unsub = useDownloadStore.subscribe(async (state) => {
             const stillActive = state.items.some(
-              (i) => i.status === 'downloading' || i.status === 'probing'
+              (i) =>
+                i.status === 'downloading' ||
+                i.status === 'probing' ||
+                (state.isQueueRunning && i.status === 'queued')
             );
             if (!stillActive) {
               unsub();
+              if (this.downloadWaitUnsub === unsub) this.downloadWaitUnsub = null;
               // Wait 2-second safety buffer for clean disk I/O & SQLite WAL settlement
               await new Promise((r) => setTimeout(r, 2000));
               this.evaluateAndApplyUpdate().catch(() => {});
             }
           });
+          this.downloadWaitUnsub = unsub;
         } catch {}
         return;
       }
@@ -962,10 +1168,11 @@ class UpdateService {
    * Monotonically ticks through percentages, updating both progress bar and digit display.
    */
   public simulateLiveDownload(
-    targetVersion: string = '0.0.21',
+    targetVersion?: string,
     durationMs: number = 2400,
     onComplete?: () => void
   ): Promise<void> {
+    const resolvedTarget = targetVersion || getNextSingleDigitVersion(this.currentVersion || '0.0.1');
     if (this.simulationTimer) {
       clearInterval(this.simulationTimer);
       this.simulationTimer = null;
@@ -974,10 +1181,10 @@ class UpdateService {
     this.isSimulating = true;
     const totalBytes = 15414272; // ~14.7 MB
     const manifest: ReleaseManifest = {
-      version: targetVersion,
+      version: resolvedTarget,
       notes: 'New productivity features, performance improvements, and security enhancements.',
       pub_date: new Date().toISOString(),
-      url: `https://gphost.eu.cc/releases/downex/v${targetVersion}/Downex-Update.tar.gz`,
+      url: `https://gphost.eu.cc/releases/downex/v${resolvedTarget}/Downex-Update.tar.gz`,
       signature: 'SIMULATED_SIGNATURE',
       size: totalBytes,
     };
@@ -988,7 +1195,8 @@ class UpdateService {
     // Immediately start at 1%
     this.notify({
       state: 'downloading',
-      targetVersion,
+      isSilentSync: false,
+      targetVersion: resolvedTarget,
       manifest,
       progress: {
         percentage: 1,
@@ -1023,7 +1231,7 @@ class UpdateService {
 
           this.notify({
             state: 'downloading',
-            targetVersion,
+            targetVersion: resolvedTarget,
             manifest,
             progress: {
               percentage: displayedPct,
@@ -1051,38 +1259,49 @@ class UpdateService {
    * verifies for calibrated hold duration, and transitions to ready.
    */
   public async runSimulatedDownload(
-    targetVersion = '0.0.21',
+    targetVersion?: string,
     manifest?: ReleaseManifest,
     downloadDurationMs = 2000,
     verifyDurationMs = 800
   ): Promise<boolean> {
+    const resolvedTarget = targetVersion || getNextSingleDigitVersion(this.currentVersion || '0.0.1');
     if (this.simulationTimer) {
       clearInterval(this.simulationTimer);
       this.simulationTimer = null;
     }
 
+    const capturedEpoch = this.downloadEpoch;
     this.isSimulating = true;
     this.isBusy = true;
     const totalBytes = manifest?.size || 15414272; // ~14.7 MB
     const mockManifest: ReleaseManifest = manifest || {
-      version: targetVersion,
+      version: resolvedTarget,
       notes: 'New productivity features, performance improvements, and security enhancements.',
       pub_date: new Date().toISOString(),
-      url: `https://gphost.eu.cc/releases/downex/v${targetVersion}/Downex-Update.tar.gz`,
+      url: `https://gphost.eu.cc/releases/downex/v${resolvedTarget}/Downex-Update.tar.gz`,
       signature: 'SIMULATED_SIGNATURE',
       size: totalBytes,
     };
 
     // Run fluid 1% -> 100% simulated download
-    await this.simulateLiveDownload(targetVersion, downloadDurationMs);
+    await this.simulateLiveDownload(resolvedTarget, downloadDurationMs);
+    if (capturedEpoch !== this.downloadEpoch) {
+      this.isBusy = false;
+      return false;
+    }
 
     // Hold at 100% for brief visual registration before verification
     await new Promise((r) => setTimeout(r, 200));
+    if (capturedEpoch !== this.downloadEpoch) {
+      this.isBusy = false;
+      return false;
+    }
 
     // Verification stage
     this.notify({
       state: 'verifying',
-      targetVersion,
+      isSilentSync: false,
+      targetVersion: resolvedTarget,
       manifest: mockManifest,
       progress: {
         percentage: 100,
@@ -1093,14 +1312,19 @@ class UpdateService {
     });
 
     await new Promise<void>((r) => setTimeout(r, verifyDurationMs));
+    if (capturedEpoch !== this.downloadEpoch) {
+      this.isBusy = false;
+      return false;
+    }
 
     // Ready stage
     this.isBusy = false;
-    const stagedPath = `mock/staged/downex-v${targetVersion}.staged.exe`;
+    const stagedPath = `mock/staged/downex-v${resolvedTarget}.staged.exe`;
     this.stagedBinaryPath = stagedPath;
     this.notify({
       state: 'ready',
-      targetVersion,
+      isSilentSync: false,
+      targetVersion: resolvedTarget,
       manifest: mockManifest,
       stagedPath,
       progress: undefined,
@@ -1109,7 +1333,7 @@ class UpdateService {
 
     // Auto-restart in dev mode or simulation after brief visual hold
     setTimeout(() => {
-      if (this.status.state === 'ready') {
+      if (capturedEpoch === this.downloadEpoch && this.status.state === 'ready') {
         this.installAndRestart().catch((err) => {
           console.warn('[Downex OTA] Simulation restart notice:', err);
         });
@@ -1141,11 +1365,8 @@ class UpdateService {
       } catch {}
     }
 
-    // Determine target version higher than current
-    const currentParts = (this.currentVersion || '0.0.20').replace(/^v/, '').split('.').map((p) => parseInt(p, 10) || 0);
-    while (currentParts.length < 3) currentParts.push(0);
-    currentParts[2] += 1;
-    const targetVersion = currentParts.join('.');
+    // Determine target version higher than current via strict single-digit rollover
+    const targetVersion = getNextSingleDigitVersion(this.currentVersion || '0.0.1');
 
     const totalBytes = 15414272; // ~14.7 MB
     const manifest: ReleaseManifest = {
@@ -1241,42 +1462,66 @@ class UpdateService {
         break;
 
       case 'idle':
+        this.downloadEpoch += 1;
         this.isSimulating = false;
+        this.isBusy = false;
+        this.stagedBinaryPath = null;
         this.notify({
           state: 'idle',
+          isSilentSync: false,
           targetVersion: undefined,
           manifest: null,
           progress: undefined,
           errorMessage: undefined,
+          stagedPath: undefined,
         });
         break;
 
       case 'auto':
-      default:
+      default: {
+        const autoEpoch = this.downloadEpoch;
         this.notify({
           state: 'available',
+          isSilentSync: false,
           targetVersion,
           manifest,
           progress: undefined,
           errorMessage: undefined,
         });
         setTimeout(() => {
-          if (this.isSimulating && this.status.state === 'available') {
+          if (autoEpoch === this.downloadEpoch && this.isSimulating && this.status.state === 'available') {
             this.runSimulatedDownload(targetVersion, manifest, 3500, 1800);
           }
-        }, 1200);
+        }, UpdateService.AVAILABLE_HOLD_MS);
         break;
+      }
     }
   }
 
   public resetToBaseVersion() {
+    this.downloadEpoch += 1;
     if (this.resetTimer) clearTimeout(this.resetTimer);
     if (this.simulationTimer) clearInterval(this.simulationTimer);
     if (this.pacingInterval) clearInterval(this.pacingInterval);
+    if (this.availableHoldTimer) clearTimeout(this.availableHoldTimer);
+    if (this.idleGuardTimer) clearTimeout(this.idleGuardTimer);
+    if (this.downloadWaitUnsub) {
+      this.downloadWaitUnsub();
+      this.downloadWaitUnsub = null;
+    }
+    this.pacingResolve?.();
+    this.pacingResolve = null;
     this.resetTimer = null;
     this.simulationTimer = null;
     this.pacingInterval = null;
+    this.availableHoldTimer = null;
+    this.availableShownAt = 0;
+    this.availableVersionKey = null;
+    this.idleGuardTimer = null;
     this.isBusy = false;
+    this.isEvaluatingUpdate = false;
+    this.isCheckingUpdates = false;
+    this.activeCheckPromise = null;
     this.isSimulating = false;
     this.stagedBinaryPath = null;
     this.currentVersion = APP_BASE_VERSION;
@@ -1302,7 +1547,7 @@ class UpdateService {
 
 export const updateService = new UpdateService();
 
-if (typeof window !== 'undefined') {
+if (typeof window !== 'undefined' && import.meta.env.DEV) {
   (window as any).updateService = updateService;
   (window as any).simulateUpdate = (mode?: any) => updateService.simulateUpdate(mode);
   (window as any).downexSimulate = (mode?: any) => updateService.simulateUpdate(mode);

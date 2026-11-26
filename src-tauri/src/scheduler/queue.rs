@@ -3,18 +3,30 @@ use crate::engine::{probe_url, DownloadEnginePool, DownloadProgressEvent};
 use parking_lot::RwLock;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use tauri::Emitter;
-use tokio::sync::{mpsc, Semaphore};
+use tokio::sync::{mpsc, Mutex as AsyncMutex, Notify, Semaphore};
 use tokio_util::sync::CancellationToken;
+
+#[derive(Clone)]
+struct ActiveTaskHandle {
+    generation: u64,
+    cancel_token: CancellationToken,
+    done_notify: Arc<Notify>,
+    is_done: Arc<AtomicBool>,
+}
+
+const PENDING_STAGING_DELETES_KEY: &str = "pending_staging_deletes";
 
 #[derive(Clone)]
 pub struct QueueManager {
     client: reqwest::Client,
     db: DatabaseManager,
     pool: Arc<DownloadEnginePool>,
-    active_tokens: Arc<RwLock<HashMap<String, CancellationToken>>>,
+    active_tokens: Arc<RwLock<HashMap<String, ActiveTaskHandle>>>,
+    task_generation: Arc<AtomicU64>,
+    queue_dispatch_lock: Arc<AsyncMutex<()>>,
     queue_semaphores: Arc<RwLock<HashMap<String, Arc<Semaphore>>>>,
     task_limiters: Arc<RwLock<HashMap<String, Arc<crate::engine::TaskSpeedLimiter>>>>,
     progress_tx: mpsc::Sender<DownloadProgressEvent>,
@@ -23,6 +35,7 @@ pub struct QueueManager {
     armed_shutdown_tasks: Arc<RwLock<HashSet<String>>>,
     global_shutdown_armed: Arc<AtomicBool>,
     active_shutdown_cancel: Arc<RwLock<Option<CancellationToken>>>,
+    pending_deletes_lock: Arc<parking_lot::Mutex<()>>,
 }
 
 impl QueueManager {
@@ -40,6 +53,8 @@ impl QueueManager {
             db,
             pool,
             active_tokens: Arc::new(RwLock::new(HashMap::new())),
+            task_generation: Arc::new(AtomicU64::new(0)),
+            queue_dispatch_lock: Arc::new(AsyncMutex::new(())),
             queue_semaphores: Arc::new(RwLock::new(semaphores)),
             task_limiters: Arc::new(RwLock::new(HashMap::new())),
             progress_tx,
@@ -48,6 +63,7 @@ impl QueueManager {
             armed_shutdown_tasks: Arc::new(RwLock::new(HashSet::new())),
             global_shutdown_armed: Arc::new(AtomicBool::new(false)),
             active_shutdown_cancel: Arc::new(RwLock::new(None)),
+            pending_deletes_lock: Arc::new(parking_lot::Mutex::new(())),
         }
     }
 
@@ -122,12 +138,12 @@ impl QueueManager {
                 && trimmed != "file" 
                 && (trimmed.contains('.') || !probe.filename.contains('.')) 
             {
-                trimmed.to_string()
+                crate::engine::probe::sanitize_filename(trimmed)
             } else {
-                probe.filename
+                crate::engine::probe::sanitize_filename(&probe.filename)
             }
         } else {
-            probe.filename
+            crate::engine::probe::sanitize_filename(&probe.filename)
         };
 
         let _ = std::fs::create_dir_all(&save_dir_buf);
@@ -137,7 +153,8 @@ impl QueueManager {
             Some(&id),
             None,
         );
-        crate::engine::staging::release_staging_path(&resolved_staging);
+        // Hold staging path claim across SQLite insert so concurrent tasks cannot claim the same staging name
+        let staging_claim = crate::engine::staging::StagingClaimGuard::new(resolved_staging.clone());
         let staging_path_str = resolved_staging.to_string_lossy().to_string();
 
         let now = chrono::Utc::now().timestamp_millis();
@@ -168,6 +185,7 @@ impl QueueManager {
         };
 
         self.db.insert_download(&record)?;
+        drop(staging_claim);
 
         // Automatically spawn execution in the queue if requested
         if start_immediately {
@@ -183,12 +201,17 @@ impl QueueManager {
     }
 
     pub async fn process_next_in_queue(&self) -> bool {
+        let _dispatch_guard = self.queue_dispatch_lock.lock().await;
         if !self.is_queue_running() {
             return false;
         }
 
         // Strictly 1-by-1 sequential execution:
-        // Check if ANY download is currently downloading or probing
+        // Check if ANY download is currently running or marked downloading/probing
+        if !self.active_tokens.read().is_empty() {
+            return false;
+        }
+
         let downloads = match self.db.get_all_downloads() {
             Ok(d) => d,
             Err(_) => return false,
@@ -211,6 +234,7 @@ impl QueueManager {
 
         if let Some(next_task) = queued.into_iter().next() {
             eprintln!("[Downex Queue] 1-by-1 Auto-starting: {} ({})", next_task.filename, next_task.id);
+            let _ = self.db.update_download_status(&next_task.id, "downloading", 0, None);
             self.start_task(next_task);
             return true;
         }
@@ -261,10 +285,23 @@ impl QueueManager {
     pub fn start_task(&self, record: DownloadRecord) {
         let task_id = record.id.clone();
         let cancel_token = CancellationToken::new();
+        let done_notify = Arc::new(Notify::new());
+        let is_done = Arc::new(AtomicBool::new(false));
+        let gen = self.task_generation.fetch_add(1, Ordering::SeqCst) + 1;
 
         {
             let mut tokens = self.active_tokens.write();
-            tokens.insert(task_id.clone(), cancel_token.clone());
+            if let Some(prev) = tokens.insert(
+                task_id.clone(),
+                ActiveTaskHandle {
+                    generation: gen,
+                    cancel_token: cancel_token.clone(),
+                    done_notify: done_notify.clone(),
+                    is_done: is_done.clone(),
+                },
+            ) {
+                prev.cancel_token.cancel();
+            }
         }
 
         // Dynamic Guard: Re-defer update while any download task is active
@@ -282,16 +319,27 @@ impl QueueManager {
         let db = self.db.clone();
         let progress_tx = self.progress_tx.clone();
         let active_tokens = self.active_tokens.clone();
+        let task_limiters = self.task_limiters.clone();
+        let armed_shutdown_tasks = self.armed_shutdown_tasks.clone();
+        let initial_bps = record
+            .speed_limit_mbps
+            .filter(|m| *m > 0.0)
+            .map(|m| ((m * 1_000_000.0) / 8.0).round() as u64)
+            .unwrap_or(0);
         let limiter = {
             let mut limiters = self.task_limiters.write();
             limiters
                 .entry(task_id.clone())
-                .or_insert_with(|| Arc::new(crate::engine::TaskSpeedLimiter::new(0)))
+                .or_insert_with(|| Arc::new(crate::engine::TaskSpeedLimiter::new(initial_bps)))
                 .clone()
         };
         let qm_clone = self.clone();
 
-        let queue_id = record.queue_id.clone();
+        let queue_id = if record.queue_id == "adaptive_media" || record.queue_id == "default" {
+            record.queue_id.clone()
+        } else {
+            "custom".to_string()
+        };
         let sem = {
             let mut sems = self.queue_semaphores.write();
             sems.entry(queue_id).or_insert_with(|| Arc::new(Semaphore::new(3))).clone()
@@ -303,15 +351,39 @@ impl QueueManager {
             let _permit = sem.acquire().await;
 
             if cancel_token.is_cancelled() {
-                let _ = db.update_download_status(&task_id, "paused", 0, None);
-                active_tokens.write().remove(&task_id);
-
-            // Dynamic OTA unblock: Check if all active downloads and queue items have completed
-            if !qm_clone.has_active_downloads() {
-                if let Some(app) = qm_clone.get_app_handle() {
-                    crate::tray::on_downloads_completed(&app);
+                let is_current_gen = {
+                    let mut tokens = active_tokens.write();
+                    let matches = tokens.get(&task_id).map(|h| h.generation == gen).unwrap_or(false);
+                    if matches {
+                        tokens.remove(&task_id);
+                    }
+                    matches
+                };
+                if is_current_gen {
+                    let cur_status = db.get_download(&task_id).ok().flatten().map(|r| r.status);
+                    if let Some(ref st) = cur_status {
+                        if st != "queued" && st != "completed" && st != "error" && st != "failed" {
+                            let _ = db.update_download_status(&task_id, "paused", 0, None);
+                        }
+                    }
+                    task_limiters.write().remove(&task_id);
                 }
-            }
+                is_done.store(true, Ordering::Release);
+                done_notify.notify_waiters();
+
+                if qm_clone.is_queue_running() {
+                    let qm = qm_clone.clone();
+                    tauri::async_runtime::spawn(async move {
+                        qm.process_next_in_queue().await;
+                    });
+                }
+
+                // Dynamic OTA unblock: Check if all active downloads and queue items have completed
+                if !qm_clone.has_active_downloads() {
+                    if let Some(app) = qm_clone.get_app_handle() {
+                        crate::tray::on_downloads_completed(&app);
+                    }
+                }
                 return;
             }
 
@@ -375,59 +447,95 @@ impl QueueManager {
                     max_conns,
                     limiter,
                     progress_tx,
-                    cancel_token,
+                    cancel_token.clone(),
                 )
                 .await;
 
-            let is_success = res.is_ok();
+            let is_success = res.is_ok() && !cancel_token.is_cancelled();
             if let Err(ref e) = res {
                 eprintln!("[Downex Queue] Download failed: {}", e);
                 let _ = db.update_download_status(&task_id, "failed", 0, Some(&e.to_string()));
             }
 
-            active_tokens.write().remove(&task_id);
+            let is_current_gen = {
+                let mut tokens = active_tokens.write();
+                let matches = tokens.get(&task_id).map(|h| h.generation == gen).unwrap_or(false);
+                if matches {
+                    tokens.remove(&task_id);
+                }
+                matches
+            };
+            if is_current_gen {
+                task_limiters.write().remove(&task_id);
+            }
+            is_done.store(true, Ordering::Release);
+            done_notify.notify_waiters();
 
             #[cfg(target_os = "windows")]
             prevent_windows_sleep(false);
 
-            // Simple 1-by-1 Queue trigger: automatically pick up next task in line
-            if qm_clone.is_queue_running() {
-                let qm = qm_clone.clone();
-                tauri::async_runtime::spawn(async move {
+            let qm = qm_clone.clone();
+            let t_id = task_id.clone();
+            tauri::async_runtime::spawn(async move {
+                // Simple 1-by-1 Queue trigger: automatically pick up next task BEFORE evaluating shutdown/tray idle
+                if qm.is_queue_running() {
                     qm.process_next_in_queue().await;
-                });
-            }
+                }
 
-            // Zero-Corruption Auto-Shutdown Evaluation (runs only after physical promotion & flush)
-            if is_success {
-                let qm = qm_clone.clone();
-                let t_id = task_id.clone();
-                let (final_dest, final_name) = match db.get_download(&t_id) {
-                    Ok(Some(updated)) => (updated.destination_path, updated.filename),
-                    _ => (dest_path_clone, filename_clone),
-                };
-                tauri::async_runtime::spawn(async move {
+                // Zero-Corruption Auto-Shutdown Evaluation (runs only after physical promotion & flush)
+                if is_success {
+                    let (final_dest, final_name) = match db.get_download(&t_id) {
+                        Ok(Some(updated)) => (updated.destination_path, updated.filename),
+                        _ => (dest_path_clone, filename_clone),
+                    };
                     qm.check_and_trigger_shutdown_if_armed(&t_id, &final_dest, &final_name, total_bytes_clone).await;
-                });
-            }
+                }
+                armed_shutdown_tasks.write().remove(&t_id);
+
+                if !qm.has_active_downloads() {
+                    if let Some(app) = qm.get_app_handle() {
+                        crate::tray::on_downloads_completed(&app);
+                    }
+                }
+            });
         });
     }
 
+    async fn wait_handle_done(handle: &ActiveTaskHandle, timeout: std::time::Duration) {
+        let notified = handle.done_notify.notified();
+        if !handle.is_done.load(Ordering::Acquire) {
+            let _ = tokio::time::timeout(timeout, notified).await;
+        }
+    }
+
+    async fn wait_for_active_task_stop(&self, id: &str) {
+        let handle_opt = {
+            let tokens = self.active_tokens.read();
+            tokens.get(id).cloned()
+        };
+        if let Some(handle) = handle_opt {
+            handle.cancel_token.cancel();
+            Self::wait_handle_done(&handle, std::time::Duration::from_secs(3)).await;
+        }
+    }
+
     pub fn pause_task(&self, id: &str) -> bool {
-        let mut tokens = self.active_tokens.write();
-        let was_active = if let Some(token) = tokens.remove(id) {
-            token.cancel();
-            true
-        } else {
-            false
+        let was_active = {
+            let tokens = self.active_tokens.read();
+            if let Some(handle) = tokens.get(id) {
+                handle.cancel_token.cancel();
+                true
+            } else {
+                false
+            }
         };
         let _ = self.db.update_download_status(id, "paused", 0, None);
         was_active || true
     }
 
     pub async fn resume_task(&self, id: &str) -> bool {
-        let downloads = self.db.get_all_downloads().unwrap_or_default();
-        if let Some(record) = downloads.into_iter().find(|d| d.id == id) {
+        self.wait_for_active_task_stop(id).await;
+        if let Ok(Some(record)) = self.db.get_download(id) {
             self.start_task(record);
             return true;
         }
@@ -435,12 +543,20 @@ impl QueueManager {
     }
 
     pub fn set_task_speed_limit(&self, task_id: &str, limit_bytes_per_sec: u64) -> bool {
+        let is_active = self.active_tokens.read().contains_key(task_id);
         let mut limiters = self.task_limiters.write();
-        let limiter = limiters
-            .entry(task_id.to_string())
-            .or_insert_with(|| Arc::new(crate::engine::TaskSpeedLimiter::new(limit_bytes_per_sec)));
-        limiter.set_limit(limit_bytes_per_sec);
-        true
+        if let Some(limiter) = limiters.get(task_id) {
+            limiter.set_limit(limit_bytes_per_sec);
+            true
+        } else if is_active {
+            limiters.insert(
+                task_id.to_string(),
+                Arc::new(crate::engine::TaskSpeedLimiter::new(limit_bytes_per_sec)),
+            );
+            true
+        } else {
+            false
+        }
     }
 
     pub fn get_task_speed_limit(&self, task_id: &str) -> u64 {
@@ -463,7 +579,7 @@ impl QueueManager {
         let downloads = self.db.get_all_downloads().unwrap_or_default();
         let paused_records: Vec<_> = downloads
             .into_iter()
-            .filter(|d| d.status == "paused" || d.status == "queued" || d.status == "failed")
+            .filter(|d| d.status == "paused" || d.status == "queued" || d.status == "failed" || d.status == "error")
             .collect();
 
         let count = paused_records.len();
@@ -473,32 +589,213 @@ impl QueueManager {
         count
     }
 
-    pub fn cancel_task(&self, id: &str, delete_file: bool) -> bool {
-        self.pause_task(id);
-        if let Ok(downloads) = self.db.get_all_downloads() {
-            if let Some(record) = downloads.into_iter().find(|d| d.id == id) {
-                if delete_file {
-                    let final_path = PathBuf::from(&record.destination_path);
-                    let staging_opt = record.staging_path.clone().map(PathBuf::from);
-                    let primary_unconfirmed =
-                        crate::engine::staging::derive_primary_unconfirmed_path(&final_path);
-                    // Robust background removal loop: handles cases where active download file handle
-                    // takes 20-100ms to close cleanly on Windows, deleting staging & target artifacts.
-                    std::thread::spawn(move || {
-                        if let Some(ref staging_p) = staging_opt {
-                            crate::engine::staging::robust_delete_path(staging_p);
-                        }
-                        if primary_unconfirmed.exists() {
-                            crate::engine::staging::robust_delete_path(&primary_unconfirmed);
-                        }
-                        if final_path.exists() {
-                            crate::engine::staging::robust_delete_path(&final_path);
-                        }
-                    });
+    fn mutate_pending_staging_deletes<F>(&self, mutator: F)
+    where
+        F: FnOnce(&mut Vec<String>),
+    {
+        let _guard = self.pending_deletes_lock.lock();
+        let mut list: Vec<String> = self
+            .db
+            .get_setting(PENDING_STAGING_DELETES_KEY)
+            .ok()
+            .flatten()
+            .and_then(|raw| serde_json::from_str::<Vec<String>>(&raw).ok())
+            .unwrap_or_default();
+        mutator(&mut list);
+
+        let mut seen = HashSet::new();
+        list.retain(|item| {
+            let trimmed = item.trim();
+            !trimmed.is_empty()
+                && seen.insert(crate::engine::staging::normalize_staging_key(Path::new(trimmed)))
+        });
+
+        if list.is_empty() {
+            let _ = self.db.delete_setting(PENDING_STAGING_DELETES_KEY);
+        } else if let Ok(json) = serde_json::to_string(&list) {
+            let _ = self.db.set_setting(PENDING_STAGING_DELETES_KEY, &json);
+        }
+    }
+
+    fn record_pending_staging_deletes(&self, paths: &[PathBuf]) {
+        if paths.is_empty() {
+            return;
+        }
+        self.mutate_pending_staging_deletes(|list| {
+            for p in paths {
+                let s = p.to_string_lossy().to_string();
+                if !s.trim().is_empty() {
+                    list.push(s);
+                }
+            }
+        });
+    }
+
+    fn clear_resolved_pending_deletes(&self, attempted: &[PathBuf], still_locked: &[PathBuf]) {
+        let locked_keys: HashSet<String> = still_locked
+            .iter()
+            .map(|p| crate::engine::staging::normalize_staging_key(p))
+            .collect();
+        let attempted_keys: HashSet<String> = attempted
+            .iter()
+            .map(|p| crate::engine::staging::normalize_staging_key(p))
+            .collect();
+
+        self.mutate_pending_staging_deletes(|list| {
+            list.retain(|entry| {
+                let key = crate::engine::staging::normalize_staging_key(Path::new(entry));
+                !attempted_keys.contains(&key) || locked_keys.contains(&key)
+            });
+        });
+    }
+
+    pub async fn cancel_task(&self, id: &str, delete_file: bool) -> bool {
+        let record_opt = self.db.get_download(id).ok().flatten();
+        let active_handle = {
+            let mut tokens = self.active_tokens.write();
+            tokens.remove(id)
+        };
+        if let Some(ref handle) = active_handle {
+            handle.cancel_token.cancel();
+        }
+        self.task_limiters.write().remove(id);
+        self.armed_shutdown_tasks.write().remove(id);
+
+        let mut cleanup_targets: Vec<PathBuf> = Vec::new();
+        if let Some(ref record) = record_opt {
+            let final_path = PathBuf::from(&record.destination_path);
+            let is_completed = record.status == "completed";
+            // Removing an incomplete/unconfirmed download terminates its lifecycle (DB row & segments are deleted),
+            // so its internal `unconfirmed.*.downex` staging files MUST ALWAYS be cleaned to prevent disk orphans.
+            if delete_file || !is_completed {
+                let candidates = crate::engine::staging::collect_task_staging_candidates(
+                    &final_path,
+                    record.staging_path.as_deref().map(Path::new),
+                    Some(&record.id),
+                );
+                cleanup_targets.extend(candidates);
+            }
+            if delete_file {
+                cleanup_targets.push(final_path);
+            }
+            self.record_pending_staging_deletes(&cleanup_targets);
+        }
+
+        let db_ok = self.db.delete_download(id).is_ok();
+
+        // Wait cleanly for active engine workers to drop PositionalWriter handles BEFORE removing disk files
+        if let Some(handle) = active_handle {
+            Self::wait_handle_done(&handle, std::time::Duration::from_secs(6)).await;
+        }
+
+        if !cleanup_targets.is_empty() {
+            let targets_for_delete = cleanup_targets.clone();
+            let remaining = tauri::async_runtime::spawn_blocking(move || {
+                let mut still_locked = Vec::new();
+                for path in targets_for_delete {
+                    if crate::engine::staging::is_staging_path_claimed(&path) {
+                        continue;
+                    }
+                    if crate::engine::staging::robust_delete_path_checked(&path).is_err()
+                        && crate::engine::staging::to_win_io_path(&path).exists()
+                    {
+                        still_locked.push(path);
+                    }
+                }
+                still_locked
+            })
+            .await
+            .unwrap_or_else(|_| cleanup_targets.clone());
+
+            self.clear_resolved_pending_deletes(&cleanup_targets, &remaining);
+        }
+
+        db_ok
+    }
+
+    /// Reconciles pending tombstone deletions and sweeps orphaned `unconfirmed.*.downex` staging files
+    /// that no longer belong to any tracked task in SQLite.
+    pub fn reconcile_orphaned_staging_files(&self) -> usize {
+        let downloads = self.db.get_all_downloads().unwrap_or_default();
+        let mut tracked_keys: HashSet<String> = HashSet::new();
+        let mut scan_dirs: Vec<PathBuf> = vec![PathBuf::from(self.get_default_download_directory())];
+
+        #[cfg(not(test))]
+        if let Ok(user_profile) = std::env::var("USERPROFILE") {
+            let user_downloads = PathBuf::from(user_profile).join("Downloads");
+            if user_downloads.is_dir() {
+                scan_dirs.push(user_downloads);
+            }
+        }
+
+        for record in &downloads {
+            let dest_path = PathBuf::from(&record.destination_path);
+            if let Some(parent) = dest_path.parent() {
+                scan_dirs.push(parent.to_path_buf());
+            }
+            if let Some(ref sp) = record.staging_path {
+                let staging_pb = PathBuf::from(sp);
+                if let Some(parent) = staging_pb.parent() {
+                    scan_dirs.push(parent.to_path_buf());
+                }
+            }
+
+            if record.status != "completed" {
+                let candidates = crate::engine::staging::collect_task_staging_candidates(
+                    &dest_path,
+                    record.staging_path.as_deref().map(Path::new),
+                    Some(&record.id),
+                );
+                for c in candidates {
+                    tracked_keys.insert(crate::engine::staging::normalize_staging_key(&c));
                 }
             }
         }
-        self.db.delete_download(id).is_ok()
+
+        let mut cleaned = 0usize;
+
+        // 1. Retry any pending tombstone deletions from interrupted/locked removals
+        let pending_paths: Vec<PathBuf> = {
+            let _guard = self.pending_deletes_lock.lock();
+            self.db
+                .get_setting(PENDING_STAGING_DELETES_KEY)
+                .ok()
+                .flatten()
+                .and_then(|raw| serde_json::from_str::<Vec<String>>(&raw).ok())
+                .unwrap_or_default()
+                .into_iter()
+                .map(PathBuf::from)
+                .collect()
+        };
+
+        if !pending_paths.is_empty() {
+            let mut still_locked = Vec::new();
+            for path in &pending_paths {
+                let key = crate::engine::staging::normalize_staging_key(path);
+                if tracked_keys.contains(&key) || crate::engine::staging::is_staging_path_claimed(path) {
+                    continue;
+                }
+                if crate::engine::staging::to_win_io_path(path).exists() {
+                    if crate::engine::staging::robust_delete_path_checked(path).is_ok() {
+                        cleaned += 1;
+                    } else if crate::engine::staging::to_win_io_path(path).exists() {
+                        still_locked.push(path.clone());
+                    }
+                }
+            }
+            self.clear_resolved_pending_deletes(&pending_paths, &still_locked);
+        }
+
+        // 2. Sweep untracked `unconfirmed.*.downex` orphans in download directories
+        let orphans = crate::engine::staging::find_orphaned_unconfirmed_in_dirs(&scan_dirs, &tracked_keys);
+        for orphan in orphans {
+            if crate::engine::staging::robust_delete_path_checked(&orphan).is_ok() {
+                eprintln!("[Downex Lifecycle] Swept orphaned staging file: {}", orphan.display());
+                cleaned += 1;
+            }
+        }
+
+        cleaned
     }
 
     pub async fn change_destination_and_retry(
@@ -506,7 +803,8 @@ impl QueueManager {
         task_id: &str,
         new_folder: &str,
     ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
-        self.pause_task(task_id);
+        self.wait_for_active_task_stop(task_id).await;
+        let _ = self.db.update_download_status(task_id, "paused", 0, None);
         let record = match self.db.get_download(task_id)? {
             Some(r) => r,
             None => return Ok(false),
@@ -688,7 +986,8 @@ impl QueueManager {
         // Ensure physical file on disk exists and matches expected length!
         if let Some(expected) = total_bytes {
             if expected > 0 {
-                match std::fs::metadata(destination_path) {
+                let io_dest = crate::engine::staging::to_win_io_path(Path::new(destination_path));
+                match std::fs::metadata(&io_dest) {
                     Ok(meta) => {
                         if meta.len() < expected {
                             eprintln!(
@@ -706,12 +1005,27 @@ impl QueueManager {
             }
         }
 
-        // 2. Multi-Download Protection:
-        // If there are other active downloads, do not shut down yet!
-        if self.has_active_downloads() {
-            eprintln!("[Downex Shutdown] Other downloads are still running. Postponing shutdown until all active downloads complete.");
+        // 2. Multi-Download Protection (serialized with queue dispatch lock):
+        // If there are other active or queued downloads, do not shut down yet!
+        let _dispatch_guard = self.queue_dispatch_lock.lock().await;
+        let has_remaining = self.has_active_downloads()
+            || self
+                .db
+                .get_all_downloads()
+                .map(|list| {
+                    list.iter().any(|d| {
+                        d.id != task_id
+                            && (d.status == "downloading"
+                                || d.status == "probing"
+                                || (self.is_queue_running() && d.status == "queued"))
+                    })
+                })
+                .unwrap_or(false);
+        if has_remaining {
+            eprintln!("[Downex Shutdown] Other downloads are still active or queued. Postponing shutdown until all active downloads complete.");
             return;
         }
+        drop(_dispatch_guard);
 
         // 3. Initiate the 30-Second Safety Countdown
         self.spawn_shutdown_countdown(30, task_id.to_string(), filename.to_string(), total_bytes).await;
@@ -901,5 +1215,171 @@ fn prevent_windows_sleep(enable: bool) {
         } else {
             SetThreadExecutionState(ES_CONTINUOUS);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+    use uuid::Uuid;
+
+    fn make_test_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("downex_queue_test_{}_{}", name, Uuid::new_v4()));
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn build_record(id: &str, url: &str, dest: &Path, staging: &Path, status: &str, total: u64) -> DownloadRecord {
+        let now = chrono::Utc::now().timestamp_millis();
+        DownloadRecord {
+            id: id.to_string(),
+            url: url.to_string(),
+            filename: dest.file_name().unwrap().to_string_lossy().to_string(),
+            destination_path: dest.to_string_lossy().to_string(),
+            total_bytes: Some(total),
+            downloaded_bytes: 0,
+            status: status.to_string(),
+            etag: None,
+            last_modified: None,
+            headers_json: None,
+            queue_id: "default".to_string(),
+            speed_bytes_sec: 0,
+            error_message: None,
+            checksum: None,
+            media_type: None,
+            supports_ranges: true,
+            created_at: now,
+            updated_at: now,
+            speed_limit_mbps: None,
+            staging_path: Some(staging.to_string_lossy().to_string()),
+        }
+    }
+
+    #[test]
+    fn test_cancel_incomplete_task_cleans_unconfirmed_even_when_delete_file_false() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let root = make_test_dir("cancel_incomplete");
+            let db = DatabaseManager::new(&root.join("test.db")).unwrap();
+            let (tx, _rx) = mpsc::channel(32);
+            let qm = QueueManager::new(reqwest::Client::new(), db.clone(), tx);
+
+            // 1. Paused/incomplete task with staging file -> cancel_task(id, false) must still delete unconfirmed.*.downex
+            let paused_final = root.join("The.Mosquito.Bowl.2026.mkv");
+            let paused_staging = crate::engine::staging::derive_primary_unconfirmed_path(&paused_final);
+            fs::write(&paused_staging, b"partial-bytes-should-be-cleaned").unwrap();
+            let paused_id = format!("task-paused-{}", Uuid::new_v4());
+            let paused_rec = build_record(&paused_id, "http://127.0.0.1/movie.mkv", &paused_final, &paused_staging, "paused", 1024);
+            db.insert_download(&paused_rec).unwrap();
+
+            assert!(qm.cancel_task(&paused_id, false).await);
+            assert!(!paused_staging.exists(), "Unconfirmed staging file must NOT remain orphaned after deleting paused task");
+            assert!(db.get_download(&paused_id).unwrap().is_none());
+            assert!(db.get_setting(PENDING_STAGING_DELETES_KEY).unwrap().is_none());
+
+            // 2. Completed task with delete_file=false -> Safe Mode must keep the finished file on disk
+            let done_final = root.join("Completed.Movie.mkv");
+            let done_staging = crate::engine::staging::derive_primary_unconfirmed_path(&done_final);
+            fs::write(&done_final, b"finished-movie-bytes").unwrap();
+            let done_id = format!("task-done-{}", Uuid::new_v4());
+            let mut done_rec = build_record(&done_id, "http://127.0.0.1/done.mkv", &done_final, &done_staging, "completed", 20);
+            done_rec.staging_path = None;
+            db.insert_download(&done_rec).unwrap();
+
+            assert!(qm.cancel_task(&done_id, false).await);
+            assert!(done_final.exists(), "Completed file must remain intact in Safe Mode");
+            assert!(db.get_download(&done_id).unwrap().is_none());
+
+            crate::engine::staging::robust_delete_path(&root);
+        });
+    }
+
+    #[test]
+    fn test_pause_then_immediate_cancel_active_task_releases_handles_without_orphan() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let root = make_test_dir("pause_then_cancel");
+            let db = DatabaseManager::new(&root.join("test.db")).unwrap();
+            let (tx, _rx) = mpsc::channel(64);
+            let qm = QueueManager::new(reqwest::Client::new(), db.clone(), tx);
+
+            // Spawn a slow streaming HTTP server so workers actively hold PositionalWriter when paused & deleted
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let addr = listener.local_addr().unwrap();
+            tokio::spawn(async move {
+                while let Ok((mut socket, _)) = listener.accept().await {
+                    tokio::spawn(async move {
+                        let mut buf = [0u8; 1024];
+                        let _ = socket.read(&mut buf).await;
+                        let headers = "HTTP/1.1 206 Partial Content\r\nContent-Length: 1048576\r\nContent-Range: bytes 0-1048575/1048576\r\nAccept-Ranges: bytes\r\n\r\n";
+                        let _ = socket.write_all(headers.as_bytes()).await;
+                        let chunk = vec![b'D'; 4096];
+                        for _ in 0..32 {
+                            if socket.write_all(&chunk).await.is_err() {
+                                break;
+                            }
+                            tokio::time::sleep(std::time::Duration::from_millis(80)).await;
+                        }
+                    });
+                }
+            });
+
+            let url = format!("http://127.0.0.1:{}/stream.bin", addr.port());
+            let final_dst = root.join("Stream.2026.bin");
+            let staging_dst = crate::engine::staging::derive_primary_unconfirmed_path(&final_dst);
+            let task_id = format!("task-race-{}", Uuid::new_v4());
+            let rec = build_record(&task_id, &url, &final_dst, &staging_dst, "downloading", 1_048_576);
+            db.insert_download(&rec).unwrap();
+
+            qm.start_task(rec);
+            tokio::time::sleep(std::time::Duration::from_millis(180)).await;
+            assert!(staging_dst.exists(), "Active download should create unconfirmed staging file");
+
+            // Pause ("stop") and IMMEDIATELY delete while workers are unwinding
+            assert!(qm.pause_task(&task_id));
+            assert!(qm.cancel_task(&task_id, true).await);
+
+            assert!(!staging_dst.exists(), "Stopping then immediately deleting must never leave orphaned unconfirmed file");
+            assert!(!final_dst.exists());
+            assert!(db.get_download(&task_id).unwrap().is_none());
+            assert!(db.get_setting(PENDING_STAGING_DELETES_KEY).unwrap().is_none());
+
+            crate::engine::staging::robust_delete_path(&root);
+        });
+    }
+
+    #[test]
+    fn test_reconcile_orphaned_staging_sweeps_orphans_and_preserves_paused_tasks() {
+        let root = make_test_dir("reconcile_orphans");
+        let db = DatabaseManager::new(&root.join("test.db")).unwrap();
+        let _ = db.set_setting("default_download_dir", &root.to_string_lossy());
+        let (tx, _rx) = mpsc::channel(16);
+        let qm = QueueManager::new(reqwest::Client::new(), db.clone(), tx);
+
+        // Tracked paused task's staging file -> MUST BE PRESERVED
+        let paused_final = root.join("ValidPaused.mkv");
+        let paused_staging = crate::engine::staging::derive_primary_unconfirmed_path(&paused_final);
+        fs::write(&paused_staging, b"valid-paused-partial").unwrap();
+        let paused_rec = build_record("task-valid-paused", "http://127.0.0.1/valid.mkv", &paused_final, &paused_staging, "paused", 2048);
+        db.insert_download(&paused_rec).unwrap();
+
+        // Untracked orphan `unconfirmed.*.downex` file -> MUST BE SWEPT
+        let orphan_file = root.join("unconfirmed.DeletedOrphan.2026.mkv.downex");
+        fs::write(&orphan_file, b"orphaned-bytes").unwrap();
+
+        // Unrelated normal file -> MUST NEVER BE TOUCHED
+        let normal_file = root.join("MyNotes.txt");
+        fs::write(&normal_file, b"keep-me").unwrap();
+
+        let swept = qm.reconcile_orphaned_staging_files();
+        assert_eq!(swept, 1);
+        assert!(!orphan_file.exists(), "Orphan unconfirmed file must be swept cleanly");
+        assert!(paused_staging.exists(), "Valid paused download staging file must remain intact");
+        assert!(normal_file.exists(), "Non-staging user files must never be touched");
+
+        crate::engine::staging::robust_delete_path(&root);
     }
 }

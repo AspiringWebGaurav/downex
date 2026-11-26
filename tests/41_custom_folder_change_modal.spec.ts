@@ -25,7 +25,7 @@ test.describe('Downex — Custom Folder Change Modal (1:1 Unified Industrial UI)
     await newDownloadBtn.click();
 
     // Verify New Download Modal is visible
-    const newModal = page.locator('div.w-\\[450px\\]').first();
+    const newModal = page.locator('div.w-\\[540px\\]').first();
     await expect(newModal).toBeVisible();
 
     // Click BROWSE button inside New Download Modal

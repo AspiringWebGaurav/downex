@@ -219,8 +219,9 @@ pub fn check_is_hardware_banned(db: Option<&crate::db::DatabaseManager>) -> bool
         }
     }
 
-    // Self-Healing: If any single anchor has the ban, re-assert and self-heal all other anchors!
-    if is_banned {
+    // Self-Healing: Only re-sync anchors once per boot when ban is detected
+    static SELF_HEALED_THIS_BOOT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if is_banned && !SELF_HEALED_THIS_BOOT.swap(true, std::sync::atomic::Ordering::Relaxed) {
         enforce_local_hardware_ban(&ban_reason, db);
     }
 

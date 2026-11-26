@@ -39,6 +39,8 @@ CREATE TABLE IF NOT EXISTS queues (
     stop_time TEXT
 );
 
+CREATE INDEX IF NOT EXISTS idx_downloads_status_created ON downloads(status, created_at DESC);
+
 CREATE TABLE IF NOT EXISTS app_settings (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL,
@@ -123,6 +125,13 @@ pub const MIGRATIONS: &[Migration] = &[
         sql: r#"
         INSERT OR IGNORE INTO app_settings (key, value, updated_at) VALUES ('autostart_enabled', 'true', 0);
         INSERT OR IGNORE INTO app_settings (key, value, updated_at) VALUES ('close_to_tray', 'true', 0);
+        "#,
+    },
+    Migration {
+        version: 9,
+        description: "Add composite status+created_at index on downloads for fast aggregate telemetry",
+        sql: r#"
+        CREATE INDEX IF NOT EXISTS idx_downloads_status_created ON downloads(status, created_at DESC);
         "#,
     },
 ];

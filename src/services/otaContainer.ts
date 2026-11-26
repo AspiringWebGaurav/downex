@@ -33,8 +33,8 @@ export interface UnpackedContainer {
 export async function unpackOtaPayload(rawBuffer: ArrayBuffer): Promise<UnpackedContainer> {
   const bytes = new Uint8Array(rawBuffer);
 
-  // 1. Direct Windows PE executable check (MZ header fallback)
-  if (bytes.length >= 2 && bytes[0] === 0x4D && bytes[1] === 0x5A) {
+  // 1. Direct Windows PE executable fallback allowed strictly in dev/test builds
+  if (import.meta.env.DEV && bytes.length >= 2 && bytes[0] === 0x4D && bytes[1] === 0x5A) {
     return {
       version: 'raw',
       payload: bytes,

@@ -3,13 +3,15 @@ import { updateService } from '../services/updateService';
 import { 
   injectMockDownloadItem, 
   clearMockDownloads, 
-  cancelDownload,
   notifyDownloadsCompletedNative,
+  showDownloadCompleteDialog,
+  type DownloadCompletePayload,
 } from '../services/tauriService';
 import { useDownloadStore } from '../stores/downloadStore';
 import { useAppVersionStore } from '../stores/appVersionStore';
+import { useMarqueeNoticeStore } from '../stores/marqueeNoticeStore';
 import { DownloadItem } from '../types/download';
-import { isDevEnvironment } from '../utils/reloadGuard';
+import { ENV_MODE_CHANGED_EVENT, installDevEnvOverrideWatcher, isDevEnvironment } from '../utils/reloadGuard';
 import { 
   FlaskConical,
   Play, 
@@ -63,8 +65,23 @@ export const DevUpdateSimulator: React.FC = () => {
   const [isLiveTickerActive, setIsLiveTickerActive] = useState(true);
   const currentVersion = useAppVersionStore((state) => state.currentVersion);
   const otaStatus = useAppVersionStore((state) => state.status);
+  const notices = useMarqueeNoticeStore((state) => state.notices);
+  const [isDark, setIsDark] = useState<boolean>(() => {
+    if (typeof document === 'undefined') return false;
+    return document.documentElement.classList.contains('dark');
+  });
   const [isResettingBase, setIsResettingBase] = useState(false);
   const [actionFeedback, setActionFeedback] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (typeof document === 'undefined') return;
+    const root = document.documentElement;
+    const syncTheme = () => setIsDark(root.classList.contains('dark'));
+    syncTheme();
+    const observer = new MutationObserver(syncTheme);
+    observer.observe(root, { attributes: true, attributeFilter: ['class'] });
+    return () => observer.disconnect();
+  }, []);
 
   const showFeedback = (msg: string, duration = 3200) => {
     setActionFeedback(msg);
@@ -73,21 +90,58 @@ export const DevUpdateSimulator: React.FC = () => {
     }, duration);
   };
 
+  // Dynamically react to Dev/Production environment changes and localStorage flag
+  useEffect(() => {
+    if (!isBuildDev) return;
+    installDevEnvOverrideWatcher();
+
+    const syncDevState = () => {
+      let enabled = true;
+      try {
+        enabled = localStorage.getItem('downex_dev_qa_enabled') !== 'false';
+      } catch {}
+      const active = isDevEnvironment() && enabled;
+      setIsDev(active);
+      if (!active) {
+        setIsOpen(false);
+      }
+    };
+
+    const handleStorage = (e: StorageEvent) => {
+      if (e.key === null || e.key === 'downex_dev_qa_enabled') {
+        syncDevState();
+      }
+    };
+
+    syncDevState();
+    window.addEventListener(ENV_MODE_CHANGED_EVENT, syncDevState);
+    window.addEventListener('storage', handleStorage);
+    return () => {
+      window.removeEventListener(ENV_MODE_CHANGED_EVENT, syncDevState);
+      window.removeEventListener('storage', handleStorage);
+    };
+  }, [isBuildDev]);
+
   // Keyboard shortcut: Ctrl + Shift + D toggles QA panel anywhere (strictly dev-only)
   useEffect(() => {
-    if (!isBuildDev || !isDev) return;
+    if (!isBuildDev || !isDev || !isDevEnvironment()) return;
 
     const handleKeyDown = (e: KeyboardEvent) => {
+      if (!isDevEnvironment()) return;
       if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'd') {
         e.preventDefault();
         setIsOpen((prev) => !prev);
       }
     };
     window.addEventListener('keydown', handleKeyDown);
-    (window as any).__DOWNEX_TOGGLE_QA__ = () => setIsOpen((prev) => !prev);
+    (window as any).__DOWNEX_TOGGLE_QA__ = () => {
+      if (isDevEnvironment()) setIsOpen((prev) => !prev);
+    };
     (window as any).__DOWNEX_ENABLE_QA__ = (enabled = true) => {
-      localStorage.setItem('downex_dev_qa_enabled', String(enabled));
-      setIsDev(enabled);
+      try {
+        localStorage.setItem('downex_dev_qa_enabled', String(enabled));
+      } catch {}
+      setIsDev(Boolean(enabled) && isDevEnvironment());
     };
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
@@ -106,6 +160,8 @@ export const DevUpdateSimulator: React.FC = () => {
         (i) => i.id.startsWith('mock-') && i.status === 'downloading'
       );
       if (!hasActiveMock) return;
+
+      const completedPayloads: DownloadCompletePayload[] = [];
 
       useDownloadStore.setState((state) => {
         let changed = false;
@@ -132,6 +188,16 @@ export const DevUpdateSimulator: React.FC = () => {
           addedBytesTotal += addedBytes;
           const newDownloaded = Math.min(total, item.downloaded_bytes + addedBytes);
           const isComplete = newDownloaded >= total;
+          if (isComplete) {
+            completedPayloads.push({
+              id: item.id,
+              url: item.url || `https://cdn.example.org/${encodeURIComponent(item.filename)}`,
+              filename: item.filename,
+              destination_path: item.destination_path,
+              total_bytes: total,
+              downloaded_bytes: newDownloaded,
+            });
+          }
 
           const remainingBytes = Math.max(0, total - newDownloaded);
           const etaSec = isComplete
@@ -181,12 +247,18 @@ export const DevUpdateSimulator: React.FC = () => {
 
         return state;
       });
+
+      if (completedPayloads.length > 0) {
+        for (const payload of completedPayloads) {
+          showDownloadCompleteDialog(payload).catch(() => {});
+        }
+      }
     }, 500);
 
     return () => clearInterval(interval);
   }, [isDev, isLiveTickerActive]);
 
-  if (!isDev) {
+  if (!isBuildDev || !isDev || !isDevEnvironment()) {
     return null;
   }
 
@@ -433,14 +505,11 @@ export const DevUpdateSimulator: React.FC = () => {
   const handleClearAll = async () => {
     clearMockDownloads();
     const allItems = useDownloadStore.getState().items;
-    useDownloadStore.setState({ items: [], totalSpeed: 0, speedHistory: Array(20).fill(0) });
-    for (const item of allItems) {
-      if (!item.id.startsWith('mock-')) {
-        try {
-          await cancelDownload(item.id, false);
-        } catch {}
-      }
+    const realIds = allItems.filter((item) => !item.id.startsWith('mock-')).map((item) => item.id);
+    if (realIds.length > 0) {
+      await useDownloadStore.getState().removeAllDownloads(realIds, false);
     }
+    useDownloadStore.setState({ items: [], totalSpeed: 0, speedHistory: Array(20).fill(0), activeQueueTaskId: null });
     showFeedback('Cleared all mock and database downloads');
   };
 
@@ -476,6 +545,37 @@ export const DevUpdateSimulator: React.FC = () => {
     showFeedback('Opened Browser Extension standalone modal');
   };
 
+  const openCompleteModalTest = async () => {
+    const items = useDownloadStore.getState().items;
+    const candidate =
+      items.find((i) => i.status === 'completed' && i.url) ||
+      items.find((i) => i.url) ||
+      null;
+    const payload: DownloadCompletePayload = candidate
+      ? {
+          id: candidate.id,
+          url: candidate.url,
+          filename: candidate.filename,
+          destination_path: candidate.destination_path,
+          total_bytes: candidate.total_bytes || candidate.downloaded_bytes || 14745600,
+          downloaded_bytes: candidate.downloaded_bytes || candidate.total_bytes || 14745600,
+        }
+      : {
+          id: 'mock-complete-modal',
+          url: 'https://releases.ubuntu.com/24.04/ubuntu-24.04-desktop-amd64.iso',
+          filename: 'ubuntu-24.04-desktop-amd64.iso',
+          destination_path: 'C:\\Downloads\\Downex\\ubuntu-24.04-desktop-amd64.iso',
+          total_bytes: 6144000000,
+          downloaded_bytes: 6144000000,
+        };
+    try {
+      await showDownloadCompleteDialog(payload);
+      showFeedback(`Opened Complete Modal (Open File) for ${payload.filename}`);
+    } catch (e: any) {
+      showFeedback('Complete modal error: ' + (e?.message || String(e)));
+    }
+  };
+
   // --- Handlers: Base App Reset ---
   const handleResetToBaseApp = async () => {
     setIsResettingBase(true);
@@ -492,18 +592,26 @@ export const DevUpdateSimulator: React.FC = () => {
 
   // --- Handlers: Theme Switcher ---
   const toggleTheme = () => {
-    const isDark = document.documentElement.classList.contains('dark');
-    if (isDark) {
-      document.documentElement.classList.remove('dark');
-      localStorage.setItem('downex_theme', 'light');
+    const nextDark = !document.documentElement.classList.contains('dark');
+    const syncEvent = new CustomEvent('downex-set-theme', {
+      detail: { dark: nextDark },
+      cancelable: true,
+    });
+    window.dispatchEvent(syncEvent);
+
+    if (!syncEvent.defaultPrevented) {
+      if (nextDark) {
+        document.documentElement.classList.add('dark');
+        localStorage.setItem('downex_theme', 'dark');
+      } else {
+        document.documentElement.classList.remove('dark');
+        localStorage.setItem('downex_theme', 'light');
+      }
       localStorage.setItem('downex_theme_explicit', 'true');
-      showFeedback('Switched to Light Theme');
-    } else {
-      document.documentElement.classList.add('dark');
-      localStorage.setItem('downex_theme', 'dark');
-      localStorage.setItem('downex_theme_explicit', 'true');
-      showFeedback('Switched to Dark Theme');
     }
+
+    setIsDark(nextDark);
+    showFeedback(nextDark ? 'Switched to Dark Theme' : 'Switched to Light Theme');
   };
 
   // --- Handlers: OTA Flow Controls ---
@@ -523,11 +631,14 @@ export const DevUpdateSimulator: React.FC = () => {
   };
 
   return (
-    <div className="fixed bottom-2 right-2.5 z-50 select-none font-sans flex flex-col items-end">
+    <div
+      className="fixed bottom-2 right-2.5 z-50 select-none font-sans flex flex-col items-end"
+      data-dev-qa-theme={isDark ? 'dark' : 'light'}
+    >
       {!isOpen ? (
         isDotMode ? (
           <div className="relative group flex items-center">
-            <div className="absolute right-7 pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity bg-zinc-900/90 dark:bg-zinc-100/90 text-white dark:text-zinc-900 text-[10px] font-mono-tabular px-2 py-0.5 rounded shadow whitespace-nowrap">
+            <div className="absolute right-7 pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity duration-150 bg-white dark:bg-zinc-900 text-zinc-800 dark:text-zinc-100 border border-zinc-200 dark:border-zinc-700 text-[10px] font-mono-tabular px-2 py-0.5 rounded shadow-sm whitespace-nowrap">
               Dev QA (Click to open &bull; Right click for pill)
             </div>
             <button
@@ -539,7 +650,7 @@ export const DevUpdateSimulator: React.FC = () => {
                 try { localStorage.setItem('downex_dev_qa_dot_mode', 'false'); } catch {}
                 showFeedback('Restored Dev QA Pill');
               }}
-              className="w-5 h-5 rounded-full bg-zinc-900/90 dark:bg-zinc-100/90 border border-zinc-700/80 dark:border-zinc-300/80 shadow-md flex items-center justify-center cursor-pointer hover:scale-125 active:scale-95 transition-all opacity-80 hover:opacity-100"
+              className="w-5 h-5 rounded-full bg-white dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 shadow-md flex items-center justify-center cursor-pointer hover:scale-125 active:scale-95 transition-transform duration-150"
               title="Dev QA (Click to open, right-click to restore pill)"
               data-testid="dev-qa-dot"
             >
@@ -547,15 +658,15 @@ export const DevUpdateSimulator: React.FC = () => {
             </button>
           </div>
         ) : (
-          <div className="flex items-center rounded-lg bg-zinc-900/90 dark:bg-zinc-100/90 text-white dark:text-zinc-900 text-xs font-semibold shadow-lg backdrop-blur-md border border-zinc-700/60 dark:border-zinc-300/60 opacity-90 hover:opacity-100 transition-all overflow-hidden group">
+          <div className="flex items-center rounded-lg bg-white dark:bg-zinc-900 text-zinc-800 dark:text-zinc-100 text-xs font-semibold shadow-md border border-zinc-200 dark:border-zinc-700 hover:border-zinc-300 dark:hover:border-zinc-600 transition-colors duration-150 overflow-hidden group">
             <button
               type="button"
               onClick={() => setIsOpen(true)}
-              className="flex items-center gap-1.5 pl-3 pr-2 py-1.5 hover:text-emerald-400 dark:hover:text-emerald-600 transition-colors cursor-pointer"
+              className="flex items-center gap-1.5 pl-3 pr-2 py-1.5 hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors cursor-pointer"
               title="Open Dev QA & Download Tester (Ctrl+Shift+D)"
               data-testid="dev-qa-pill-trigger"
             >
-              <FlaskConical className="w-3.5 h-3.5 text-emerald-400 dark:text-emerald-600 animate-pulse" />
+              <FlaskConical className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 animate-pulse" />
               <span>Dev QA</span>
               <ChevronUp className="w-3 h-3 opacity-70" />
             </button>
@@ -567,16 +678,16 @@ export const DevUpdateSimulator: React.FC = () => {
                 try { localStorage.setItem('downex_dev_qa_dot_mode', 'true'); } catch {}
                 showFeedback('Dev QA hidden as dot (Click dot to open)');
               }}
-              className="p-1.5 pr-2.5 pl-1.5 text-zinc-400 hover:text-emerald-400 dark:hover:text-emerald-600 transition-colors cursor-pointer border-l border-zinc-700/50 dark:border-zinc-300/50"
+              className="p-1.5 pr-2.5 pl-1.5 text-zinc-400 hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors cursor-pointer border-l border-zinc-200 dark:border-zinc-700"
               title="Hide Dev QA as a tiny dot"
               data-testid="dev-qa-hide-as-dot"
             >
-              <span className="w-2 h-2 rounded-full bg-emerald-500/80 hover:bg-emerald-400 block shadow-xs" />
+              <span className="w-2 h-2 rounded-full bg-emerald-500/80 hover:bg-emerald-500 block shadow-xs" />
             </button>
           </div>
         )
       ) : (
-        <div className="w-[450px] max-w-[95vw] rounded-2xl bg-white/95 dark:bg-zinc-900/95 backdrop-blur-md border border-zinc-200/90 dark:border-zinc-800/90 p-3 shadow-2xl flex flex-col gap-2 text-zinc-900 dark:text-zinc-100 animate-in fade-in slide-in-from-bottom-2 duration-150 overflow-hidden">
+        <div className="w-[450px] max-w-[95vw] rounded-2xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 p-3 shadow-2xl flex flex-col gap-2 text-zinc-900 dark:text-zinc-100 overflow-hidden">
           {/* Header */}
           <div className="flex items-center justify-between pb-2 border-b border-zinc-100 dark:border-zinc-800">
             <div className="flex items-center gap-1.5">
@@ -629,7 +740,7 @@ export const DevUpdateSimulator: React.FC = () => {
           <div className="grid grid-cols-4 gap-1 p-0.5 bg-zinc-100 dark:bg-zinc-800/70 rounded-lg text-[10px] font-semibold">
             <button
               onClick={() => setActiveTab('downloads')}
-              className={`py-1 rounded-md transition-all cursor-pointer ${
+              className={`py-1 rounded-md transition-colors duration-100 cursor-pointer ${
                 activeTab === 'downloads'
                   ? 'bg-white dark:bg-zinc-900 text-emerald-600 dark:text-emerald-400 shadow-2xs'
                   : 'text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-200'
@@ -639,7 +750,7 @@ export const DevUpdateSimulator: React.FC = () => {
             </button>
             <button
               onClick={() => setActiveTab('modals')}
-              className={`py-1 rounded-md transition-all cursor-pointer ${
+              className={`py-1 rounded-md transition-colors duration-100 cursor-pointer ${
                 activeTab === 'modals'
                   ? 'bg-white dark:bg-zinc-900 text-emerald-600 dark:text-emerald-400 shadow-2xs'
                   : 'text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-200'
@@ -649,7 +760,7 @@ export const DevUpdateSimulator: React.FC = () => {
             </button>
             <button
               onClick={() => setActiveTab('ota')}
-              className={`py-1 rounded-md transition-all cursor-pointer ${
+              className={`py-1 rounded-md transition-colors duration-100 cursor-pointer ${
                 activeTab === 'ota'
                   ? 'bg-white dark:bg-zinc-900 text-indigo-600 dark:text-indigo-400 shadow-2xs'
                   : 'text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-200'
@@ -659,7 +770,7 @@ export const DevUpdateSimulator: React.FC = () => {
             </button>
             <button
               onClick={() => setActiveTab('system')}
-              className={`py-1 rounded-md transition-all cursor-pointer ${
+              className={`py-1 rounded-md transition-colors duration-100 cursor-pointer ${
                 activeTab === 'system'
                   ? 'bg-white dark:bg-zinc-900 text-rose-600 dark:text-rose-400 shadow-2xs'
                   : 'text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-200'
@@ -671,7 +782,7 @@ export const DevUpdateSimulator: React.FC = () => {
 
           {/* Feedback Bar */}
           {actionFeedback && (
-            <div className="px-2.5 py-1.5 rounded-lg bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-500/30 text-[10.5px] text-emerald-800 dark:text-emerald-300 font-medium flex items-center gap-1.5 animate-in fade-in duration-100">
+            <div className="px-2.5 py-1.5 rounded-lg bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-500/30 text-[10.5px] text-emerald-800 dark:text-emerald-300 font-medium flex items-center gap-1.5">
               <CheckCircle2 className="w-3.5 h-3.5 shrink-0 text-emerald-600 dark:text-emerald-400" />
               <span className="truncate">{actionFeedback}</span>
             </div>
@@ -732,10 +843,10 @@ export const DevUpdateSimulator: React.FC = () => {
 
                   <button
                     onClick={() => startSpeedTestDownload(200)}
-                    className="h-7 flex items-center justify-center gap-1 px-1.5 rounded-md bg-zinc-800 hover:bg-zinc-700 dark:bg-zinc-800 dark:hover:bg-zinc-700 text-white text-[10px] font-mono-tabular font-medium transition-colors cursor-pointer"
+                    className="h-7 flex items-center justify-center gap-1 px-1.5 rounded-md bg-white hover:bg-zinc-100 dark:bg-zinc-800/80 dark:hover:bg-zinc-800 text-zinc-800 dark:text-zinc-100 border border-zinc-200 dark:border-zinc-700 text-[10px] font-mono-tabular font-medium transition-colors cursor-pointer"
                     title="Active download running at 200 Mbps (10.5 GB)"
                   >
-                    <Zap className="w-2.5 h-2.5 text-emerald-400 shrink-0" />
+                    <Zap className="w-2.5 h-2.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
                     <span className="truncate">200 Mbps Plan</span>
                   </button>
                 </div>
@@ -743,25 +854,25 @@ export const DevUpdateSimulator: React.FC = () => {
                 <div className="grid grid-cols-5 gap-1">
                   <button
                     onClick={() => startSpeedTestDownload(500)}
-                    className="col-span-2 h-7 flex items-center justify-center gap-1 px-1.5 rounded-md bg-zinc-800 hover:bg-zinc-700 dark:bg-zinc-800 dark:hover:bg-zinc-700 text-white text-[10px] font-mono-tabular font-medium transition-colors cursor-pointer"
+                    className="col-span-2 h-7 flex items-center justify-center gap-1 px-1.5 rounded-md bg-white hover:bg-zinc-100 dark:bg-zinc-800/80 dark:hover:bg-zinc-800 text-zinc-800 dark:text-zinc-100 border border-zinc-200 dark:border-zinc-700 text-[10px] font-mono-tabular font-medium transition-colors cursor-pointer"
                     title="Active download running at 500 Mbps (25 GB)"
                   >
-                    <Zap className="w-2.5 h-2.5 text-indigo-400 shrink-0" />
+                    <Zap className="w-2.5 h-2.5 text-indigo-600 dark:text-indigo-400 shrink-0" />
                     <span className="truncate">500 Mbps Fiber</span>
                   </button>
 
                   <button
                     onClick={() => startSpeedTestDownload(1000)}
-                    className="col-span-3 h-7 flex items-center justify-center gap-1 px-1.5 rounded-md bg-zinc-900 hover:bg-black dark:bg-zinc-800 dark:hover:bg-zinc-700 text-white text-[10px] font-mono-tabular font-medium transition-colors cursor-pointer"
+                    className="col-span-3 h-7 flex items-center justify-center gap-1 px-1.5 rounded-md bg-white hover:bg-zinc-100 dark:bg-zinc-800/80 dark:hover:bg-zinc-800 text-zinc-800 dark:text-zinc-100 border border-zinc-200 dark:border-zinc-700 text-[10px] font-mono-tabular font-medium transition-colors cursor-pointer"
                     title="Active Gigabit download running at 1000 Mbps (50 GB)"
                   >
-                    <Zap className="w-2.5 h-2.5 text-amber-400 shrink-0" />
+                    <Zap className="w-2.5 h-2.5 text-amber-600 dark:text-amber-400 shrink-0" />
                     <span className="truncate">▶ 1 Gbps Ultra Streaming (50 GB)</span>
                   </button>
                 </div>
 
                 <p className="text-[9.5px] text-zinc-500 dark:text-zinc-400 px-0.5 leading-tight font-mono-tabular">
-                  💡 <strong>Tip:</strong> Test inline Speed Limiter (50M, 100M, 150M, 180M, 200M or Custom) for live throttling.
+                  💡 <strong>Tip:</strong> Inline Speed Limiter supports 50Mb–200Mb (incl. 190Mb), Custom &amp; Tab restore.
                 </p>
               </div>
 
@@ -909,9 +1020,19 @@ export const DevUpdateSimulator: React.FC = () => {
                 </button>
 
                 <button
+                  onClick={openCompleteModalTest}
+                  className="col-span-2 flex items-center justify-center gap-1.5 px-2 py-2 rounded-lg bg-emerald-50 hover:bg-emerald-100 dark:bg-emerald-950/40 dark:hover:bg-emerald-900/50 border border-emerald-200/80 dark:border-emerald-800/60 text-emerald-800 dark:text-emerald-200 text-[11px] font-medium transition-colors cursor-pointer"
+                  title="Open in-app Download Complete ('Open File') modal matching New Download UI"
+                  data-testid="dev-qa-open-complete-modal"
+                >
+                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+                  <span>Complete Modal (Open File)</span>
+                </button>
+
+                <button
                   onClick={async () => {
                     try {
-                      const theme = localStorage.getItem('downex_theme') || (typeof document !== 'undefined' && document.documentElement.classList.contains('dark') ? 'dark' : 'light');
+                      const theme = isDark ? 'dark' : 'light';
                       const { previewExternalUpdater } = await import('../services/tauriService');
                       await previewExternalUpdater(theme);
                       showFeedback('Spawning native Win32 floating updater preview on desktop...');
@@ -919,12 +1040,49 @@ export const DevUpdateSimulator: React.FC = () => {
                       showFeedback('Preview error: ' + (e?.message || String(e)));
                     }
                   }}
-                  className="col-span-2 flex items-center justify-center gap-1.5 px-2 py-2 rounded-lg bg-zinc-100 hover:bg-zinc-200 dark:bg-zinc-800 dark:hover:bg-zinc-700 text-zinc-800 dark:text-zinc-200 text-[11px] font-medium transition-colors cursor-pointer"
+                  className="flex items-center justify-center gap-1.5 px-2 py-2 rounded-lg bg-zinc-100 hover:bg-zinc-200 dark:bg-zinc-800 dark:hover:bg-zinc-700 text-zinc-800 dark:text-zinc-200 text-[11px] font-medium transition-colors cursor-pointer"
                   title="Preview the 440x220 Win32 floating updater card ('Updating Apps & Services')"
                   data-testid="dev-qa-preview-middle-card-modals"
                 >
-                  <RotateCcw className="w-3.5 h-3.5 text-purple-500" />
-                  <span>Win32 Updater Floating Card</span>
+                  <RotateCcw className="w-3.5 h-3.5 text-purple-500 shrink-0" />
+                  <span className="truncate">Win32 Updater Card</span>
+                </button>
+
+                <button
+                  onClick={() => {
+                    const hasMockNotice = notices.some((n) => n.id.startsWith('dev-qa-notice'));
+                    if (hasMockNotice) {
+                      useMarqueeNoticeStore.getState().setNotices([], false);
+                      showFeedback('Cleared marquee notice banner');
+                    } else {
+                      useMarqueeNoticeStore.getState().setNotices(
+                        [
+                          {
+                            id: 'dev-qa-notice-1',
+                            text: 'Downex Dev QA Notice — Speed Limiter (50Mb–200Mb + Tab restore) & In-App Complete Modal active.',
+                            tone: 'update',
+                            modeLabel: 'DEV QA',
+                            modeColor: 'emerald',
+                            direction: 'rtl',
+                            speed: 1,
+                            active: true,
+                            createdAt: Date.now(),
+                            expiresAt: null,
+                          },
+                        ],
+                        true
+                      );
+                      showFeedback('Triggered top header marquee notice banner');
+                    }
+                  }}
+                  className="flex items-center justify-center gap-1.5 px-2 py-2 rounded-lg bg-zinc-100 hover:bg-zinc-200 dark:bg-zinc-800 dark:hover:bg-zinc-700 text-zinc-800 dark:text-zinc-200 text-[11px] font-medium transition-colors cursor-pointer"
+                  title="Toggle live scrolling header marquee notice banner"
+                  data-testid="dev-qa-toggle-marquee-notice"
+                >
+                  <Bell className="w-3.5 h-3.5 text-amber-500 shrink-0" />
+                  <span className="truncate">
+                    {notices.some((n) => n.id.startsWith('dev-qa-notice')) ? 'Clear Notice' : 'Marquee Notice'}
+                  </span>
                 </button>
               </div>
             </div>
@@ -948,7 +1106,7 @@ export const DevUpdateSimulator: React.FC = () => {
                   updateService.simulateUpdate('auto');
                   showFeedback('Running full real-as-mock OTA flow (Download 1-100% → Two Stops → Middle Card → v0.0.2)...');
                 }}
-                className="w-full flex items-center justify-between px-3 py-2 rounded-lg bg-zinc-900 hover:bg-black dark:bg-zinc-100 dark:hover:bg-white text-white dark:text-zinc-900 text-xs font-semibold shadow-xs transition-colors cursor-pointer"
+                className="w-full flex items-center justify-between px-3 py-2 rounded-lg bg-indigo-50 hover:bg-indigo-100 dark:bg-indigo-950/50 dark:hover:bg-indigo-900/50 text-indigo-800 dark:text-indigo-200 border border-indigo-200 dark:border-indigo-800/70 text-xs font-semibold shadow-2xs transition-colors cursor-pointer"
                 title="Simulate complete end-to-end OTA flow: Download (1-100%), Verifying, Stop #1, Middle Floating Card ('Updating Apps & Services'), Stop #2, New UI (v0.0.2)"
                 data-testid="dev-qa-run-full-ota"
               >
@@ -1036,7 +1194,7 @@ export const DevUpdateSimulator: React.FC = () => {
                 <button
                   onClick={async () => {
                     try {
-                      const theme = localStorage.getItem('downex_theme') || (typeof document !== 'undefined' && document.documentElement.classList.contains('dark') ? 'dark' : 'light');
+                      const theme = isDark ? 'dark' : 'light';
                       const { previewExternalUpdater } = await import('../services/tauriService');
                       await previewExternalUpdater(theme);
                       showFeedback('Spawning native Win32 floating updater preview on desktop...');

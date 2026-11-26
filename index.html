@@ -27,11 +27,18 @@
             }
           } catch (e) {}
 
-          // Allow test override
+          // Allow test override ONLY on local dev host (never bypass production WebView lockdown on tauri.localhost)
+          var canOverrideDev = false;
+          try {
+            canOverrideDev = Boolean(
+              window.location &&
+              (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')
+            );
+          } catch (e) {}
           if (typeof window !== 'undefined' && window.__DOWNEX_FORCE_PRODUCTION__ === true) {
             isDev = false;
           }
-          if (typeof window !== 'undefined' && window.__DOWNEX_FORCE_DEV__ === true) {
+          if (canOverrideDev && typeof window !== 'undefined' && window.__DOWNEX_FORCE_DEV__ === true) {
             isDev = true;
           }
 
@@ -84,9 +91,6 @@
         })();
       } catch (e) {}
     </script>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Damion&family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
   </head>
   <body class="bg-white text-zinc-900 dark:bg-zinc-950 dark:text-zinc-100 font-sans antialiased overflow-hidden select-none">
     <div id="root" class="w-screen h-screen overflow-hidden"></div>

@@ -40,10 +40,12 @@ export function isLocalDevRuntime(): boolean {
 export function getEcosystemBaseUrl(): string {
   if (resolvedEcosystemBaseUrl) return resolvedEcosystemBaseUrl;
 
-  if (typeof window !== 'undefined') {
+  if (typeof window !== 'undefined' && import.meta.env.DEV) {
     try {
       const custom = localStorage.getItem('downex_custom_api_url');
-      if (custom) return custom;
+      if (custom && (custom.startsWith('https://') || custom.startsWith('http://127.0.0.1') || custom.startsWith('http://localhost'))) {
+        return custom;
+      }
     } catch {}
 
     try {
@@ -61,6 +63,7 @@ export function getEcosystemBaseUrl(): string {
 
 let activeEventSource: EventSource | null = null;
 let reconnectTimer: any = null;
+let sseRetryAttempts = 0;
 let isInitialized = false;
 let currentBootEpoch = 0;
 let syncQueuePromise: Promise<void> = Promise.resolve();
@@ -73,6 +76,8 @@ interface DirectivePayload {
 }
 
 const ACTIVE_OTA_STATES = new Set([
+  'checking',
+  'available',
   'downloading',
   'verifying',
   'patching',
@@ -81,6 +86,7 @@ const ACTIVE_OTA_STATES = new Set([
   'waiting_timer',
   'queued',
   'ready',
+  'up-to-date',
 ]);
 
 function buildNoticesSignature(list: unknown): string {
@@ -103,9 +109,12 @@ function runAppVersionPacketSync(
       return;
     }
 
-    const currentOtaState = updateService.getStatus().state;
-    const otaBusy = ACTIVE_OTA_STATES.has(currentOtaState) && !updateService.getStatus().isSilentSync;
-    if (otaBusy) {
+    const isOtaBusy = () => {
+      const st = updateService.getStatus();
+      return ACTIVE_OTA_STATES.has(st.state) && !st.isSilentSync;
+    };
+
+    if (isOtaBusy()) {
       await applyToSystem();
       return;
     }
@@ -118,11 +127,13 @@ function runAppVersionPacketSync(
       errorMessage: undefined,
     });
     await new Promise((resolve) => setTimeout(resolve, 220));
+    if (isOtaBusy()) { await applyToSystem(); return; }
 
     // 2. Smooth 1% -> 100% download stage on APP VERSION row
     const packetBytes = 65536;
     const steps = 20;
     for (let i = 1; i <= steps; i++) {
+      if (isOtaBusy()) { await applyToSystem(); return; }
       const pct = Math.min(100, Math.round((i / steps) * 100));
       updateService.notify({
         state: 'downloading',
@@ -138,6 +149,8 @@ function runAppVersionPacketSync(
       await new Promise((resolve) => setTimeout(resolve, 28));
     }
 
+    if (isOtaBusy()) { await applyToSystem(); return; }
+
     // 3. Cryptographic / structural verification stage
     updateService.notify({
       state: 'verifying',
@@ -150,6 +163,7 @@ function runAppVersionPacketSync(
       },
     });
     await new Promise((resolve) => setTimeout(resolve, 280));
+    if (isOtaBusy()) { await applyToSystem(); return; }
 
     // 4. Patching / applying verified state to the running system
     updateService.notify({
@@ -159,16 +173,20 @@ function runAppVersionPacketSync(
     });
     await new Promise((resolve) => setTimeout(resolve, 240));
 
-    await applyToSystem();
-
-    // Return cleanly to idle APP VERSION (no false UP TO DATE badge on background sync)
-    updateService.notify({
-      state: 'idle',
-      isManualCheck: false,
-      isSilentSync: false,
-      progress: undefined,
-      errorMessage: undefined,
-    });
+    try {
+      await applyToSystem();
+    } finally {
+      if (!isOtaBusy()) {
+        // Return cleanly to idle APP VERSION (no false UP TO DATE badge on background sync)
+        updateService.notify({
+          state: 'idle',
+          isManualCheck: false,
+          isSilentSync: false,
+          progress: undefined,
+          errorMessage: undefined,
+        });
+      }
+    }
   };
 
   syncQueuePromise = syncQueuePromise.then(execute, execute);
@@ -196,26 +214,24 @@ export async function handleDirectivePayload(payload: DirectivePayload, hwid: st
   const target = (payload.target_hwid || '').trim().toUpperCase();
   const current = hwid.trim().toUpperCase();
 
-  if (target === current || target === '*' || !target) {
+  if (target && (target === current || target === '*')) {
     const actionUpper = payload.action.toUpperCase();
 
     if (actionUpper === 'BAN' || actionUpper === 'HARDWARE_BAN') {
-      const currentBanState = useHardwareBanStore.getState().isBanned;
-      if (currentBanState) return; // Already banned, skip animation
-
       console.warn('[Downex Silicon] Instant REALTIME BAN directive received:', payload);
       await runAppVersionPacketSync(async () => {
+        if (useHardwareBanStore.getState().isBanned) return; // Already banned, skip animation
         await useHardwareBanStore.getState().enforceBanLive(payload.reason || 'You have been banned from ADMIN');
       });
     } else if (actionUpper === 'UNBAN' || actionUpper === 'HARDWARE_UNBAN') {
-      const currentBanState = useHardwareBanStore.getState().isBanned;
-      if (!currentBanState) return; // Already unbanned, skip animation
-
       console.log('[Downex Silicon] Instant REALTIME UNBAN directive received:', payload);
-      useHardwareBanStore.getState().setReinstating(true);
+      let didReinstate = false;
       try {
-        const startedAt = Date.now();
         await runAppVersionPacketSync(async () => {
+          if (!useHardwareBanStore.getState().isBanned) return; // Already unbanned, skip animation
+          didReinstate = true;
+          const startedAt = Date.now();
+          useHardwareBanStore.getState().setReinstating(true);
           await useHardwareBanStore.getState().liftBanLive();
           const remainingMs = Math.max(0, 1200 - (Date.now() - startedAt));
           if (remainingMs > 0) {
@@ -224,7 +240,9 @@ export async function handleDirectivePayload(payload: DirectivePayload, hwid: st
           useHardwareBanStore.getState().setReinstating(false);
         });
       } finally {
-        useHardwareBanStore.getState().setReinstating(false);
+        if (didReinstate) {
+          useHardwareBanStore.getState().setReinstating(false);
+        }
       }
     }
   }
@@ -234,7 +252,7 @@ export async function handleDirectivePayload(payload: DirectivePayload, hwid: st
  * Attests device to remote ecosystem registry and verifies permission state.
  * Probes candidate URLs safely and locks onto the first responsive endpoint.
  */
-async function attestDevice(hwid: string, bootEpoch: number): Promise<string> {
+async function attestDevice(hwid: string, bootEpoch: number): Promise<string | null> {
   const preferred = getEcosystemBaseUrl();
   // Never allow browser/Playwright previews (!isTauri) to attest or stream into production ecosystem DB
   const candidates = !isTauri
@@ -254,10 +272,8 @@ async function attestDevice(hwid: string, bootEpoch: number): Promise<string> {
   const uniqueCandidates = Array.from(new Set(candidates));
 
   for (const candidate of uniqueCandidates) {
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
     try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 6000);
-
       let reportedVersion = useAppVersionStore.getState().currentVersion || APP_BASE_VERSION;
       try {
         const resolved = cleanVersion(await getResolvedVersion());
@@ -265,6 +281,9 @@ async function attestDevice(hwid: string, bootEpoch: number): Promise<string> {
           reportedVersion = resolved;
         }
       } catch {}
+
+      const controller = new AbortController();
+      timeoutId = setTimeout(() => controller.abort(), 6000);
 
       const res = await fetch(`${candidate}/api/downex/attest`, {
         method: 'POST',
@@ -276,7 +295,6 @@ async function attestDevice(hwid: string, bootEpoch: number): Promise<string> {
         }),
         signal: controller.signal,
       });
-      clearTimeout(timeoutId);
 
       if (res.ok) {
         if (bootEpoch !== currentBootEpoch) return candidate;
@@ -314,15 +332,21 @@ async function attestDevice(hwid: string, bootEpoch: number): Promise<string> {
       }
     } catch {
       // Try next candidate silently
+    } finally {
+      if (timeoutId !== undefined) clearTimeout(timeoutId);
     }
   }
-  return preferred;
+  return null;
 }
 
 /**
  * Connects to the real-time SSE directive stream for this machine.
  */
 function connectDirectiveStream(hwid: string): void {
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+  }
   if (activeEventSource) {
     try {
       activeEventSource.close();
@@ -337,7 +361,12 @@ function connectDirectiveStream(hwid: string): void {
     const es = new EventSource(streamUrl);
     activeEventSource = es;
 
+    es.onopen = () => {
+      sseRetryAttempts = 0;
+    };
+
     es.addEventListener('connected', () => {
+      sseRetryAttempts = 0;
       console.log('[Downex Silicon] Real-time directive stream established for:', hwid, 'at', baseUrl);
     });
 
@@ -374,28 +403,55 @@ function connectDirectiveStream(hwid: string): void {
       if (e.data) onIncomingData(e.data);
     };
 
+    const streamBootEpoch = currentBootEpoch;
     es.onerror = () => {
-      if (es.readyState === EventSource.CLOSED) {
-        if (reconnectTimer) clearTimeout(reconnectTimer);
-        reconnectTimer = setTimeout(() => {
-          if (isInitialized) {
-            connectDirectiveStream(hwid);
-          }
-        }, 3000);
+      try {
+        es.close();
+      } catch {}
+      if (activeEventSource === es) {
+        activeEventSource = null;
       }
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      const delayMs = Math.min(60000, 3000 * Math.pow(2, Math.min(sseRetryAttempts, 5)));
+      sseRetryAttempts += 1;
+      reconnectTimer = setTimeout(() => {
+        reconnectTimer = null;
+        if (isInitialized && streamBootEpoch === currentBootEpoch) {
+          connectDirectiveStream(hwid);
+        }
+      }, delayMs);
     };
   } catch (err) {
     console.warn('[Downex Silicon] Could not establish EventSource:', err);
   }
 }
 
+let isRecoveryAttestInFlight = false;
+
 /**
  * Proactively verifies stream health upon UI reveal, window focus, or network change.
- * Zero-poll: strictly a single no-op if stream is OPEN; auto-heals if dropped.
+ * Zero-poll: strictly a single no-op if stream is OPEN; auto-heals if dropped or initially offline.
  */
 export function ensureDirectiveStreamConnected(): void {
   const hwid = useHardwareBanStore.getState().hwid;
   if (!hwid || !isInitialized) return;
+
+  if (!resolvedEcosystemBaseUrl) {
+    if (isRecoveryAttestInFlight) return;
+    isRecoveryAttestInFlight = true;
+    const capturedEpoch = currentBootEpoch;
+    attestDevice(hwid, capturedEpoch)
+      .then((attestedBase) => {
+        if (attestedBase && isInitialized && capturedEpoch === currentBootEpoch) {
+          connectDirectiveStream(hwid);
+        }
+      })
+      .catch(() => {})
+      .finally(() => {
+        isRecoveryAttestInFlight = false;
+      });
+    return;
+  }
 
   if (!activeEventSource || activeEventSource.readyState === EventSource.CLOSED) {
     console.log('[Downex Silicon] Healing closed directive stream for:', hwid);
@@ -407,13 +463,27 @@ export function ensureDirectiveStreamConnected(): void {
  * Initializes the Silicon Hardware Event Service on application boot.
  */
 export function initHardwareEventService(): () => void {
+  // Keep single SSE stream inside main window; secondary quick-capture dialogs read ban status from IPC/store
+  if (typeof window !== 'undefined') {
+    const winLabel = (window as any).__DOWNEX_WINDOW_LABEL__;
+    if (winLabel === 'download_dialog' || winLabel === 'download_complete') {
+      return () => {};
+    }
+  }
   if (isInitialized) {
     return () => {};
   }
   isInitialized = true;
+  sseRetryAttempts = 0;
   const bootEpoch = ++currentBootEpoch;
 
   let currentHwid = '';
+  const handleOnline = () => {
+    if (bootEpoch === currentBootEpoch && currentHwid) {
+      ensureDirectiveStreamConnected();
+    }
+  };
+  window.addEventListener('online', handleOnline);
 
   (async () => {
     try {
@@ -424,18 +494,13 @@ export function initHardwareEventService(): () => void {
       if (!currentHwid) return;
 
       // 2. Initial Attestation (runs strictly ONCE on boot)
-      await attestDevice(currentHwid, bootEpoch);
+      const attestedBase = await attestDevice(currentHwid, bootEpoch);
       if (bootEpoch !== currentBootEpoch) return;
 
-      // 3. Open Zero-Poll Real-Time SSE Stream (pure push from Firebase RTDB)
-      connectDirectiveStream(currentHwid);
-
-      // 4. Re-connect on network recovery
-      window.addEventListener('online', () => {
-        if (bootEpoch === currentBootEpoch && currentHwid) {
-          connectDirectiveStream(currentHwid);
-        }
-      });
+      // 3. Open Zero-Poll Real-Time SSE Stream (fall back to canonical ecosystem URL if attest failed transiently)
+      if (attestedBase || isTauri) {
+        connectDirectiveStream(currentHwid);
+      }
     } catch (err) {
       console.warn('[Downex Silicon] Init failed:', err);
     }
@@ -444,7 +509,11 @@ export function initHardwareEventService(): () => void {
   return () => {
     currentBootEpoch++;
     isInitialized = false;
-    if (reconnectTimer) clearTimeout(reconnectTimer);
+    window.removeEventListener('online', handleOnline);
+    if (reconnectTimer) {
+      clearTimeout(reconnectTimer);
+      reconnectTimer = null;
+    }
     if (activeEventSource) {
       try {
         activeEventSource.close();

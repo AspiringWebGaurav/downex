@@ -10,6 +10,10 @@ static CLAIMED_TARGET_PATHS: Mutex<Option<HashMap<String, usize>>> = Mutex::new(
 static CLAIMED_STAGING_PATHS: Mutex<Option<HashSet<String>>> = Mutex::new(None);
 static STAGING_COUNTER: AtomicU64 = AtomicU64::new(1);
 
+pub fn normalize_staging_key(path: &Path) -> String {
+    normalize_path_key(path)
+}
+
 fn normalize_path_key(path: &Path) -> String {
     path.to_string_lossy().replace('/', "\\").to_lowercase()
 }
@@ -226,6 +230,19 @@ pub fn is_unconfirmed_staging_path(path: &Path) -> bool {
     name.starts_with("unconfirmed.") && name.ends_with(".downex")
 }
 
+fn extract_hint_tag(unique_hint: Option<&str>) -> Option<String> {
+    unique_hint
+        .map(|h| {
+            let clean: String = h.chars().filter(|c| c.is_ascii_alphanumeric()).collect();
+            if clean.len() > 8 {
+                clean[clean.len() - 8..].to_string()
+            } else {
+                clean
+            }
+        })
+        .filter(|s| !s.is_empty())
+}
+
 /// Resolves and atomically claims a unique `unconfirmed.{og_name}.downex` path in the destination directory.
 /// Fallbacks:
 /// 1. Reclaims persisted `existing_staging` when resuming an existing task (if not claimed by another live worker).
@@ -266,16 +283,7 @@ pub fn resolve_unconfirmed_staging_path(
     }
 
     // Collision fallback 1: unique deterministic task hint (`unconfirmed.<tag>.<og_name>.downex`)
-    let hint_tag = unique_hint
-        .map(|h| {
-            let clean: String = h.chars().filter(|c| c.is_ascii_alphanumeric()).collect();
-            if clean.len() > 8 {
-                clean[clean.len() - 8..].to_string()
-            } else {
-                clean
-            }
-        })
-        .filter(|s| !s.is_empty());
+    let hint_tag = extract_hint_tag(unique_hint);
 
     if let Some(ref tag) = hint_tag {
         let tagged_name = format_unconfirmed_filename(&og_name, Some(tag), parent_utf16_len);
@@ -703,6 +711,102 @@ pub fn robust_delete_path_checked(path: &Path) -> Result<(), String> {
 
 pub fn robust_delete_path(path: &Path) {
     let _ = robust_delete_path_checked(path);
+}
+
+/// Collects every candidate `unconfirmed.*.downex` staging path that may belong to a download task.
+pub fn collect_task_staging_candidates(
+    final_dst: &Path,
+    existing_staging: Option<&Path>,
+    task_id: Option<&str>,
+) -> Vec<PathBuf> {
+    let mut seen = HashSet::new();
+    let mut out = Vec::new();
+
+    let mut push_unique = |candidate: PathBuf| {
+        if candidate.as_os_str().is_empty() {
+            return;
+        }
+        let key = normalize_path_key(&candidate);
+        if seen.insert(key) {
+            out.push(candidate);
+        }
+    };
+
+    if let Some(staging) = existing_staging {
+        if is_unconfirmed_staging_path(staging) {
+            push_unique(staging.to_path_buf());
+        }
+    }
+
+    let primary = derive_primary_unconfirmed_path(final_dst);
+    push_unique(primary);
+
+    if let Some(tag) = extract_hint_tag(task_id) {
+        let og_name = final_dst
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "download".to_string());
+        let parent = final_dst.parent().unwrap_or_else(|| Path::new("."));
+        let parent_utf16_len = parent.to_string_lossy().encode_utf16().count();
+        let tagged = parent.join(format_unconfirmed_filename(&og_name, Some(&tag), parent_utf16_len));
+        push_unique(tagged);
+    }
+
+    out
+}
+
+/// Scans unique target directories and returns unconfirmed staging artifacts (`unconfirmed.*.downex`)
+/// that are neither live-claimed nor tracked by any active/paused/queued/failed download task.
+pub fn find_orphaned_unconfirmed_in_dirs(
+    dirs: &[PathBuf],
+    tracked_keys: &HashSet<String>,
+) -> Vec<PathBuf> {
+    let mut scanned_dirs = HashSet::new();
+    let mut seen_files = HashSet::new();
+    let mut orphans = Vec::new();
+
+    for dir in dirs {
+        if dir.as_os_str().is_empty() {
+            continue;
+        }
+        let dir_key = normalize_path_key(dir);
+        if !scanned_dirs.insert(dir_key) {
+            continue;
+        }
+
+        let dir_io = to_win_io_path(dir);
+        let Ok(entries) = fs::read_dir(&dir_io) else {
+            continue;
+        };
+
+        for entry in entries.flatten() {
+            let file_type = match entry.file_type() {
+                Ok(ft) => ft,
+                Err(_) => continue,
+            };
+            if file_type.is_dir() {
+                continue;
+            }
+            let file_name = entry.file_name();
+            let candidate = dir.join(file_name);
+            if !is_unconfirmed_staging_path(&candidate) {
+                continue;
+            }
+            if is_staging_path_claimed(&candidate) {
+                continue;
+            }
+            let key = normalize_path_key(&candidate);
+            if tracked_keys.contains(&key) {
+                continue;
+            }
+            if seen_files.insert(key) {
+                orphans.push(candidate);
+            }
+        }
+    }
+
+    orphans
 }
 
 #[cfg(test)]

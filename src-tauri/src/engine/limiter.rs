@@ -39,9 +39,28 @@ impl TaskSpeedLimiter {
     }
 
     pub async fn throttle(&self, bytes: usize) {
+        let _ = self.throttle_internal(bytes, None, None).await;
+    }
+
+    /// Cancellation-aware throttle so pausing or stopping mid-backoff wakes immediately.
+    pub async fn throttle_cancellable(
+        &self,
+        bytes: usize,
+        cancel_token: &tokio_util::sync::CancellationToken,
+        completion_token: &tokio_util::sync::CancellationToken,
+    ) -> bool {
+        self.throttle_internal(bytes, Some(cancel_token), Some(completion_token)).await
+    }
+
+    async fn throttle_internal(
+        &self,
+        bytes: usize,
+        cancel_token: Option<&tokio_util::sync::CancellationToken>,
+        completion_token: Option<&tokio_util::sync::CancellationToken>,
+    ) -> bool {
         let rate = self.max_bytes_per_sec.load(Ordering::Relaxed) as f64;
         if rate <= 0.0 || bytes == 0 {
-            return;
+            return true;
         }
 
         let sleep_dur = {
@@ -73,8 +92,20 @@ impl TaskSpeedLimiter {
         };
 
         if let Some(dur) = sleep_dur {
-            // Sleep the exact duration required to accurately enforce the rate limit
-            tokio::time::sleep(dur.min(Duration::from_millis(500))).await;
+            let clamped = dur.min(Duration::from_millis(500));
+            match (cancel_token, completion_token) {
+                (Some(c), Some(d)) => {
+                    tokio::select! {
+                        _ = c.cancelled() => return false,
+                        _ = d.cancelled() => return false,
+                        _ = tokio::time::sleep(clamped) => {}
+                    }
+                }
+                _ => {
+                    tokio::time::sleep(clamped).await;
+                }
+            }
         }
+        true
     }
 }

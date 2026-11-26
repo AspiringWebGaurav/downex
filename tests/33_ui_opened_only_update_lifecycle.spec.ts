@@ -260,9 +260,36 @@ test.describe('Downex — UI-Opened Only Update Lifecycle & Smooth Visual Transi
 
     const marqueeItem = page.locator('.downex-marquee-track > div');
     await expect(marqueeItem).toContainText('Notice One');
+    await expect(marqueeItem.locator('span.w-1\\.5.h-1\\.5')).toHaveCount(0);
+
+    // Verify slim 20px pill height, Downex font-mono-tabular UI font, and <= 1.5px vertical centering
+    const metrics = await page.evaluate(() => {
+      const group = document.querySelector('.downex-marquee-group');
+      const item = document.querySelector('.downex-marquee-track > div');
+      if (!group || !item || item.children.length < 2) return null;
+      const gRect = group.getBoundingClientRect();
+      const badgeRect = item.children[0].getBoundingClientRect();
+      const textRect = item.children[1].getBoundingClientRect();
+      const gMid = (gRect.top + gRect.bottom) / 2;
+      const bMid = (badgeRect.top + badgeRect.bottom) / 2;
+      const tMid = (textRect.top + textRect.bottom) / 2;
+      const font = window.getComputedStyle(item).fontFamily;
+      return {
+        height: Math.round(gRect.height),
+        badgeOffset: Math.abs(bMid - gMid),
+        textOffset: Math.abs(tMid - gMid),
+        font,
+      };
+    });
+    expect(metrics).not.toBeNull();
+    expect(metrics!.height).toBeLessThanOrEqual(20);
+    expect(metrics!.badgeOffset).toBeLessThanOrEqual(1.5);
+    expect(metrics!.textOffset).toBeLessThanOrEqual(1.5);
+    expect(metrics!.font.toLowerCase()).toContain('mono');
 
     const observedOrder: string[] = [];
     for (let step = 0; step < 5; step++) {
+      await expect(marqueeItem.locator('span.w-1\\.5.h-1\\.5')).toHaveCount(0);
       const txt = (await marqueeItem.innerText()).replace(/\s+/g, ' ').trim();
       observedOrder.push(txt);
       if (step < 4) {
@@ -287,5 +314,81 @@ test.describe('Downex — UI-Opened Only Update Lifecycle & Smooth Visual Transi
     await page.waitForTimeout(60);
     await expect(marqueeItem).toContainText('Notice Four');
     console.log('TEST 5 STACKED ORDER:', JSON.stringify(observedOrder));
+  });
+
+  test('Test 6: Update holds AVAILABLE stage visible for 3s before starting download', async ({ page }) => {
+    const errors = captureConsoleErrors(page);
+
+    await page.route('**/api/v1/releases/downex/latest*', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          version: '0.0.2',
+          notes: '3-second available hold verification',
+          pub_date: new Date().toISOString(),
+          platforms: {
+            'windows-x86_64': {
+              url: 'https://gphost.eu.cc/releases/downex/v0.0.2/update0.0.2.downex.bin',
+              signature: 'SIMULATED_SIGNATURE',
+              size: 15414272,
+            },
+          },
+        }),
+      });
+    });
+
+    await page.evaluate(() => {
+      Object.defineProperty(document, 'visibilityState', { value: 'visible', writable: true });
+      document.dispatchEvent(new Event('visibilitychange'));
+      const svc = (window as any).updateService;
+      (window as any).__DOWNEX_TIMING_STATES__ = [];
+      svc?.subscribe((st: any) => {
+        const list = (window as any).__DOWNEX_TIMING_STATES__;
+        const prev = list[list.length - 1];
+        if (!prev || prev.state !== st.state) {
+          list.push({ state: st.state, at: Date.now() });
+        }
+      });
+      svc?.checkForUpdates(true).then(() => {
+        svc?.evaluateAndApplyUpdate();
+      });
+    });
+
+    const stageEl = page.locator('[data-testid="sidebar-version-stage"]');
+    await expect(stageEl).toHaveText('UPDATE AVAILABLE', { timeout: 3000 });
+
+    // Allow the 340ms version badge slide transition to settle before measuring gap
+    await page.waitForTimeout(450);
+
+    // Verify clean separation (zero visual overlap between vX.Y.Z badge and UPDATE AVAILABLE)
+    const boxes = await page.evaluate(() => {
+      const row = document.querySelector('[data-testid="sidebar-version"]');
+      const stage = document.querySelector('[data-testid="sidebar-version-stage"]');
+      if (!row || !stage) return null;
+      const spans = Array.from(row.querySelectorAll('span'));
+      const versionBadge = spans.find((el) => /^v\d+\.\d+\.\d+$/i.test((el.textContent || '').trim()));
+      if (!versionBadge) return null;
+      const vRect = versionBadge.getBoundingClientRect();
+      const sRect = stage.getBoundingClientRect();
+      return { vRight: vRect.right, sLeft: sRect.left, gap: sRect.left - vRect.right };
+    });
+    expect(boxes).not.toBeNull();
+    expect(boxes!.gap).toBeGreaterThanOrEqual(4);
+
+    // Must still remain in UPDATE AVAILABLE during the first ~2.2s (not jumped immediately to %)
+    await page.waitForTimeout(1750);
+    await expect(stageEl).toHaveText('UPDATE AVAILABLE');
+
+    // After 3s total hold, transitions automatically into downloading (%)
+    await expect(stageEl).toContainText('%', { timeout: 3500 });
+
+    const timing = await page.evaluate(() => (window as any).__DOWNEX_TIMING_STATES__ || []);
+    const availEntry = timing.find((e: any) => e.state === 'available');
+    const dlEntry = timing.find((e: any) => e.state === 'downloading');
+    expect(availEntry).toBeTruthy();
+    expect(dlEntry).toBeTruthy();
+    expect(dlEntry.at - availEntry.at).toBeGreaterThanOrEqual(2850);
+    expect(errors).toEqual([]);
   });
 });

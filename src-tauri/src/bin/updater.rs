@@ -18,7 +18,7 @@ use windows_sys::Win32::System::Threading::{
 #[cfg(target_os = "windows")]
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetClientRect, GetMessageW, GetSystemMetrics,
-    PostMessageW, PostQuitMessage, RegisterClassW, SetLayeredWindowAttributes, SetTimer, ShowWindow,
+    IsWindow, KillTimer, PostMessageW, PostQuitMessage, RegisterClassW, SetLayeredWindowAttributes, SetTimer, ShowWindow,
     TranslateMessage, CS_DROPSHADOW, CS_HREDRAW, CS_VREDRAW, LWA_ALPHA, MSG, SM_CXSCREEN,
     SM_CYSCREEN, SW_SHOWNOACTIVATE, WM_CLOSE, WM_DESTROY, WM_ERASEBKGND, WM_PAINT, WM_TIMER,
     WNDCLASSW, WS_EX_LAYERED, WS_EX_TOOLWINDOW, WS_POPUP,
@@ -26,6 +26,8 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 
 static PROGRESS: AtomicU32 = AtomicU32::new(0);
 static STATUS_PHASE: AtomicU32 = AtomicU32::new(0); // 0 = "Installing update...", 1 = "Restarting app..."
+static LAST_PAINTED_PROGRESS: AtomicU32 = AtomicU32::new(u32::MAX);
+static LAST_PAINTED_PHASE: AtomicU32 = AtomicU32::new(u32::MAX);
 static WORKER_DONE: AtomicBool = AtomicBool::new(false);
 static WORKER_SUCCESS: AtomicBool = AtomicBool::new(true);
 static IS_LIGHT_THEME: AtomicBool = AtomicBool::new(false);
@@ -33,6 +35,7 @@ static DPI_SCALE_PCT: AtomicU32 = AtomicU32::new(100);
 
 #[cfg(target_os = "windows")]
 fn enable_hidpi_awareness() {
+    use windows_sys::Win32::Foundation::FreeLibrary;
     use windows_sys::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryA};
     unsafe {
         let user32 = LoadLibraryA(b"user32.dll\0".as_ptr());
@@ -41,6 +44,7 @@ fn enable_hidpi_awareness() {
             if let Some(func) = set_dpi_ctx {
                 let func: extern "system" fn(isize) -> i32 = std::mem::transmute(func);
                 func(-4); // DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2
+                FreeLibrary(user32);
                 return;
             }
             let set_dpi_aware = GetProcAddress(user32, b"SetProcessDPIAware\0".as_ptr());
@@ -48,13 +52,16 @@ fn enable_hidpi_awareness() {
                 let func: extern "system" fn() -> i32 = std::mem::transmute(func);
                 func();
             }
+            FreeLibrary(user32);
         }
     }
 }
 
 #[cfg(target_os = "windows")]
 fn get_system_dpi() -> u32 {
+    use windows_sys::Win32::Foundation::FreeLibrary;
     use windows_sys::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryA};
+    let mut dpi_val = 96u32;
     unsafe {
         let user32 = LoadLibraryA(b"user32.dll\0".as_ptr());
         if !user32.is_null() {
@@ -63,12 +70,13 @@ fn get_system_dpi() -> u32 {
                 let func: extern "system" fn() -> u32 = std::mem::transmute(func);
                 let dpi = func();
                 if dpi > 0 {
-                    return dpi;
+                    dpi_val = dpi;
                 }
             }
+            FreeLibrary(user32);
         }
     }
-    96
+    dpi_val
 }
 
 #[cfg(target_os = "windows")]
@@ -192,52 +200,67 @@ fn relaunch_process(main_exe: &Path, install_root: &Path, should_show: bool) -> 
 }
 
 fn verify_binary_integrity(path: &Path) -> bool {
+    use std::io::{Read, Seek, SeekFrom};
     if !path.exists() {
         return false;
     }
-    if let Ok(metadata) = std::fs::metadata(path) {
-        if metadata.len() < 1024 * 512 {
-            // Must be at least 512KB for a valid executable
-            return false;
-        }
-    } else {
+    let len = match std::fs::metadata(path) {
+        Ok(metadata) if metadata.len() >= 1024 * 512 => metadata.len(),
+        _ => return false,
+    };
+    let Ok(mut file) = std::fs::File::open(path) else {
+        return false;
+    };
+    let mut dos = [0u8; 0x40];
+    if file.read_exact(&mut dos).is_err() || dos[0] != b'M' || dos[1] != b'Z' {
         return false;
     }
-    // Verify PE MZ header
-    if let Ok(file) = std::fs::File::open(path) {
-        use std::io::Read;
-        let mut header = [0u8; 2];
-        let mut handle = file;
-        if handle.read_exact(&mut header).is_ok() {
-            return header[0] == b'M' && header[1] == b'Z';
-        }
+    let pe_offset = u32::from_le_bytes(dos[0x3C..0x40].try_into().unwrap_or_default()) as u64;
+    if pe_offset + 6 > len {
+        return false;
     }
-    false
+    if file.seek(SeekFrom::Start(pe_offset)).is_err() {
+        return false;
+    }
+    let mut pe_hdr = [0u8; 6];
+    if file.read_exact(&mut pe_hdr).is_err() {
+        return false;
+    }
+    if &pe_hdr[0..4] != b"PE\0\0" {
+        return false;
+    }
+    let machine = u16::from_le_bytes([pe_hdr[4], pe_hdr[5]]);
+    machine == 0x8664
 }
 
 fn update_version_metadata(install_root: &Path, target_ver: &str) {
-    // Phase 6: Update sync_state.dat
-    let state_file = install_root.join("updater").join("sync_state.dat");
-    if let Ok(content) = std::fs::read_to_string(&state_file) {
-        if let Ok(mut json) = serde_json::from_str::<serde_json::Value>(&content) {
-            if let Some(obj) = json.as_object_mut() {
-                obj.insert("active_version".to_string(), serde_json::Value::String(target_ver.to_string()));
-                obj.insert("is_healthy".to_string(), serde_json::Value::Bool(true));
-                obj.insert("boot_attempts".to_string(), serde_json::Value::Number(0.into()));
-                obj.insert(
-                    "last_update_epoch_ms".to_string(),
-                    serde_json::Value::Number(
-                        (std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .unwrap_or_default()
-                            .as_millis() as u64)
-                            .into(),
-                    ),
-                );
-            }
-            let _ = std::fs::write(&state_file, serde_json::to_string_pretty(&json).unwrap_or_default());
-        }
+    // Phase 6: Create or update sync_state.dat with probation enabled (is_healthy: false)
+    // Main app marks is_healthy: true and deletes .old after 15s of stable runtime.
+    let updater_dir = install_root.join("updater");
+    let _ = std::fs::create_dir_all(&updater_dir);
+    let state_file = updater_dir.join("sync_state.dat");
+    let mut json = std::fs::read_to_string(&state_file)
+        .ok()
+        .and_then(|c| serde_json::from_str::<serde_json::Value>(&c).ok())
+        .filter(|v| v.is_object())
+        .unwrap_or_else(|| serde_json::json!({ "quarantined_versions": [] }));
+
+    if let Some(obj) = json.as_object_mut() {
+        obj.insert("active_version".to_string(), serde_json::Value::String(target_ver.to_string()));
+        obj.insert("is_healthy".to_string(), serde_json::Value::Bool(false));
+        obj.insert("boot_attempts".to_string(), serde_json::Value::Number(0.into()));
+        obj.insert(
+            "last_update_epoch_ms".to_string(),
+            serde_json::Value::Number(
+                (std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis() as u64)
+                    .into(),
+            ),
+        );
     }
+    let _ = std::fs::write(&state_file, serde_json::to_string_pretty(&json).unwrap_or_default());
 
     // Phase 7: Update %LOCALAPPDATA%\com.downex.manager\installed_version.json
     if let Ok(local_app_data) = std::env::var("LOCALAPPDATA") {
@@ -260,6 +283,7 @@ fn execute_atomic_update_pipeline(
     target_ver: &str,
     staged_arg: Option<&String>,
     parent_pid: Option<u32>,
+    is_dev_mode: bool,
 ) -> bool {
     // Phase 1: Wait for parent process lock release with timeout fallback
     if let Some(pid) = parent_pid {
@@ -271,10 +295,16 @@ fn execute_atomic_update_pipeline(
     // Resolve main binary preserving actual filesystem name
     let main_exe = resolve_main_exe(install_root);
 
-    // Resolve staged binary
+    // Resolve staged binary strictly within authorized staging directories
     let staged_file: Option<PathBuf> = if let Some(p) = staged_arg {
-        let pb = PathBuf::from(p);
-        if pb.exists() { Some(pb) } else { None }
+        let updater_dir = install_root.join("updater");
+        let temp_dir = std::env::temp_dir().join("com.downex.manager");
+        let canon_upd = std::fs::canonicalize(&updater_dir).unwrap_or(updater_dir);
+        let canon_tmp = std::fs::canonicalize(&temp_dir).unwrap_or(temp_dir);
+        match std::fs::canonicalize(p) {
+            Ok(pb) if pb.starts_with(&canon_tmp) || pb.starts_with(&canon_upd) => Some(pb),
+            _ => None,
+        }
     } else {
         let updater_dir = install_root.join("updater");
         let temp_dir = std::env::temp_dir().join("com.downex.manager");
@@ -289,10 +319,17 @@ fn execute_atomic_update_pipeline(
 
     let Some(staged) = staged_file else {
         eprintln!("[Downex Updater] Staged update file not found.");
-        // Dev mock / test run fallback: record version metadata so relaunched app boots with target version
-        update_version_metadata(install_root, target_ver);
-        return true;
+        if is_dev_mode {
+            update_version_metadata(install_root, target_ver);
+            return true;
+        }
+        return false;
     };
+
+    if !verify_binary_integrity(&staged) {
+        eprintln!("[Downex Updater] Staged binary failed PE/x64 integrity check before swap.");
+        return false;
+    }
 
     let old_exe = install_root.join("Downex.exe.old");
     for _ in 0..5 {
@@ -316,8 +353,9 @@ fn execute_atomic_update_pipeline(
         renamed_to_old = true;
     }
 
-    // Phase 3: Move staged -> target exe (robust retry loop)
+    // Phase 3: Move staged -> target exe (keep staged intact on copy until verification succeeds)
     let mut swap_success = false;
+    let mut remove_staged_after_verify = false;
     if renamed_to_old {
         for _ in 0..25 {
             if std::fs::rename(&staged, &main_exe).is_ok() {
@@ -325,7 +363,7 @@ fn execute_atomic_update_pipeline(
                 break;
             }
             if std::fs::copy(&staged, &main_exe).is_ok() {
-                let _ = std::fs::remove_file(&staged);
+                remove_staged_after_verify = true;
                 swap_success = true;
                 break;
             }
@@ -345,10 +383,12 @@ fn execute_atomic_update_pipeline(
         return false;
     }
 
-    // Phase 5: Clean up old executable after successful swap
-    let _ = std::fs::remove_file(&old_exe);
+    if remove_staged_after_verify {
+        let _ = std::fs::remove_file(&staged);
+    }
 
-    // Phase 6 & 7: Update metadata
+    // Preserve .old binary during 15s boot probation; main app deletes it once mark_boot_healthy() runs.
+    // Phase 5 & 6: Update metadata with is_healthy = false
     update_version_metadata(install_root, target_ver);
 
     true
@@ -359,7 +399,15 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
     match msg {
         WM_ERASEBKGND => 1, // Suppress OS background erase to eliminate 100% of flickering!
         WM_TIMER => {
-            InvalidateRect(hwnd, std::ptr::null(), 0);
+            let p = PROGRESS.load(Ordering::Relaxed);
+            let ph = STATUS_PHASE.load(Ordering::Relaxed);
+            if p != LAST_PAINTED_PROGRESS.load(Ordering::Relaxed)
+                || ph != LAST_PAINTED_PHASE.load(Ordering::Relaxed)
+            {
+                LAST_PAINTED_PROGRESS.store(p, Ordering::Relaxed);
+                LAST_PAINTED_PHASE.store(ph, Ordering::Relaxed);
+                InvalidateRect(hwnd, std::ptr::null(), 0);
+            }
             0
         }
         WM_PAINT => {
@@ -563,11 +611,11 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             // Atomically copy entire in-memory canvas to screen in one blit (Zero flicker!)
             BitBlt(hdc, 0, 0, win_w, win_h, mem_dc, 0, 0, SRCCOPY);
 
-            // Cleanup GDI handles
+            // Cleanup GDI handles on the exact DC where fonts/bitmap were selected
+            SelectObject(mem_dc, prev_font);
             SelectObject(mem_dc, old_bmp);
             DeleteObject(mem_bmp as HGDIOBJ);
             DeleteDC(mem_dc);
-            SelectObject(hdc, prev_font);
             DeleteObject(tag_font as HGDIOBJ);
             DeleteObject(hero_title_font as HGDIOBJ);
             DeleteObject(sub_font as HGDIOBJ);
@@ -591,6 +639,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             0
         }
         WM_DESTROY => {
+            KillTimer(hwnd, 1);
             PostQuitMessage(0);
             0
         }
@@ -648,10 +697,12 @@ fn main() {
 
     // ── PATH A: SILENT UPDATE (e.g. background startup / tray check) ──
     if !should_show {
-        let _success = execute_atomic_update_pipeline(&install_root, &target_ver, staged_arg.as_ref(), parent_pid);
+        let success = execute_atomic_update_pipeline(&install_root, &target_ver, staged_arg.as_ref(), parent_pid, is_dev_mode);
         if !is_dev_mode {
             let launch_exe = resolve_main_exe(&install_root);
-            let _ = relaunch_process(&launch_exe, &install_root, false);
+            if success || verify_binary_integrity(&launch_exe) {
+                let _ = relaunch_process(&launch_exe, &install_root, false);
+            }
         }
         return;
     }
@@ -717,8 +768,8 @@ fn main() {
         );
 
         if hwnd.is_null() {
-            // Fallback: execute pipeline without UI if window creation fails
-            let _ = execute_atomic_update_pipeline(&install_root, &target_ver, staged_arg.as_ref(), parent_pid);
+            // Fallback: execute pipeline without UI if window creation fails (parent_pid already waited above)
+            let _ = execute_atomic_update_pipeline(&install_root, &target_ver, staged_arg.as_ref(), None, is_dev_mode);
             if !is_dev_mode {
                 relaunch_process(&main_exe, &install_root, should_show);
             }
@@ -747,11 +798,14 @@ fn main() {
 
             // Smooth Window Fade-In (300ms)
             for step in 1..=15 {
+                if IsWindow(win_handle) == 0 { return; }
                 let alpha = ((step as u32 * 255) / 15) as u8;
                 SetLayeredWindowAttributes(win_handle, 0, alpha, LWA_ALPHA);
                 std::thread::sleep(std::time::Duration::from_millis(20));
             }
-            SetLayeredWindowAttributes(win_handle, 0, 255, LWA_ALPHA);
+            if IsWindow(win_handle) != 0 {
+                SetLayeredWindowAttributes(win_handle, 0, 255, LWA_ALPHA);
+            }
 
             if is_preview_clone {
                 for p in 5..=100 {
@@ -765,13 +819,16 @@ fn main() {
 
                 // Smooth Window Fade-Out (300ms)
                 for step in (0..=15).rev() {
+                    if IsWindow(win_handle) == 0 { return; }
                     let alpha = ((step as u32 * 255) / 15) as u8;
                     SetLayeredWindowAttributes(win_handle, 0, alpha, LWA_ALPHA);
                     std::thread::sleep(std::time::Duration::from_millis(20));
                 }
 
                 WORKER_DONE.store(true, Ordering::Relaxed);
-                let _ = PostMessageW(win_handle, WM_CLOSE, 0, 0);
+                if IsWindow(win_handle) != 0 {
+                    let _ = PostMessageW(win_handle, WM_CLOSE, 0, 0);
+                }
                 return;
             }
 
@@ -783,12 +840,13 @@ fn main() {
                 std::thread::sleep(std::time::Duration::from_millis(20));
             }
 
-            // Execute atomic update pipeline with retries & integrity check
+            // Execute atomic update pipeline (parent already exited before Stop #1 -> pass None for parent_pid to avoid PID reuse race)
             let success = execute_atomic_update_pipeline(
                 &install_root_clone,
                 &target_ver_clone,
                 staged_arg_clone.as_ref(),
-                parent_pid,
+                None,
+                is_dev_mode,
             );
             WORKER_SUCCESS.store(success, Ordering::Relaxed);
 
@@ -822,6 +880,7 @@ fn main() {
 
             // Smooth Window Fade-Out (300ms)
             for step in (0..=15).rev() {
+                if IsWindow(win_handle) == 0 { break; }
                 let alpha = ((step as u32 * 255) / 15) as u8;
                 SetLayeredWindowAttributes(win_handle, 0, alpha, LWA_ALPHA);
                 std::thread::sleep(std::time::Duration::from_millis(20));
@@ -829,7 +888,9 @@ fn main() {
 
             // Signal close ONLY AFTER atomic swap & fade-out finish
             WORKER_DONE.store(true, Ordering::Relaxed);
-            let _ = PostMessageW(win_handle, WM_CLOSE, 0, 0);
+            if IsWindow(win_handle) != 0 {
+                let _ = PostMessageW(win_handle, WM_CLOSE, 0, 0);
+            }
         });
 
         // Win32 message pump
@@ -847,7 +908,12 @@ fn main() {
             // Stop #2: Deliberate 0.75-second calm pause before launching upgraded application
             std::thread::sleep(std::time::Duration::from_millis(750));
             let launch_exe = resolve_main_exe(&install_root);
-            let _ = relaunch_process(&launch_exe, &install_root, should_show);
+            let worker_ok = WORKER_SUCCESS.load(Ordering::Acquire);
+            if worker_ok || verify_binary_integrity(&launch_exe) {
+                let _ = relaunch_process(&launch_exe, &install_root, should_show);
+            } else {
+                eprintln!("[Downex Updater] Skipping launch: update failed and no valid main executable exists.");
+            }
         }
     }
 }

@@ -8,8 +8,12 @@ export function captureConsoleErrors(page: Page) {
   page.on('console', (msg) => {
     if (msg.type() === 'error') {
       const text = msg.text();
-      // Filter out known benign browser noise if any
-      if (!text.includes('favicon.ico') && !text.includes('net::ERR_FAILED')) {
+      // Filter out known benign offline browser preview noise (unmocked local telemetry/favicon checks)
+      if (
+        !text.includes('favicon.ico') &&
+        !text.includes('net::ERR_FAILED') &&
+        !text.includes('net::ERR_CONNECTION_REFUSED')
+      ) {
         errors.push(`[Console Error] ${text}`);
       }
     }

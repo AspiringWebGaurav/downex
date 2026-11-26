@@ -1,8 +1,9 @@
 import React, { useEffect, useState } from 'react';
 import { Activity, HardDrive, Zap, FolderOpen, Database } from 'lucide-react';
 import { useDownloadStore } from '../stores/downloadStore';
-import { getDefaultDownloadDir, openFolderPicker, setDefaultDownloadDir } from '../services/tauriService';
+import { getDefaultDownloadDir, getDiskFreeSpace, openFolderPicker, setDefaultDownloadDir } from '../services/tauriService';
 import { AnimatedNumber, AnimatedBytes, AnimatedSpeed } from './AnimatedDigits';
+import { formatBytes } from '../utils/format';
 
 interface TelemetryWidgetProps {
   layout?: 'sidebar' | 'embedded';
@@ -15,13 +16,25 @@ export const TelemetryWidget: React.FC<TelemetryWidgetProps> = ({ layout = 'side
   const lifetimeDownloadedBytes = useDownloadStore((state) => state.lifetimeDownloadedBytes);
   const sessionDownloadedBytes = useDownloadStore((state) => state.sessionDownloadedBytes);
   const [storagePath, setStoragePath] = useState<string>('Downloads\\Downex');
+  const [diskFreeBytes, setDiskFreeBytes] = useState<number | null>(null);
 
   useEffect(() => {
+    let cancelled = false;
     getDefaultDownloadDir()
       .then((dir) => {
-        if (dir) setStoragePath(dir);
+        if (!cancelled && dir) {
+          setStoragePath(dir);
+          getDiskFreeSpace(dir)
+            .then((bytes) => {
+              if (!cancelled) setDiskFreeBytes(bytes);
+            })
+            .catch(() => {});
+        }
       })
       .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const handlePickFolder = async () => {
@@ -30,13 +43,16 @@ export const TelemetryWidget: React.FC<TelemetryWidgetProps> = ({ layout = 'side
       if (picked) {
         const saved = await setDefaultDownloadDir(picked);
         setStoragePath(saved);
+        getDiskFreeSpace(saved)
+          .then((bytes) => setDiskFreeBytes(bytes))
+          .catch(() => {});
       }
     } catch (err) {
       console.warn('Failed to pick folder:', err);
     }
   };
 
-  const activeDownloads = items.filter((i) => i.status === 'downloading');
+  const activeDownloads = items.filter((i) => i.status === 'downloading' || i.status === 'probing');
   const activeSegmentsCount = activeDownloads.reduce((acc, curr) => acc + (curr.segments?.length || 1), 0);
 
   // Generate SVG sparkline path
@@ -196,11 +212,8 @@ export const TelemetryWidget: React.FC<TelemetryWidgetProps> = ({ layout = 'side
           <div className="text-xs font-mono font-medium text-zinc-700 dark:text-zinc-300 truncate" title={storagePath}>
             {storagePath}
           </div>
-          <div className="mt-1 h-1.5 w-full bg-zinc-100 dark:bg-zinc-800 rounded-full overflow-hidden">
-            <div className="h-full bg-emerald-500 rounded-full" style={{ width: '42%' }} />
-          </div>
           <div className="mt-1 flex justify-between text-[10px] font-mono text-zinc-400">
-            <span>Drive Available</span>
+            <span>{diskFreeBytes !== null ? `${formatBytes(diskFreeBytes)} free` : 'Drive Available'}</span>
             <button
               type="button"
               onClick={handlePickFolder}

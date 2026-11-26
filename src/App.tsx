@@ -7,12 +7,13 @@ import { DownloadTable } from './components/DownloadTable';
 import { InAppSearchBar } from './components/InAppSearchBar';
 import { TelemetryWidget } from './components/TelemetryWidget';
 import { NewDownloadModal } from './components/NewDownloadModal';
+import { DownloadCompleteModal } from './components/DownloadCompleteModal';
 import { useDownloadStore } from './stores/downloadStore';
 import { useAppVersionStore } from './stores/appVersionStore';
 import { useHardwareBanStore } from './stores/hardwareBanStore';
-import { isDevEnvironment } from './utils/reloadGuard';
+import { ENV_MODE_CHANGED_EVENT, installDevEnvOverrideWatcher, isDevEnvironment } from './utils/reloadGuard';
 
-const DevUpdateSimulatorLazy = import.meta.env.DEV
+const DevUpdateSimulatorLazy = import.meta.env.DEV && !import.meta.env.PROD
   ? React.lazy(() =>
       import('./components/DevUpdateSimulator').then((m) => ({
         default: m.DevUpdateSimulator,
@@ -25,7 +26,7 @@ import { SettingsView } from './components/SettingsView';
 import { TelemetryView } from './components/TelemetryView';
 import { SpeedtestView } from './components/SpeedtestView';
 import { HardwareBannedView } from './components/HardwareBannedView';
-import { onOpenNewDownloadModal, restoreManagerWindow, onNavigate, onCheckUpdatesFromTray, onOtaRollbackRecovered, notifyDomReady, onUiOpened, onHardwareBanChanged } from './services/tauriService';
+import { onOpenNewDownloadModal, onOpenDownloadCompleteModal, onDownloadCompleted, restoreManagerWindow, onNavigate, onCheckUpdatesFromTray, onOtaRollbackRecovered, notifyDomReady, onUiOpened, onHardwareBanChanged } from './services/tauriService';
 import { updateService } from './services/updateService';
 import { initHardwareEventService, ensureDirectiveStreamConnected } from './services/hardwareEventService';
 import './App.css';
@@ -42,6 +43,8 @@ export const App: React.FC = () => {
       return false;
     }
   });
+
+  const themeTransitionTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const handleSetDarkMode = useCallback((val: boolean) => {
     try {
@@ -72,13 +75,44 @@ export const App: React.FC = () => {
       const root = doc.documentElement;
       root.classList.add('theme-transitioning');
       applyTheme();
-      setTimeout(() => {
+      if (themeTransitionTimerRef.current) clearTimeout(themeTransitionTimerRef.current);
+      themeTransitionTimerRef.current = setTimeout(() => {
+        themeTransitionTimerRef.current = null;
         root.classList.remove('theme-transitioning');
       }, 260);
     } else {
       applyTheme();
     }
   }, []);
+
+  useEffect(() => {
+    const handleDevThemeSync = (e: Event) => {
+      const custom = e as CustomEvent<{ dark?: boolean }>;
+      if (custom?.detail && typeof custom.detail.dark === 'boolean') {
+        e.preventDefault();
+        handleSetDarkMode(custom.detail.dark);
+      }
+    };
+    window.addEventListener('downex-set-theme', handleDevThemeSync);
+    return () => window.removeEventListener('downex-set-theme', handleDevThemeSync);
+  }, [handleSetDarkMode]);
+
+  const [isDevActive, setIsDevActive] = useState<boolean>(() => {
+    if (!import.meta.env.DEV || import.meta.env.PROD) return false;
+    installDevEnvOverrideWatcher();
+    return isDevEnvironment();
+  });
+
+  useEffect(() => {
+    if (!import.meta.env.DEV || import.meta.env.PROD) return;
+    installDevEnvOverrideWatcher();
+    const syncEnv = () => {
+      setIsDevActive(Boolean(import.meta.env.DEV) && !import.meta.env.PROD && isDevEnvironment());
+    };
+    window.addEventListener(ENV_MODE_CHANGED_EVENT, syncEnv);
+    return () => window.removeEventListener(ENV_MODE_CHANGED_EVENT, syncEnv);
+  }, []);
+
   const loadItems = useDownloadStore((state) => state.loadItems);
   const initListener = useDownloadStore((state) => state.initListener);
   const initVersion = useAppVersionStore((state) => state.initVersion);
@@ -86,6 +120,7 @@ export const App: React.FC = () => {
 
   const setNewModalOpen = useDownloadStore((state) => state.setNewModalOpen);
   const openNewModalWithData = useDownloadStore((state) => state.openNewModalWithData);
+  const openCompleteModal = useDownloadStore((state) => state.openCompleteModal);
   const selectedView = useDownloadStore((state) => state.selectedView);
   const setSelectedView = useDownloadStore((state) => state.setSelectedView);
   const showTelemetryOnHome = useDownloadStore((state) => state.showTelemetryOnHome);
@@ -98,18 +133,21 @@ export const App: React.FC = () => {
   const banReason = useHardwareBanStore((state) => state.banReason);
 
   const triggerUiUpdateCheck = useCallback(() => {
-    if (isBanned) return;
+    if (useHardwareBanStore.getState().isBanned) return;
     if (typeof document !== 'undefined' && document.visibilityState !== 'visible') {
       // App is hidden in system tray: keep 100% idle and unaware!
       return;
     }
     useAppVersionStore.getState().checkForUpdates(true).then(() => {
-      useAppVersionStore.getState().evaluateAndApplyUpdate();
+      const st = useAppVersionStore.getState().status.state;
+      if (st === 'available' || st === 'ready') {
+        return useAppVersionStore.getState().evaluateAndApplyUpdate();
+      }
     }).catch(() => {});
-  }, [isBanned]);
+  }, []);
 
   useEffect(() => {
-    if (typeof window !== 'undefined') {
+    if (typeof window !== 'undefined' && import.meta.env.DEV) {
       (window as any).__DOWNEX_VERSION_STORE__ = useAppVersionStore;
       (window as any).__DOWNEX_DOWNLOAD_STORE__ = useDownloadStore;
     }
@@ -216,6 +254,8 @@ export const App: React.FC = () => {
       }
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'n') {
         e.preventDefault();
+        const banState = useHardwareBanStore.getState();
+        if (banState.isBanned || banState.isReinstating) return;
         setNewModalOpen(true);
       }
     };
@@ -234,6 +274,28 @@ export const App: React.FC = () => {
     const unlistenTrayModal = onOpenNewDownloadModal(() => {
       setNewModalOpen(true);
       restoreManagerWindow().catch(() => {});
+    });
+
+    const handleCompleteModalEvent = (e: any) => {
+      if (e?.detail) {
+        e.preventDefault();
+        openCompleteModal(e.detail);
+      }
+    };
+    window.addEventListener('downex-open-complete-modal', handleCompleteModalEvent);
+
+    const unlistenCompleteModal = onOpenDownloadCompleteModal((payload) => {
+      if (payload) {
+        openCompleteModal(payload);
+        restoreManagerWindow().catch(() => {});
+      }
+    });
+
+    const unlistenDownloadCompleted = onDownloadCompleted((payload) => {
+      if (payload) {
+        openCompleteModal(payload);
+        restoreManagerWindow().catch(() => {});
+      }
     });
 
 
@@ -256,6 +318,24 @@ export const App: React.FC = () => {
       setRollbackAlert(payload.version || 'Previous Stable');
     });
 
+    let unlistenRestartUpdate: (() => void) | null = null;
+    let restartCancelled = false;
+    import('@tauri-apps/api/event')
+      .then(({ listen }) =>
+        listen('downex-restart-update', () => {
+          restoreManagerWindow().catch(() => {});
+          useAppVersionStore.getState().installAndRestart().catch(() => {});
+        })
+      )
+      .then((unsub) => {
+        if (restartCancelled) {
+          unsub();
+        } else {
+          unlistenRestartUpdate = unsub;
+        }
+      })
+      .catch(() => {});
+
     // 5. Initialize Silicon Hardware Ban Status
     useHardwareBanStore.getState().initBanStatus();
 
@@ -277,16 +357,21 @@ export const App: React.FC = () => {
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('downex-open-new-download', handleBrowserOpen);
+      window.removeEventListener('downex-open-complete-modal', handleCompleteModalEvent);
       window.removeEventListener('downex-ban-state-changed', handleLocalBan);
       unlistenTrayModal();
+      unlistenCompleteModal();
+      unlistenDownloadCompleted();
       unlistenNavigate();
       unlistenCheckUpdates();
       unlistenUiOpened();
       unlistenRollback();
+      restartCancelled = true;
+      if (unlistenRestartUpdate) unlistenRestartUpdate();
       unlistenBan();
       cleanupHardwareEvents();
     };
-  }, [setNewModalOpen, openNewModalWithData, setSelectedView]);
+  }, [setNewModalOpen, openNewModalWithData, openCompleteModal, setSelectedView]);
 
   return (
     <>
@@ -308,7 +393,7 @@ export const App: React.FC = () => {
                 <div className="flex items-center gap-2.5">
                   <ShieldAlert className="w-4 h-4 text-amber-500 shrink-0" />
                   <span>
-                    <strong>Autonomous Rollback Safeguard:</strong> The latest update could not boot stably. Downex safely reverted your executable to verified operational version <strong>v{rollbackAlert}</strong>.
+                    <strong>Autonomous Rollback Safeguard:</strong> The latest update could not boot stably. Downex safely reverted your executable to verified operational version <strong>{rollbackAlert.startsWith('Previous') ? rollbackAlert : `v${rollbackAlert}`}</strong>.
                   </span>
                 </div>
                 <button
@@ -378,10 +463,15 @@ export const App: React.FC = () => {
         </div>
 
         {/* Modals & Floating Notifications */}
-        <NewDownloadModal />
-        <ShutdownCountdownModal />
-        <QueueGuideModal />
-        {import.meta.env.DEV && DevUpdateSimulatorLazy && isDevEnvironment() && (
+        {!isBanned && !isReinstating && (
+          <>
+            <NewDownloadModal />
+            <DownloadCompleteModal />
+            <ShutdownCountdownModal />
+            <QueueGuideModal />
+          </>
+        )}
+        {import.meta.env.DEV && !import.meta.env.PROD && DevUpdateSimulatorLazy && isDevActive && (
           <React.Suspense fallback={null}>
             <DevUpdateSimulatorLazy />
           </React.Suspense>

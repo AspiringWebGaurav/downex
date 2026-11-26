@@ -19,11 +19,23 @@ pub struct NativeResponse {
 }
 
 fn get_bridge_token() -> Option<String> {
+    let mut candidates = Vec::new();
     if let Ok(app_data) = std::env::var("APPDATA") {
-        let token_path = std::path::PathBuf::from(app_data)
-            .join("com.downex.manager")
-            .join("bridge.token");
-        if let Ok(token) = std::fs::read_to_string(token_path) {
+        candidates.push(
+            std::path::PathBuf::from(app_data)
+                .join("com.downex.manager")
+                .join("bridge.token"),
+        );
+    }
+    if let Ok(local_app_data) = std::env::var("LOCALAPPDATA") {
+        candidates.push(
+            std::path::PathBuf::from(local_app_data)
+                .join("com.downex.manager")
+                .join("bridge.token"),
+        );
+    }
+    for token_path in candidates {
+        if let Ok(token) = std::fs::read_to_string(&token_path) {
             let trimmed = token.trim();
             if trimmed.len() >= 32 {
                 return Some(trimmed.to_string());
@@ -96,8 +108,13 @@ pub fn run_native_host() -> io::Result<()> {
                                 String::new()
                             };
 
-                            if let Ok(mut stream) = std::net::TcpStream::connect("127.0.0.1:18888") {
+                            let addr = std::net::SocketAddr::from(([127, 0, 0, 1], 18888));
+                            if let Ok(mut stream) = std::net::TcpStream::connect_timeout(
+                                &addr,
+                                std::time::Duration::from_secs(2),
+                            ) {
                                 let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(3)));
+                                let _ = stream.set_write_timeout(Some(std::time::Duration::from_secs(2)));
                                 let req = format!(
                                     "POST /api/download HTTP/1.1\r\n\
 Host: 127.0.0.1:18888\r\n\
@@ -112,7 +129,7 @@ Connection: close\r\n\r\n{}",
                                     let mut resp_buf = Vec::new();
                                     let _ = stream.read_to_end(&mut resp_buf);
                                     let resp_text = String::from_utf8_lossy(&resp_buf);
-                                    if resp_text.contains("HTTP/1.1 200") {
+                                    if resp_text.starts_with("HTTP/1.1 200") || resp_text.starts_with("HTTP/1.0 200") {
                                         success = true;
                                         if let Some(body_start) = resp_text.find("\r\n\r\n") {
                                             if let Ok(v) = serde_json::from_str::<serde_json::Value>(&resp_text[body_start + 4..]) {

@@ -32,7 +32,6 @@
     "core:path:default",
     "core:tray:default",
     "opener:default",
-    "notification:default",
-    "autostart:default"
+    "notification:default"
   ]
 }

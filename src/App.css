@@ -511,8 +511,8 @@ html.dark #root {
 
 .downex-marquee-track {
   container-type: inline-size;
-  -webkit-mask-image: linear-gradient(to right, transparent 0%, #000 3%, #000 97%, transparent 100%);
-  mask-image: linear-gradient(to right, transparent 0%, #000 3%, #000 97%, transparent 100%);
+  -webkit-mask-image: linear-gradient(to right, transparent 0%, #000 5%, #000 95%, transparent 100%);
+  mask-image: linear-gradient(to right, transparent 0%, #000 5%, #000 95%, transparent 100%);
 }
 
 .downex-marquee-item-ltr {

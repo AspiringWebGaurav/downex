@@ -53,8 +53,9 @@ export class SpeedtestRunner {
     }
 
     this.isRunning = true;
-    this.abortController = new AbortController();
-    const { signal } = this.abortController;
+    const runController = new AbortController();
+    this.abortController = runController;
+    const { signal } = runController;
 
     const metrics: SpeedtestMetrics = {
       phase: 'idle',
@@ -134,15 +135,19 @@ export class SpeedtestRunner {
       }
 
       // Calculate Jitter (Mean Absolute Deviation of consecutive latency probes)
-      if (pingSamples.length >= 2) {
+      if (pingSamples.length === 0) {
+        metrics.phase = 'error';
+        metrics.errorMessage = 'Network unreachable or latency probe blocked';
+        onProgress({ ...metrics });
+        return;
+      } else if (pingSamples.length >= 2) {
         let diffSum = 0;
         for (let i = 1; i < pingSamples.length; i++) {
           diffSum += Math.abs(pingSamples[i] - pingSamples[i - 1]);
         }
         metrics.jitter = Math.max(1, Math.round(diffSum / (pingSamples.length - 1)));
       } else {
-        metrics.jitter = pingSamples.length > 0 ? 1 : 8;
-        if (metrics.ping === null) metrics.ping = 24;
+        metrics.jitter = 1;
       }
       metrics.progressPercent = 20;
       onProgress({ ...metrics });
@@ -223,8 +228,11 @@ export class SpeedtestRunner {
         onProgress({ ...metrics });
       }, 100);
 
-      await Promise.all(downloadWorkers);
-      clearInterval(downloadInterval);
+      try {
+        await Promise.all(downloadWorkers);
+      } finally {
+        clearInterval(downloadInterval);
+      }
 
       if (signal.aborted) return;
 
@@ -321,8 +329,10 @@ export class SpeedtestRunner {
       metrics.errorMessage = err?.message || 'Network test interrupted';
       onProgress({ ...metrics });
     } finally {
-      this.isRunning = false;
-      this.abortController = null;
+      if (this.abortController === runController) {
+        this.isRunning = false;
+        this.abortController = null;
+      }
     }
   }
 

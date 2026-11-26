@@ -22,24 +22,16 @@ interface SpeedtestViewProps {
 export const SpeedtestView: React.FC<SpeedtestViewProps> = ({ onBack }) => {
   const setSelectedView = useDownloadStore((state) => state.setSelectedView);
 
-  const [metrics, setMetrics] = useState<SpeedtestMetrics>(() => {
-    let savedLast: any = null;
-    try {
-      const raw = localStorage.getItem('downex_last_speedtest');
-      if (raw) savedLast = JSON.parse(raw);
-    } catch {}
-
-    return {
-      phase: savedLast ? 'completed' : 'idle',
-      ping: savedLast?.ping ?? null,
-      jitter: savedLast?.jitter ?? null,
-      currentSpeedMbps: savedLast?.download ?? 0,
-      downloadMbps: savedLast?.download ?? null,
-      uploadMbps: savedLast?.upload ?? null,
-      progressPercent: savedLast ? 100 : 0,
-      serverLocation: savedLast?.server ?? 'Cloudflare Edge CDN',
-    };
-  });
+  const [metrics, setMetrics] = useState<SpeedtestMetrics>(() => ({
+    phase: 'idle',
+    ping: null,
+    jitter: null,
+    currentSpeedMbps: 0,
+    downloadMbps: null,
+    uploadMbps: null,
+    progressPercent: 0,
+    serverLocation: 'Cloudflare Edge CDN',
+  }));
 
   const [activeResultTab, setActiveResultTab] = useState<'download' | 'upload'>('download');
   const runnerRef = useRef<SpeedtestRunner | null>(null);
@@ -48,9 +40,6 @@ export const SpeedtestView: React.FC<SpeedtestViewProps> = ({ onBack }) => {
     if (runnerRef.current) {
       runnerRef.current.abort();
     }
-    try {
-      localStorage.removeItem('downex_last_speedtest');
-    } catch {}
     setMetrics({
       phase: 'idle',
       ping: null,
@@ -64,20 +53,25 @@ export const SpeedtestView: React.FC<SpeedtestViewProps> = ({ onBack }) => {
     setActiveResultTab('download');
   };
 
+  const isTesting = metrics.phase === 'ping' || metrics.phase === 'download' || metrics.phase === 'upload';
+  const mountedRef = useRef(true);
+
   useEffect(() => {
+    mountedRef.current = true;
     const runner = new SpeedtestRunner();
     runnerRef.current = runner;
     return () => {
+      mountedRef.current = false;
       runner.abort();
     };
   }, []);
 
-  const isTesting = metrics.phase === 'ping' || metrics.phase === 'download' || metrics.phase === 'upload';
-
   const handleStart = () => {
     if (!runnerRef.current) return;
     runnerRef.current.start((updated) => {
-      setMetrics({ ...updated });
+      if (mountedRef.current) {
+        setMetrics({ ...updated });
+      }
     });
   };
 
@@ -92,21 +86,31 @@ export const SpeedtestView: React.FC<SpeedtestViewProps> = ({ onBack }) => {
     }
   };
 
-  // Keyboard shortcut: Spacebar starts/stops test
+  // Keyboard shortcut: Spacebar starts/stops test (ref-safe, always invokes latest state)
+  const spaceActionRef = useRef({ isTesting, handleStart, handleStop });
+  spaceActionRef.current = { isTesting, handleStart, handleStop };
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.code === 'Space' && document.activeElement?.tagName !== 'INPUT' && document.activeElement?.tagName !== 'TEXTAREA') {
+      const activeTag = document.activeElement?.tagName;
+      if (
+        e.code === 'Space' &&
+        activeTag !== 'INPUT' &&
+        activeTag !== 'TEXTAREA' &&
+        activeTag !== 'BUTTON' &&
+        activeTag !== 'SELECT' &&
+        activeTag !== 'A'
+      ) {
         e.preventDefault();
-        if (isTesting) {
-          handleStop();
+        if (spaceActionRef.current.isTesting) {
+          spaceActionRef.current.handleStop();
         } else {
-          handleStart();
+          spaceActionRef.current.handleStart();
         }
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isTesting]);
+  }, []);
 
   // Dynamic Scale Range: 50 -> 100 -> 250 -> 500 -> 1000 Mbps
   const isCompleted = metrics.phase === 'completed';
@@ -386,7 +390,7 @@ export const SpeedtestView: React.FC<SpeedtestViewProps> = ({ onBack }) => {
               >
                 <Play className="w-5 h-5 fill-zinc-900 dark:fill-zinc-100 group-hover:scale-110 transition-transform ml-0.5" />
                 <span className="font-mono-tabular text-[11px] font-bold tracking-widest uppercase mt-1">START</span>
-                <span aria-hidden="true" className="font-mono-tabular text-[8.5px] uppercase tracking-wider text-zinc-400 dark:text-zinc-500">32-STREAM</span>
+                <span aria-hidden="true" className="font-mono-tabular text-[8.5px] uppercase tracking-wider text-zinc-400 dark:text-zinc-500">MULTI-STREAM</span>
               </button>
             ) : isCompleted ? (
               <div className="flex flex-col items-center justify-center">
@@ -497,7 +501,7 @@ export const SpeedtestView: React.FC<SpeedtestViewProps> = ({ onBack }) => {
               Download
             </span>
             <span className="border border-emerald-500/40 text-emerald-600 dark:text-emerald-400 px-1 py-0.2 text-[8px] font-mono-tabular uppercase font-semibold">
-              32-STREAM
+              MULTI-STREAM
             </span>
           </div>
           <div className="mt-1.5 flex items-baseline gap-1">

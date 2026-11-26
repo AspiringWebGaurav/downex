@@ -1,42 +1,21 @@
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { 
+import {
   Sun,
   Moon,
   ArrowLeft,
   Monitor,
-  ExternalLink, 
-  FolderOpen, 
-  Folder,
-  Link2,
-  X, 
-  Minus, 
-  Copy, 
-  Check, 
-  AppWindow,
-  FileBox
 } from 'lucide-react';
-import { 
-  DownloadCompletePayload, 
-  getDownloadCompletePayload, 
-  closeDownloadCompleteDialog, 
-  openFile, 
-  openFileWith, 
-  openFileFolder, 
-  getDefaultDownloadDir,
-  onDownloadCompleted, 
+import {
+  DownloadCompletePayload,
+  getDownloadCompletePayload,
+  closeDownloadCompleteDialog,
+  onDownloadCompleted,
   onOpenDownloadCompleteModal,
-  isTauri 
+  isTauri,
 } from '../services/tauriService';
+import { DownloadCompleteModal } from '../components/DownloadCompleteModal';
 import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
 import { LogicalSize } from '@tauri-apps/api/dpi';
-
-function formatBytes(bytes?: number): string {
-  if (!bytes || bytes <= 0) return '0 B';
-  const k = 1024;
-  const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
-  return `${parseFloat((bytes / Math.pow(k, i)).toFixed(2))} ${sizes[i]}`;
-}
 
 const DEFAULT_BROWSER_COMPLETE_MOCK: DownloadCompletePayload = {
   id: 'mock-complete-1',
@@ -71,8 +50,6 @@ function getInitialCompletePayload(): DownloadCompletePayload | null {
 
 export const DownloadCompleteWindow: React.FC = () => {
   const [payload, setPayload] = useState<DownloadCompletePayload | null>(getInitialCompletePayload);
-  const [isWindowFocused, setIsWindowFocused] = useState<boolean>(true);
-  const [copiedField, setCopiedField] = useState<'url' | 'path' | null>(null);
   const cardRef = useRef<HTMLDivElement>(null);
   const lastRequestedHeightRef = useRef<number>(0);
   const [measuredHeight, setMeasuredHeight] = useState<number>(249);
@@ -113,29 +90,23 @@ export const DownloadCompleteWindow: React.FC = () => {
 
   // Out of focus handler: Cleanly yield focus and disable always-on-top when clicking elsewhere
   useEffect(() => {
-    const handleFocus = () => {
-      setIsWindowFocused(true);
-    };
-
     const handleBlur = () => {
-      setIsWindowFocused(false);
       if (isTauri) {
         try {
           getCurrentWebviewWindow().setAlwaysOnTop(false).catch(() => {});
         } catch {}
       }
     };
-
-    window.addEventListener('focus', handleFocus);
-    window.addEventListener('blur', handleBlur);
-    document.addEventListener('visibilitychange', () => {
+    const handleVisibilityChange = () => {
       if (document.hidden) handleBlur();
-      else handleFocus();
-    });
+    };
+
+    window.addEventListener('blur', handleBlur);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
 
     return () => {
-      window.removeEventListener('focus', handleFocus);
       window.removeEventListener('blur', handleBlur);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
   }, []);
 
@@ -240,266 +211,18 @@ export const DownloadCompleteWindow: React.FC = () => {
     }
   };
 
-  const handleMinimize = async () => {
-    if (isTauri) {
-      try {
-        const win = getCurrentWebviewWindow();
-        await win.minimize();
-      } catch {}
-    }
-  };
-
-  const copyToClipboard = (text: string, field: 'url' | 'path') => {
-    try {
-      navigator.clipboard?.writeText(text).catch(() => {});
-    } catch {}
-    setCopiedField(field);
-    setTimeout(() => setCopiedField(null), 1500);
-  };
-
-  const totalBytes = payload?.total_bytes || payload?.downloaded_bytes || 0;
-  const formattedSize = totalBytes > 0 ? formatBytes(totalBytes) : 'Complete';
-  const displayFilename = payload?.filename || 'Download Complete';
-  const displayUrl = payload?.url || '';
-  const displayPath = payload?.destination_path || '';
-
-  const lastDot = displayFilename.lastIndexOf('.');
-  const fileBaseName = lastDot > 0 ? displayFilename.slice(0, lastDot) : displayFilename;
-  const fileExtension = lastDot > 0 ? displayFilename.slice(lastDot + 1).toUpperCase() : '';
-
-  const handleOpenFile = async () => {
-    if (displayPath) {
-      await openFile(displayPath);
-      handleClose();
-    }
-  };
-
-  const handleOpenWith = async () => {
-    if (displayPath) {
-      await openFileWith(displayPath);
-      handleClose();
-    }
-  };
-
-  const handleOpenFolder = async () => {
-    if (displayPath) {
-      await openFileFolder(displayPath);
-    } else {
-      const defaultDir = await getDefaultDownloadDir();
-      if (defaultDir) await openFileFolder(defaultDir);
-    }
-    handleClose();
-  };
-
   const CompleteCard = (
-    <div
-      ref={cardRef}
-      data-testid="download-complete-card"
-      className="w-full flex flex-col bg-white dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 font-sans select-none overflow-hidden transition-shadow"
-    >
-      {/* Titlebar (Industrial Design Language 1:1 Matching New Download Modal) */}
-      <div
-        data-tauri-drag-region
-        className={`h-8 px-3.5 bg-zinc-50 dark:bg-zinc-900 border-b border-zinc-200 dark:border-zinc-800 flex items-center justify-between select-none cursor-move shrink-0 transition-opacity ${
-          isWindowFocused ? 'opacity-100' : 'opacity-85'
-        }`}
-      >
-        <div data-tauri-drag-region className="flex items-center gap-2">
-          <span
-            data-tauri-drag-region
-            className="font-mono-tabular text-[10.5px] uppercase tracking-wider text-emerald-600 dark:text-emerald-400 font-semibold"
-          >
-            DOWNLOAD COMPLETE
-          </span>
-          <span data-tauri-drag-region className="text-[10px] font-mono-tabular text-zinc-400">
-            TASK SAVED 100%
-          </span>
-        </div>
-        <div className="flex items-center gap-1">
-          <button
-            type="button"
-            onClick={handleMinimize}
-            className="w-5 h-5 flex items-center justify-center text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 cursor-pointer focus:outline-none"
-            title="Minimize"
-          >
-            <Minus className="w-3.5 h-3.5 stroke-[1.8]" />
-          </button>
-          <button
-            type="button"
-            onClick={handleClose}
-            className="w-5 h-5 flex items-center justify-center text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 cursor-pointer focus:outline-none"
-            title="Close (Esc)"
-          >
-            <X className="w-3.5 h-3.5 stroke-[1.8]" />
-          </button>
-        </div>
-      </div>
-
-      {/* Main Form Body - Industrial 1:1 Matching New Download Modal */}
-      <div className="p-3.5 space-y-2.5 flex-1 flex flex-col justify-between overflow-hidden text-xs">
-        {/* Row 1: File Name */}
-        <div>
-          <div className="flex items-center justify-between mb-1">
-            <label className="text-[11px] font-semibold text-zinc-900 dark:text-zinc-100">
-              File Name
-            </label>
-            <span className="text-[10px] font-mono-tabular text-zinc-400">
-              SAVED ARTIFACT
-            </span>
-          </div>
-          <div className="flex items-center border border-zinc-300 dark:border-zinc-700 bg-zinc-50/50 dark:bg-zinc-900/50 px-2.5 py-1.5 gap-2">
-            <div className="text-zinc-400 dark:text-zinc-500 shrink-0">
-              <FileBox className="w-3.5 h-3.5" />
-            </div>
-            <span
-              className="flex-1 font-mono-tabular text-[12px] font-semibold text-zinc-900 dark:text-zinc-100 truncate select-all"
-              title={displayFilename}
-            >
-              {fileBaseName}
-            </span>
-            {fileExtension && (
-              <span className="px-1.5 py-0.5 text-[10px] font-mono-tabular font-semibold bg-zinc-200 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 uppercase shrink-0">
-                .{fileExtension}
-              </span>
-            )}
-          </div>
-        </div>
-
-        {/* Row 2: Streamlined Info Strip (2 Columns) */}
-        <div className="grid grid-cols-2 gap-2">
-          {/* File Size */}
-          <div className="border border-zinc-200 dark:border-zinc-800 bg-zinc-50/40 dark:bg-zinc-950/40 px-2.5 py-1.5 flex items-center justify-between">
-            <div className="min-w-0">
-              <div className="text-[9.5px] uppercase font-mono-tabular text-zinc-400 leading-tight">File Size</div>
-              <div className="font-mono-tabular text-[12.5px] font-bold text-zinc-900 dark:text-zinc-100 leading-snug truncate">
-                {formattedSize}
-              </div>
-            </div>
-            <span className="text-[9.5px] font-mono-tabular px-1.5 py-0.5 border border-emerald-500/50 text-emerald-600 dark:text-emerald-400 bg-emerald-500/5 shrink-0">
-              100% COMPLETE
-            </span>
-          </div>
-
-          {/* Storage / Integrity */}
-          <div className="border border-zinc-200 dark:border-zinc-800 bg-zinc-50/40 dark:bg-zinc-950/40 px-2.5 py-1.5 flex items-center justify-between">
-            <div className="min-w-0">
-              <div className="text-[9.5px] uppercase font-mono-tabular text-zinc-400 leading-tight">Storage</div>
-              <div className="font-mono-tabular text-[12.5px] font-bold text-zinc-900 dark:text-zinc-100 leading-snug truncate">
-                Verified on Disk
-              </div>
-            </div>
-            <span className="text-[9.5px] font-mono-tabular text-zinc-400 uppercase shrink-0">
-              LOCAL DISK
-            </span>
-          </div>
-        </div>
-
-        {/* Row 3: Destination Folder (Save To) */}
-        <div>
-          <div className="flex items-center justify-between mb-1">
-            <label className="text-[11px] font-semibold text-zinc-900 dark:text-zinc-100">
-              Save To
-            </label>
-            <span className="text-[10px] font-mono-tabular text-zinc-400">
-              SAVED LOCATION
-            </span>
-          </div>
-          <div className="flex items-center gap-1.5">
-            <div className="relative flex-1 flex items-center border border-zinc-300 dark:border-zinc-700 bg-zinc-50/50 dark:bg-zinc-950/50 px-2.5 py-1 min-w-0">
-              <Folder className="w-3.5 h-3.5 text-zinc-400 mr-2 shrink-0" />
-              <span
-                className="flex-1 text-[11px] font-mono-tabular text-zinc-900 dark:text-zinc-100 truncate select-all"
-                title={displayPath}
-              >
-                {displayPath}
-              </span>
-            </div>
-            <button
-              type="button"
-              onClick={() => copyToClipboard(displayPath, 'path')}
-              className="h-7.5 px-2.5 border border-zinc-300 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-800 font-mono-tabular text-[10px] uppercase tracking-wider shrink-0 cursor-pointer flex items-center gap-1"
-              title="Copy folder/file path"
-            >
-              {copiedField === 'path' ? <Check className="w-3 h-3 text-emerald-500" /> : <Copy className="w-3 h-3 text-zinc-400" />}
-              <span>{copiedField === 'path' ? 'COPIED' : 'COPY'}</span>
-            </button>
-            <button
-              type="button"
-              onClick={handleOpenFolder}
-              className="h-7.5 px-3 border border-zinc-300 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-800 font-mono-tabular text-[10px] uppercase tracking-wider shrink-0 cursor-pointer flex items-center gap-1"
-              title="Show in File Explorer"
-            >
-              <FolderOpen className="w-3.5 h-3.5 text-zinc-400" />
-              <span>OPEN FOLDER</span>
-            </button>
-          </div>
-        </div>
-
-        {/* Row 4: Source URL */}
-        <div>
-          <div className="flex items-center justify-between mb-1">
-            <label className="text-[11px] font-semibold text-zinc-900 dark:text-zinc-100">
-              Source URL
-            </label>
-            <button
-              type="button"
-              onClick={() => copyToClipboard(displayUrl, 'url')}
-              className="text-[10px] font-mono-tabular font-semibold text-emerald-600 dark:text-emerald-400 hover:underline transition-colors flex items-center gap-1 cursor-pointer"
-            >
-              {copiedField === 'url' ? <Check className="w-3 h-3 text-emerald-500" /> : <Copy className="w-3 h-3" />}
-              <span>{copiedField === 'url' ? 'COPIED' : 'COPY'}</span>
-            </button>
-          </div>
-          <div className="flex items-center border border-zinc-300 dark:border-zinc-700 bg-zinc-50/50 dark:bg-zinc-950/50 px-2.5 py-1">
-            <Link2 className="w-3.5 h-3.5 text-zinc-400 mr-2 shrink-0" />
-            <span
-              className="flex-1 text-[11px] font-mono-tabular text-zinc-900 dark:text-zinc-100 truncate select-all"
-              title={displayUrl}
-            >
-              {displayUrl}
-            </span>
-          </div>
-        </div>
-
-        {/* Bottom Actions Strip */}
-        <div className="pt-2 flex items-center justify-between border-t border-zinc-200 dark:border-zinc-800 mt-1 shrink-0">
-          <div className="flex items-center gap-1.5">
-            <button
-              type="button"
-              onClick={handleOpenWith}
-              className="h-7.5 px-2.5 border border-zinc-300 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-800 font-mono-tabular text-[10px] uppercase tracking-wider text-zinc-700 dark:text-zinc-300 flex items-center gap-1.5 transition-colors cursor-pointer"
-              title="Choose application to open this file"
-            >
-              <AppWindow className="w-3 h-3 text-zinc-400" />
-              <span>Open With...</span>
-            </button>
-          </div>
-
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={handleClose}
-              className="h-7.5 px-3.5 border border-zinc-300 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-800 font-mono-tabular text-[10px] uppercase tracking-wider text-zinc-700 dark:text-zinc-300 cursor-pointer"
-            >
-              Close
-            </button>
-            <button
-              type="button"
-              onClick={handleOpenFile}
-              className="h-7.5 px-4 bg-zinc-900 hover:bg-black dark:bg-zinc-100 dark:hover:bg-white text-white dark:text-zinc-900 font-mono-tabular text-[10.5px] uppercase tracking-wider font-bold shadow-xs transition-colors flex items-center gap-1.5 cursor-pointer"
-            >
-              <ExternalLink className="w-3.5 h-3.5" />
-              <span>Open File</span>
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
+    <DownloadCompleteModal
+      isStandalone
+      standalonePayload={payload}
+      onStandaloneClose={handleClose}
+      cardRef={cardRef}
+    />
   );
 
   if (isTauri) {
     return (
-      <div className="w-screen min-h-screen flex flex-col bg-white dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 font-sans select-none overflow-hidden">
+      <div className="w-screen flex flex-col bg-white dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 font-sans select-none overflow-hidden">
         {CompleteCard}
       </div>
     );

@@ -197,19 +197,19 @@ export const useAppVersionStore = create<AppVersionStore>((set, get) => {
             const hasUrl = manifest && (manifest.url || manifest.platforms?.['windows-x86_64']?.url);
 
             if (manifest && hasUrl && targetVersion && compareSemver(targetVersion, cleaned) > 0) {
-              // Check if staged binary is already present on disk
+              // Check if staged binary is actually verified on disk (never trust raw localStorage stagedPath alone)
               const stagedOnDisk = await getStagedUpdate(targetVersion);
-              const stagedPath = stagedOnDisk || data.stagedPath;
 
-              if (stagedPath && (stagedOnDisk || data.state === 'ready')) {
-                updateService.setStagedBinaryPath(stagedPath);
+              if (stagedOnDisk) {
+                updateService.setStagedBinaryPath(stagedOnDisk);
                 updateService.notify({
                   state: 'ready',
                   manifest,
                   targetVersion,
-                  stagedPath,
+                  stagedPath: stagedOnDisk,
                 });
               } else {
+                updateService.setStagedBinaryPath(null);
                 updateService.notify({
                   state: 'available',
                   manifest,
@@ -228,23 +228,9 @@ export const useAppVersionStore = create<AppVersionStore>((set, get) => {
           }
         } catch {}
 
-        // In browser dev preview / Playwright mock mode outside Tauri: schedule silent check to support route mocks
-        if (!isTauri) {
-          setTimeout(() => {
-            get().checkForUpdates(true).catch(() => {});
-          }, 1200);
-        }
+        // Startup silent check is owned uniformly by App.tsx's visibility-aware timer (triggerUiUpdateCheck)
 
-        // Re-synchronize on window focus when unminimized from tray (zero network requests)
-        if (typeof window !== 'undefined' && !(window as any).__DOWNEX_FOCUS_SYNC_WIRED__) {
-          (window as any).__DOWNEX_FOCUS_SYNC_WIRED__ = true;
-          window.addEventListener('focus', async () => {
-            try {
-              await updateService.evaluateAndApplyUpdate();
-            } catch {}
-          });
-        }
-        // Listen for native dev reset event
+        // Listen for native dev reset event (window focus sync is owned by App.tsx)
         if (isTauri && typeof window !== 'undefined' && !(window as any).__DOWNEX_BASE_RESET_LISTENER__) {
           (window as any).__DOWNEX_BASE_RESET_LISTENER__ = true;
           listen('downex-base-app-reset', () => {

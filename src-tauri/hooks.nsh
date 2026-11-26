@@ -13,15 +13,8 @@
 !define MUI_LICENSEPAGE_CHECKBOX_TEXT "I accept the terms of the Use && Acceptance Agreement"
 !endif
 
-; 2. Pre-install hook: Politely signal and terminate running Downex instances
+; 2. Pre-install hook: Politely terminate running Downex instances
 !macro NSIS_HOOK_PREINSTALL
-  ; Politely close running Downex window if open
-  FindWindow $0 "Downex_WINDOW_CLASS" ""
-  ${If} $0 != 0
-    SendMessage $0 ${WM_CLOSE} 0 0
-    Sleep 300
-  ${EndIf}
-
   ; Silent forced kill fallback to guarantee zero locks or zombie processes
   nsExec::Exec '"$SYSDIR\taskkill.exe" /F /IM Downex.exe /T'
   nsExec::Exec '"$SYSDIR\taskkill.exe" /F /IM downex.exe /T'
@@ -47,12 +40,6 @@
 
 ; 3. Pre-uninstall hook: Terminate running Downex before uninstallation
 !macro NSIS_HOOK_PREUNINSTALL
-  FindWindow $0 "Downex_WINDOW_CLASS" ""
-  ${If} $0 != 0
-    SendMessage $0 ${WM_CLOSE} 0 0
-    Sleep 300
-  ${EndIf}
-
   nsExec::Exec '"$SYSDIR\taskkill.exe" /F /IM Downex.exe /T'
   nsExec::Exec '"$SYSDIR\taskkill.exe" /F /IM downex.exe /T'
   nsExec::Exec '"$SYSDIR\taskkill.exe" /F /IM DownexService.exe /T'
@@ -64,52 +51,48 @@
   Sleep 400
 !macroend
 
-; 4. Post-install hook: Shortcuts and Firewall Rule
+; 4. Post-install hook: Clean superseded staging remnants without overriding user checkbox choices
 !macro NSIS_HOOK_POSTINSTALL
-  ; Create Desktop Shortcut for current/all users
-  CreateShortcut "$DESKTOP\Downex.lnk" "$INSTDIR\Downex.exe" "" "$INSTDIR\Downex.exe" 0 "" "" "Downex Download Manager"
-
-  ; Add Windows Firewall inbound exception for Downex binary
-  nsExec::ExecToLog 'netsh advfirewall firewall add rule name="Downex Download Manager" dir=in action=allow program="$INSTDIR\Downex.exe" enable=yes profile=any'
-
   Delete "$INSTDIR\*.old"
   Delete "$INSTDIR\*.staged"
+  Delete "$INSTDIR\*.new"
+  Delete "$INSTDIR\*.bad"
 !macroend
 
-; 5. Post-uninstall hook: Clean shortcuts, remove firewall rule, and refresh taskbar tray
+; 5. Post-uninstall hook: Clean shortcuts, firewall rules, and refresh taskbar tray respecting UpdateMode & UninstOptionState
 !macro NSIS_HOOK_POSTUNINSTALL
-  ; Remove Desktop and Start Menu Shortcuts
-  Delete "$DESKTOP\Downex.lnk"
-  Delete "$DESKTOP\downex.lnk"
-  Delete "$SMPROGRAMS\Downex.lnk"
-  Delete "$SMPROGRAMS\Downex Download Manager.lnk"
-  RMDir /r "$SMPROGRAMS\Downex"
-  RMDir /r "$SMPROGRAMS\Downex Download Manager"
-  RMDir /r "$LOCALAPPDATA\Programs\Downex Download Manager"
-  RMDir /r "$INSTDIR\updater"
-  RMDir /r "$INSTDIR\engine"
-  RMDir /r "$INSTDIR\security"
-  RMDir /r "$INSTDIR\core"
-  RMDir /r "$INSTDIR\license"
-  RMDir /r "$INSTDIR\research_and_study"
-  Delete "$LOCALAPPDATA\com.downex.manager\installed_version.json"
-  Delete "$LOCALAPPDATA\Downex\installed_version.json"
-  Delete "$LOCALAPPDATA\com.downex.manager\update_restart.flag"
-  Delete "$LOCALAPPDATA\com.downex.manager\executed_tasks.json"
-  RMDir /r "$LOCALAPPDATA\com.downex.manager"
-  RMDir /r "$LOCALAPPDATA\Downex"
-  RMDir /r "$APPDATA\com.downex.manager"
-  RMDir /r "$LOCALAPPDATA\Temp\com.downex.manager"
-  RMDir /r "$TEMP\com.downex.manager"
+  ${If} $UpdateMode <> 1
+    ; Remove Desktop and Start Menu Shortcuts
+    Delete "$DESKTOP\Downex.lnk"
+    Delete "$DESKTOP\downex.lnk"
+    Delete "$SMPROGRAMS\Downex.lnk"
+    Delete "$SMPROGRAMS\Downex Download Manager.lnk"
+    RMDir /r "$SMPROGRAMS\Downex"
+    RMDir /r "$SMPROGRAMS\Downex Download Manager"
+    RMDir /r "$LOCALAPPDATA\Programs\Downex Download Manager"
+    RMDir /r "$INSTDIR\updater"
+    RMDir /r "$INSTDIR\engine"
+    RMDir /r "$INSTDIR\security"
+    RMDir /r "$INSTDIR\core"
+    RMDir /r "$INSTDIR\license"
+    RMDir /r "$INSTDIR\research_and_study"
+    Delete "$LOCALAPPDATA\com.downex.manager\update_restart.flag"
 
-  ; Clean Downex custom registry trees & protocol handlers
-  DeleteRegKey HKCU "Software\Downex"
-  DeleteRegKey HKLM "Software\Downex"
-  DeleteRegKey HKCU "Software\Classes\downex"
-  DeleteRegKey HKLM "Software\Classes\downex"
+    ${If} $UninstOptionState = 3
+      RMDir /r "$LOCALAPPDATA\Temp\com.downex.manager"
+      RMDir /r "$TEMP\com.downex.manager"
 
-  ; Delete Windows Firewall inbound rule
-  nsExec::ExecToLog 'netsh advfirewall firewall delete rule name="Downex Download Manager"'
+      ; Clean Downex custom registry trees & protocol handlers
+      DeleteRegKey HKCU "Software\Downex"
+      DeleteRegKey HKLM "Software\Downex"
+      DeleteRegKey HKCU "Software\Classes\downex"
+      DeleteRegKey HKLM "Software\Classes\downex"
+
+      ; Delete Windows Firewall inbound rules
+      nsExec::ExecToLog 'netsh advfirewall firewall delete rule name="${PRODUCTNAME}"'
+      nsExec::ExecToLog 'netsh advfirewall firewall delete rule name="Downex Download Manager"'
+    ${EndIf}
+  ${EndIf}
 
   ; Refresh Windows Explorer notification area so zero ghost tray icons linger
   FindWindow $0 "Shell_TrayWnd" ""

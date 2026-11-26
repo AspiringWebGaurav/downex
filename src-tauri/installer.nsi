@@ -301,6 +301,7 @@ Function un.DownexRemovalPage
 
   ${If} $PassiveMode = 1
   ${OrIf} $UpdateMode = 1
+  ${OrIf} ${Silent}
     Abort
   ${EndIf}
 
@@ -345,14 +346,6 @@ Function un.DownexRemovalPageLeave
   ${NSD_GetState} $UninstOptionRadio3 $0
   ${If} $0 == ${BST_CHECKED}
     StrCpy $UninstOptionState 3
-    MessageBox MB_ICONEXCLAMATION|MB_YESNO|MB_DEFBUTTON2 \
-      "WARNING: Irreversible Action!$\r$\n$\r$\nComplete Clean Wipe will permanently remove:$\r$\n* Downex download manager binaries$\r$\n* Local queue database and metadata$\r$\n* Network and speed limit configurations$\r$\n* Windows Firewall rules and registry keys$\r$\n$\r$\nAre you sure you want to proceed?" \
-      IDYES wipe_confirmed
-    StrCpy $UninstOptionState 1
-    ${NSD_Check} $UninstOptionRadio1
-    ${NSD_Uncheck} $UninstOptionRadio3
-    Abort
-    wipe_confirmed:
   ${EndIf}
 FunctionEnd
 
@@ -708,7 +701,7 @@ Section Install
   WriteRegStr SHCTX "${UNINSTKEY}" "DisplayIcon" "$\"$INSTDIR\${MAINBINARYNAME}.exe$\""
   WriteRegStr SHCTX "${UNINSTKEY}" "DisplayVersion" "${VERSION}"
   WriteRegStr SHCTX "${UNINSTKEY}" "Publisher" "${MANUFACTURER}"
-  WriteRegStr SHCTX "${UNINSTKEY}" "InstallLocation" "$\"$INSTDIR$\""
+  WriteRegStr SHCTX "${UNINSTKEY}" "InstallLocation" "$INSTDIR"
   WriteRegStr SHCTX "${UNINSTKEY}" "UninstallString" "$\"$INSTDIR\uninstall.exe$\""
   WriteRegStr SHCTX "${UNINSTKEY}" "QuietUninstallString" "$\"$INSTDIR\uninstall.exe$\" /S"
   WriteRegDWORD SHCTX "${UNINSTKEY}" "NoModify" "1"
@@ -735,11 +728,15 @@ Section Install
     Call CreateOrUpdateDesktopShortcut
   ${EndIf}
 
-  ; Windows Startup Registry (HKCU Run)
+  ; Windows Startup Registry (HKCU Run) & persisted installer choice for first boot
   ${If} $CheckboxAutoStartState = 1
   ${OrIf} $PassiveMode = 1
   ${OrIf} $UpdateMode = 1
+    WriteRegStr HKCU "Software\Downex" "AutoStart" "1"
     WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "${PRODUCTNAME}" '"$INSTDIR\${MAINBINARYNAME}.exe" --autostart'
+  ${Else}
+    WriteRegStr HKCU "Software\Downex" "AutoStart" "0"
+    DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "${PRODUCTNAME}"
   ${EndIf}
 
   ; Desktop Shortcut
@@ -886,8 +883,6 @@ Section Uninstall
   RMDir /REBOOTOK "$INSTDIR\\{{this}}"
   {{/each}}
 
-  RMDir /REBOOTOK "$INSTDIR"
-
   ${If} $UpdateMode <> 1
     !insertmacro DeleteAppUserModelId
 
@@ -950,6 +945,8 @@ Section Uninstall
   !ifmacrodef NSIS_HOOK_POSTUNINSTALL
     !insertmacro NSIS_HOOK_POSTUNINSTALL
   !endif
+
+  RMDir /REBOOTOK "$INSTDIR"
 
   ; Auto-close uninstaller upon completion (frictionless zero-click finish, never stuck on Next/Finish/Close)
   SetAutoClose true

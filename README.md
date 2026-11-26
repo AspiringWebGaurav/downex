@@ -2,7 +2,7 @@
 
 <div align="center">
 
-**An independent, next-generation Windows download manager combining a multi-connection Rust engine, an advanced browser integration extension, and zero-cloud encrypted credentials.**
+**An independent, lightweight Windows download manager combining a multi-connection Rust engine, a UI-less companion browser extension, and zero-cloud encrypted credentials.**
 
 [![Rust](https://img.shields.io/badge/Rust-2021-orange.svg)](https://www.rust-lang.org/)
 [![Tauri 2](https://img.shields.io/badge/Tauri-2.0-blue.svg)](https://tauri.app/)
@@ -16,16 +16,12 @@
 
 ## ⚡ Core Features
 
-- **🚀 Multi-Connection Rust Engine:** IDM-style independent TCP socket connections (`tokio`, `reqwest`, `rusqlite`) with dynamic segment work-stealing and high-speed positional file writing.
-- **🎬 DASH & HLS Stream Muxer:** Built-in manifest parser that simultaneously downloads video + audio streams (including YouTube 4K/1080p 60fps adaptive formats) and remuxes them in-flight into pristine MP4/MKV files.
-- **🧩 Advanced Browser Extension (MV3 / MV2):** 
-  - **Shadow-DOM Media Pill:** Direct on-player floating download widget with zero layout shift or Win32 flicker.
-  - **Download Interceptor:** Automatically captures browser downloads with full session cookies and referrers.
-  - **Batch Link Grabber:** Filter and batch download links across any webpage.
-- **🎨 GPN-Style Frameless Desktop UI:** Compact, centered frameless window with smooth system tray docking, active progress rings, and quick-jump navigation.
-- **⚡ Simple 1-by-1 Queue Pipeline:** Dedicated queue workspace keeping active downloads clean, dynamic sequence numbering (`#1`, `#2`), proactive non-resumable HTTP Range guards preventing data loss, and automatic completion handoff.
-- **🔒 Zero-Cloud Encrypted Project Vault:** Secrets, OTA release signing keys, and proprietary references are stored in an authenticated **AES-256-GCM + scrypt** container right in the repo with a 2-attempt intrusion defense lifecycle.
-- **📦 In-Process OTA Pipeline:** Self-updating client utilizing Minisign Ed25519 cryptographic signatures and GPHost R2 atomic releases (`npm run ship`).
+- **🚀 Multi-Connection Rust Engine:** IDM-style independent HTTP/1.1 TCP socket connections (`tokio`, `reqwest`, `rusqlite`) with dynamic segment work-stealing and positional file writing.
+- **🧩 UI-Less Companion Browser Extension (MV3):** Pure background link catcher (`content.js`, `chrome.downloads` interception, and context-menu integration) bridging cleanly to `127.0.0.1:18888` via `POST /api/handshake` with automatic native browser fallback when Downex is closed.
+- **🎨 Compact Frameless Desktop UI:** Centered frameless window with system tray docking, per-task progress icons, live inline speed limiter, and dedicated link-grabber / completion dialogs.
+- **⚡ 1-by-1 Queue & Auto-Shutdown:** Clean queue scheduling with physical disk-length verification and a 30-second safety countdown modal.
+- **🔒 Zero-Cloud Encrypted Project Vault:** Secrets, OTA release signing keys, and references stored in an authenticated **AES-256-GCM + scrypt** container (`downex-vault.enc`) with a 2-attempt self-defense lifecycle.
+- **📦 Fast In-Process OTA Pipeline (`<60s`):** Self-updating client utilizing AES-256-GCM containers, Minisign Ed25519 signatures, two 0.75s quiet-stop handoffs (`updater.exe`), autonomous boot probation rollback (`DownexRecovery.exe`), and fast `[profile.ota]` builds (`npm run ship`).
 
 ---
 
@@ -37,21 +33,19 @@ git clone https://github.com/AspiringWebGaurav/downex.git
 cd downex
 ```
 
-### 2. 1-Click Automated Setup
-Run the automated setup script to install dependencies, unpack the encrypted project vault, and verify the workspace:
-
+### 2. Automated Setup
 ```bash
 Setup.cmd
 ```
-*(Or manually via: `npm install && npm run vault:unpack`)*
+*(Or manually: `npm install && npm run vault:unpack`)*
 
-### 4. Run Development Environment
-To launch the full Tauri 2 desktop application:
+### 3. Run Development Environment
+Full Tauri 2 desktop application:
 ```bash
 npm run dev
 ```
 
-To run the frontend in the browser only:
+Frontend browser preview only:
 ```bash
 npm run dev:frontend
 ```
@@ -62,29 +56,30 @@ npm run dev:frontend
 
 ```
 downex/
-├── downex-browser-extension/     # Chrome / Brave / Edge extension (MV3 / MV2)
-│   ├── background.js             # Service worker & Native Messaging bridge
-│   ├── content.js                # DOM media detector & video overlay
-│   ├── manifest.json             # WebExtension manifest
-│   └── page-hook.js              # In-page stream sniffer (DASH / HLS)
+├── downex-browser-extension/     # UI-less Chrome / Edge / Brave extension (MV3)
+│   ├── background.js             # Service worker, POST handshake & download interception
+│   ├── content.js                # Direct link-click interceptor with Alt bypass
+│   └── manifest.json             # WebExtension manifest
 ├── src/                          # Desktop UI (React 19 + TypeScript + Vite)
-│   ├── components/               # Modal windows, download lists, add URL dialogs
-│   ├── stores/                   # Zustand state management
-│   └── utils/                    # Formatting helpers
+│   ├── components/               # Sidebar, table, settings, speedtest, modals
+│   ├── windows/                  # DownloadDialogWindow & DownloadCompleteWindow
+│   ├── stores/                   # Zustand state stores
+│   └── services/                 # Tauri IPC, OTA, and hardware event services
 ├── src-tauri/                    # Native Engine & Desktop Shell (Rust 2021)
-│   ├── src/bridge/               # Native Messaging stdio host protocol
-│   ├── src/engine/               # Multi-connection worker pool & stream muxer
+│   ├── src/bridge/               # Loopback HTTP bridge & Native Messaging host
+│   ├── src/engine/               # Multi-connection worker pool, probe, limiter & writer
 │   ├── src/db/                   # SQLite WAL persistence layer
-│   ├── src/ota/                  # In-process update check & binary patcher
+│   ├── src/ota/                  # In-process update check, verification & recovery
+│   ├── src/bin/                  # updater, downex_service, downex_recovery, downex_bridge
 │   └── tauri.conf.json           # Tauri v2 configuration
-├── scripts/                      # Build, release, and vault scripts
-│   ├── vault.mjs                 # AES-256-GCM + scrypt project vault manager
-│   ├── decrypt-vault.ps1         # Windows PowerShell decrypt launcher
-│   ├── ship.mjs                  # In-process OTA release pipeline
-│   ├── build-base.mjs            # Base v0.0.0 installer builder
-│   └── test-vault-e2e.mjs        # End-to-end vault & hacker defense test suite
+├── scripts/                      # Build, fast OTA release, dev supervisor & vault scripts
+│   ├── dev.mjs / predev.mjs      # Direct Tauri dev supervisor & port cleaner
+│   ├── ship.mjs                  # Fast (<60s) OTA release pipeline ([profile.ota])
+│   ├── build-base.mjs            # Immutable Base v0.0.1 NSIS installer builder
+│   ├── package-base-extension.mjs# Immutable companion extension zip packager
+│   └── vault.mjs                 # AES-256-GCM + scrypt project vault manager
 ├── downex-vault.enc              # Authenticated AES-256-GCM encrypted container
-├── AGENTS.md                     # Instructions for Antigravity & AI agents
+├── AGENTS.md / GEMINI.md         # Agent & workflow protocols
 ├── VAULT.md                      # Detailed project vault documentation
 ├── PROJECT_MAP.json              # Full architectural specification and SOP
 └── .env.example                  # Template environment variables
@@ -101,16 +96,16 @@ downex/
 | **Inspect Vault Status** | `npm run vault:status` |
 | **Run Security Test Suite** | `npm run vault:test -- <passphrase>` |
 
-For full security specs and technical breakdown, see [`VAULT.md`](VAULT.md) and [`PROJECT_MAP.json`](PROJECT_MAP.json).
+For full security specs, see [`VAULT.md`](VAULT.md) and [`PROJECT_MAP.json`](PROJECT_MAP.json).
 
 ---
 
-## 🚢 Shipping OTA Updates
+## 🚢 Shipping OTA Updates (Authorized Releases Only)
 
-To compile, encrypt into an OTA container, generate an Ed25519 signature, stream to GPHost R2, and publish the release manifest:
+Uses `[profile.ota]`, smart frontend hash caching, and in-memory PE version stamping (`~23s–42s` end-to-end):
 
 ```bash
-npm run ship 0.1.0 -m "v0.1.0: Multi-connection engine and browser extension release"
+npm run ship 0.0.2 -m "v0.0.2: Performance and stability release"
 ```
 
 ---

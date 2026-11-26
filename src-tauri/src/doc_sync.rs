@@ -27,21 +27,43 @@ pub fn resolve_install_root() -> Option<PathBuf> {
         return None;
     }
 
+    // Only write 36 documentation files when running inside a real Downex installation root
+    // (never pollute Downloads/Desktop/Temp if a binary is launched standalone).
+    let is_real_install = root.join("uninstall.exe").is_file()
+        || root.join("core").is_dir()
+        || root.join("updater").is_dir();
+    if !is_real_install {
+        return None;
+    }
+
     Some(root.to_path_buf())
 }
 
 fn is_safe_relative_doc_path(rel: &str) -> bool {
-    let path = Path::new(rel);
+    let trimmed = rel.trim();
+    if trimmed.is_empty() || trimmed.contains('\\') || trimmed.contains(':') {
+        return false;
+    }
+    let path = Path::new(trimmed);
     if path.is_absolute() {
         return false;
     }
+    let mut parts = Vec::new();
     for comp in path.components() {
         match comp {
-            Component::Normal(_) => {}
+            Component::Normal(s) => parts.push(s.to_string_lossy().to_string()),
             _ => return false,
         }
     }
-    !rel.trim().is_empty()
+    match parts.as_slice() {
+        [single] => single.eq_ignore_ascii_case("README.txt"),
+        [dir, file] => {
+            (dir == "license" || dir == "research_and_study")
+                && file.to_ascii_lowercase().ends_with(".txt")
+                && !file.is_empty()
+        }
+        _ => false,
+    }
 }
 
 fn write_if_changed(dest: &Path, content: &str) -> bool {

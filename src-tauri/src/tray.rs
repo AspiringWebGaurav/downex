@@ -100,6 +100,25 @@ pub fn get_tray_update_status_string() -> String {
     }
 }
 
+pub fn format_tray_tooltip<R: Runtime>(app: &AppHandle<R>) -> String {
+    let db_state = app.try_state::<crate::AppState>();
+    let db_opt = db_state.as_ref().map(|s| &s.db);
+    if crate::hardware::check_is_hardware_banned(db_opt) {
+        return "Banned".to_string();
+    }
+    let raw_ver = crate::version::resolve_installed_version(app, db_opt);
+    let clean_ver = raw_ver.trim().trim_start_matches('v');
+    let ver = if clean_ver.is_empty() { "0.0.1" } else { clean_ver };
+    format!("DDM v{}", ver)
+}
+
+pub fn refresh_tray_tooltip<R: Runtime>(app: &AppHandle<R>) {
+    if let Some(tray) = app.tray_by_id("main-tray") {
+        let tooltip = format_tray_tooltip(app);
+        let _ = tray.set_tooltip(Some(&tooltip));
+    }
+}
+
 pub fn set_tray_update_info<R: Runtime>(
     app: &AppHandle<R>,
     status: &str,
@@ -120,33 +139,25 @@ pub fn set_tray_update_info<R: Runtime>(
     }
 
     let _ = set_tray_icon_state(app, status);
-
-    if let Some(tray) = app.tray_by_id("main-tray") {
-        let _ = tray.set_tooltip(Some("Downex - Download Manager"));
-    }
-
+    refresh_tray_tooltip(app);
     let _ = refresh_tray_menu(app);
 }
 
 /// Dynamically constructs the tray context menu reflecting real-time window & download state (IDM / REA pattern)
 pub fn build_dynamic_tray_menu<R: Runtime>(app: &AppHandle<R>) -> Result<Menu<R>, Box<dyn std::error::Error>> {
     // Check if machine is hardware banned
-    let is_banned = if let Some(state) = app.try_state::<crate::AppState>() {
-        crate::hardware::check_is_hardware_banned(Some(&state.db))
-    } else {
-        crate::hardware::check_is_hardware_banned(None)
-    };
+    let db_state = app.try_state::<crate::AppState>();
+    let db_opt = db_state.as_ref().map(|s| &s.db);
+    let is_banned = crate::hardware::check_is_hardware_banned(db_opt);
 
     if is_banned {
-        if let Some(tray) = app.tray_by_id("main-tray") {
-            let _ = tray.set_tooltip(Some("Banned"));
-        }
+        refresh_tray_tooltip(app);
         let menu = Menu::new(app)?;
         let banned_item = MenuItem::with_id(app, "banned_label", "Banned", false, None::<&str>)?;
         menu.append(&banned_item)?;
         return Ok(menu);
-    } else if let Some(tray) = app.tray_by_id("main-tray") {
-        let _ = tray.set_tooltip(Some("Downex Download Manager"));
+    } else {
+        refresh_tray_tooltip(app);
     }
 
     let is_showing = if let Some(window) = app.get_webview_window("main") {
@@ -155,18 +166,9 @@ pub fn build_dynamic_tray_menu<R: Runtime>(app: &AppHandle<R>) -> Result<Menu<R>
         false
     };
 
-    // Query active, paused, and total downloads for dynamic IDM-style actions
-    let (active_count, paused_count, total_count) = if let Some(state) = app.try_state::<crate::AppState>() {
-        let downloads = state.db.get_all_downloads().unwrap_or_default();
-        let active = downloads
-            .iter()
-            .filter(|d| d.status == "downloading" || d.status == "probing")
-            .count();
-        let paused = downloads
-            .iter()
-            .filter(|d| d.status == "paused" || d.status == "queued" || d.status == "failed")
-            .count();
-        let total = downloads.len();
+    // Query active, paused, and total downloads via lightweight SQL aggregation
+    let (active_count, paused_count, total_count) = if let Some(ref state) = db_state {
+        let (active, paused, total, _speed) = state.db.get_download_stats().unwrap_or((0, 0, 0, 0));
         (active, paused, total)
     } else {
         (0, 0, 0)
@@ -175,7 +177,7 @@ pub fn build_dynamic_tray_menu<R: Runtime>(app: &AppHandle<R>) -> Result<Menu<R>
     let menu = Menu::new(app)?;
 
     // 1. First menu: App Version, followed by Downex Download Manager
-    let version = crate::version::resolve_installed_version(app, None);
+    let version = crate::version::resolve_installed_version(app, db_opt);
     let app_version_title = format!("App Version: v{}", version);
     let version_item = MenuItem::with_id(app, "app_version", &app_version_title, true, None::<&str>)?;
     menu.append(&version_item)?;
@@ -300,11 +302,24 @@ pub fn refresh_tray_menu<R: Runtime>(app: &AppHandle<R>) -> Result<(), Box<dyn s
 }
 
 #[cfg(target_os = "windows")]
+pub fn sweep_windows_zombie_tray_icons_force() {
+    sweep_windows_zombie_tray_icons_inner(true);
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn sweep_windows_zombie_tray_icons_force() {}
+
+#[cfg(target_os = "windows")]
 pub fn sweep_windows_zombie_tray_icons() {
+    sweep_windows_zombie_tray_icons_inner(false);
+}
+
+#[cfg(target_os = "windows")]
+fn sweep_windows_zombie_tray_icons_inner(force: bool) {
     static LAST_SWEEP_TIME: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let now = current_millis();
     let last = LAST_SWEEP_TIME.load(Ordering::Relaxed);
-    if now.saturating_sub(last) < 4000 {
+    if !force && now.saturating_sub(last) < 4000 {
         return;
     }
     LAST_SWEEP_TIME.store(now, Ordering::Relaxed);
@@ -338,13 +353,16 @@ pub fn sweep_windows_zombie_tray_icons() {
                 return;
             }
 
-            // Post lightweight non-blocking WM_MOUSEMOVE across toolbar center line
-            let center_y = (height / 2) as u32;
-            let mut x = 0;
-            while x < width {
-                let lparam = ((center_y << 16) | (x as u32 & 0xFFFF)) as isize;
-                PostMessageW(hwnd, WM_MOUSEMOVE, 0, lparam);
-                x += 32;
+            // Post lightweight non-blocking WM_MOUSEMOVE across 8x8 toolbar grid to prune multi-row zombie icons
+            let mut y = 4;
+            while y < height {
+                let mut x = 4;
+                while x < width {
+                    let lparam = (((y as u32) << 16) | (x as u32 & 0xFFFF)) as isize;
+                    PostMessageW(hwnd, WM_MOUSEMOVE, 0, lparam);
+                    x += 8;
+                }
+                y += 8;
             }
         }
 
@@ -424,18 +442,14 @@ pub fn setup_system_tray<R: Runtime>(app: &AppHandle<R>) -> Result<TrayIcon<R>, 
     // 2. Clear any lingering Windows zombie tray icons from killed/crashed previous processes
     #[cfg(target_os = "windows")]
     sweep_windows_zombie_tray_icons();
+    *LAST_TRAY_ICON_STATE.lock() = String::new();
     let tray_menu = build_dynamic_tray_menu(app)?;
 
     // Embed and set official Downex tray icon
     let icon = Image::from_bytes(include_bytes!("../icons/32x32.png"))?;
 
-    // Check initial ban status for tooltip
-    let is_banned = if let Some(state) = app.try_state::<crate::AppState>() {
-        crate::hardware::check_is_hardware_banned(Some(&state.db))
-    } else {
-        crate::hardware::check_is_hardware_banned(None)
-    };
-    let initial_tooltip = if is_banned { "Banned" } else { "Downex Download Manager" };
+    // Dynamic tooltip reflecting live active version (or "Banned" if hardware-restricted)
+    let initial_tooltip = format_tray_tooltip(app);
 
     let tray = TrayIconBuilder::with_id("main-tray")
         .icon(icon)
@@ -614,10 +628,24 @@ pub fn setup_system_tray<R: Runtime>(app: &AppHandle<R>) -> Result<TrayIcon<R>, 
     Ok(tray)
 }
 
-pub fn set_tray_icon_state<R: Runtime>(app: &AppHandle<R>, _state: &str) -> Result<(), Box<dyn std::error::Error>> {
+static LAST_TRAY_ICON_STATE: LazyLock<Mutex<String>> = LazyLock::new(|| Mutex::new(String::new()));
+
+pub fn set_tray_icon_state<R: Runtime>(app: &AppHandle<R>, state_name: &str) -> Result<(), Box<dyn std::error::Error>> {
     ensure_main_tray(app);
+    let normalized = state_name.trim().to_ascii_lowercase();
+    {
+        let mut last = LAST_TRAY_ICON_STATE.lock();
+        if *last == normalized {
+            return Ok(());
+        }
+        *last = normalized.clone();
+    }
     if let Some(tray) = app.tray_by_id("main-tray") {
-        let bytes: &[u8] = include_bytes!("../icons/32x32.png");
+        let bytes: &[u8] = match normalized.as_str() {
+            "ready" | "update_ready" | "update_available" | "available" => include_bytes!("../icons/32x32-update-ready.png"),
+            "downloading" | "verifying" | "patching" | "updating" => include_bytes!("../icons/32x32-update-1.png"),
+            _ => include_bytes!("../icons/32x32.png"),
+        };
         let img = Image::from_bytes(bytes)?;
         let _ = tray.set_icon(Some(img));
     }
@@ -626,6 +654,7 @@ pub fn set_tray_icon_state<R: Runtime>(app: &AppHandle<R>, _state: &str) -> Resu
 
 static LAST_TASK_TRAY_UPDATE_MS: AtomicU64 = AtomicU64::new(0);
 static ACTIVE_TASK_TRAYS: LazyLock<Mutex<HashSet<String>>> = LazyLock::new(|| Mutex::new(HashSet::new()));
+static DISMISSED_TASK_TRAYS: LazyLock<Mutex<HashSet<String>>> = LazyLock::new(|| Mutex::new(HashSet::new()));
 
 fn current_millis() -> u64 {
     SystemTime::now()
@@ -659,18 +688,17 @@ fn format_tray_bytes(bytes: u64) -> String {
 }
 
 pub fn clean_all_task_trays<R: Runtime>(app: &AppHandle<R>) {
-    let had_active = {
+    let tray_ids: Vec<String> = {
         let mut guard = ACTIVE_TASK_TRAYS.lock();
-        if guard.is_empty() {
-            false
-        } else {
-            for task_id in guard.drain() {
-                let tray_id = format!("task-tray-{}", task_id);
-                let _ = app.remove_tray_by_id(&tray_id);
-            }
-            true
-        }
+        guard
+            .drain()
+            .map(|task_id| format!("task-tray-{}", task_id))
+            .collect()
     };
+    let had_active = !tray_ids.is_empty();
+    for tray_id in tray_ids {
+        let _ = app.remove_tray_by_id(&tray_id);
+    }
     let _ = app.remove_tray_by_id("download-task-tray");
     if had_active {
         #[cfg(target_os = "windows")]
@@ -739,6 +767,10 @@ pub fn build_task_tray_menu<R: Runtime>(
     Ok(menu)
 }
 
+pub fn load_task_tray_icon() -> Result<Image<'static>, tauri::Error> {
+    Image::from_bytes(include_bytes!("../icons/32x32-task-downloading.png"))
+}
+
 /// Throttled progress update for the active download task tray icons (IDM / REA pattern)
 pub fn update_download_task_progress<R: Runtime>(
     app: &AppHandle<R>,
@@ -762,6 +794,7 @@ pub fn update_download_task_progress<R: Runtime>(
     }
 
     let is_terminal_or_paused = progress.status == "completed"
+        || progress.status == "failed"
         || progress.status == "error"
         || progress.status == "cancelled"
         || progress.status == "paused";
@@ -794,10 +827,13 @@ pub fn sync_download_task_trays<R: Runtime>(app: &AppHandle<R>) {
     sync_download_task_trays_with_progress(app, None);
 }
 
+static TASK_TRAY_SYNC_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+
 pub fn sync_download_task_trays_with_progress<R: Runtime>(
     app: &AppHandle<R>,
     latest_progress: Option<&crate::engine::DownloadProgressEvent>,
 ) {
+    let _sync_guard = TASK_TRAY_SYNC_LOCK.lock();
     let is_showing = if let Some(window) = app.get_webview_window("main") {
         window.is_visible().unwrap_or(false) && !window.is_minimized().unwrap_or(false)
     } else {
@@ -817,8 +853,6 @@ pub fn sync_download_task_trays_with_progress<R: Runtime>(
 
     // Clean up any legacy single-tray ID if it exists
     let _ = app.remove_tray_by_id("download-task-tray");
-    #[cfg(target_os = "windows")]
-    sweep_windows_zombie_tray_icons();
 
     let downloads = if let Some(state) = app.try_state::<crate::AppState>() {
         state.db.get_all_downloads().unwrap_or_default()
@@ -838,26 +872,35 @@ pub fn sync_download_task_trays_with_progress<R: Runtime>(
         })
         .collect();
 
-    let mut guard = ACTIVE_TASK_TRAYS.lock();
     let running_ids: HashSet<String> = running_tasks.iter().map(|d| d.id.clone()).collect();
+    {
+        let mut dismissed = DISMISSED_TASK_TRAYS.lock();
+        dismissed.retain(|id| running_ids.contains(id));
+    }
+    let to_remove: Vec<String> = {
+        let mut guard = ACTIVE_TASK_TRAYS.lock();
+        let list: Vec<String> = guard
+            .iter()
+            .filter(|id| !running_ids.contains(*id))
+            .cloned()
+            .collect();
+        for task_id in &list {
+            guard.remove(task_id);
+        }
+        list
+    };
 
-    // 1. Remove tray icons for tasks that are no longer running (completed, paused, or cancelled)
-    let to_remove: Vec<String> = guard
-        .iter()
-        .filter(|id| !running_ids.contains(*id))
-        .cloned()
-        .collect();
-
+    let removed_any = !to_remove.is_empty();
     for task_id in to_remove {
         let tray_id = format!("task-tray-{}", task_id);
         let _ = app.remove_tray_by_id(&tray_id);
-        guard.remove(&task_id);
-        #[cfg(target_os = "windows")]
+    }
+    #[cfg(target_os = "windows")]
+    if removed_any {
         sweep_windows_zombie_tray_icons();
     }
 
     if running_tasks.is_empty() {
-        drop(guard);
         clean_all_task_trays(app);
         return;
     }
@@ -909,18 +952,21 @@ pub fn sync_download_task_trays_with_progress<R: Runtime>(
             )
         };
 
-        if guard.contains(&task_id) {
+        if DISMISSED_TASK_TRAYS.lock().contains(&task_id) {
+            continue;
+        }
+        let mut is_tracked = ACTIVE_TASK_TRAYS.lock().contains(&task_id);
+        if is_tracked {
             if let Some(tray) = app.tray_by_id(&tray_id) {
                 let _ = tray.set_tooltip(Some(&tooltip));
             } else {
-                guard.remove(&task_id);
-        #[cfg(target_os = "windows")]
-        sweep_windows_zombie_tray_icons();
+                ACTIVE_TASK_TRAYS.lock().remove(&task_id);
+                is_tracked = false;
             }
         }
 
-        if !guard.contains(&task_id) {
-            if let Ok(icon) = Image::from_bytes(include_bytes!("../icons/32x32-update-1.png")) {
+        if !is_tracked {
+            if let Ok(icon) = load_task_tray_icon() {
                 let menu_summary = format!("Task: {} ({}%)", short_name, pct);
                 let menu = match build_task_tray_menu(app, &task_id, &menu_summary) {
                     Ok(m) => m,
@@ -965,6 +1011,7 @@ pub fn sync_download_task_trays_with_progress<R: Runtime>(
                             }
                         } else if let Some(t) = id_str.strip_prefix("task_dismiss_") {
                             let tid_str = format!("task-tray-{}", t);
+                            DISMISSED_TASK_TRAYS.lock().insert(t.to_string());
                             let _ = app.remove_tray_by_id(&tid_str);
                             let mut g = ACTIVE_TASK_TRAYS.lock();
                             g.remove(t);
@@ -990,7 +1037,7 @@ pub fn sync_download_task_trays_with_progress<R: Runtime>(
                     .build(app);
 
                 if tray_result.is_ok() {
-                    guard.insert(task_id);
+                    ACTIVE_TASK_TRAYS.lock().insert(task_id);
                 }
             }
         }
@@ -1261,5 +1308,30 @@ mod tests {
 
         // Must be zero, guaranteeing immediate tray dismissal upon pause/cancel/failure!
         assert_eq!(active_with_paused.len(), 0);
+    }
+
+    #[test]
+    fn test_task_tray_icon_is_valid_transparent_og_violet_32x32() {
+        let icon = load_task_tray_icon().expect("Task tray triple-arrow PNG must decode cleanly");
+        assert_eq!(icon.width(), 32);
+        assert_eq!(icon.height(), 32);
+
+        let rgba = icon.rgba();
+        assert_eq!(rgba.len(), 32 * 32 * 4);
+        assert_eq!(rgba[3], 0, "Top-left corner must remain transparent");
+
+        let mut violet_pixels = 0usize;
+        let mut green_badge_pixels = 0usize;
+        for px in rgba.chunks_exact(4) {
+            let (r, g, b, a) = (px[0], px[1], px[2], px[3]);
+            if a > 200 && r == 132 && g == 62 && b == 252 {
+                violet_pixels += 1;
+            }
+            if a > 20 && g > r.saturating_add(40) && g > b.saturating_add(40) {
+                green_badge_pixels += 1;
+            }
+        }
+        assert!(violet_pixels > 40, "Triple-arrow task icon should contain crisp OG violet strokes");
+        assert_eq!(green_badge_pixels, 0, "Task tray icon must not contain green badge pixels");
     }
 }

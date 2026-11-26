@@ -23,18 +23,20 @@ export const DeleteConfirmModal: React.FC<DeleteConfirmModalProps> = ({
   onClose,
   onConfirm,
 }) => {
-  // Always disabled (unchecked safe mode) by default for every file — zero persistence across files
-  const [deleteFromDisk, setDeleteFromDisk] = useState<boolean>(false);
+  const isCompletedItem = item?.status === 'completed';
 
-  // Always reset checkmark to disabled (false) on every open or file change, purging any stale persistence
+  // Keep finished downloads protected by Safe Mode by default; incomplete/unconfirmed tasks default to cleaning partial staging files
+  const [deleteFromDisk, setDeleteFromDisk] = useState<boolean>(() => !isCompletedItem);
+
+  // Reset per opened item with zero cross-file persistence
   useEffect(() => {
     if (isOpen) {
-      setDeleteFromDisk(false);
+      setDeleteFromDisk(item?.status !== 'completed');
       try {
         localStorage.removeItem('downex_delete_from_disk_pref');
       } catch {}
     }
-  }, [isOpen, item?.id]);
+  }, [isOpen, item?.id, item?.status]);
 
   // Handle ESC key to dismiss modal
   useEffect(() => {
@@ -203,7 +205,11 @@ export const DeleteConfirmModal: React.FC<DeleteConfirmModalProps> = ({
                   }`}
                 >
                   <HardDrive className={`w-3.5 h-3.5 shrink-0 ${deleteFromDisk ? 'text-rose-500' : 'text-zinc-400'}`} />
-                  <span className="truncate">{isDownloading ? 'Also delete partial file from disk' : 'Also delete file from disk / device'}</span>
+                  <span className="truncate">
+                    {!isCompletedItem
+                      ? 'Also delete partial file from disk'
+                      : 'Also delete file from disk / device'}
+                  </span>
                 </span>
               </div>
 
@@ -214,7 +220,7 @@ export const DeleteConfirmModal: React.FC<DeleteConfirmModalProps> = ({
                     : 'text-zinc-500 dark:text-zinc-400 bg-zinc-100 dark:bg-zinc-800 border-zinc-300 dark:border-zinc-700'
                 }`}
               >
-                {deleteFromDisk ? 'PERMANENT WIPE' : 'OPTIONAL'}
+                {deleteFromDisk ? 'PERMANENT WIPE' : isCompletedItem ? 'OPTIONAL' : 'STAGING CLEANUP'}
               </span>
             </div>
 
@@ -223,14 +229,23 @@ export const DeleteConfirmModal: React.FC<DeleteConfirmModalProps> = ({
               <div className="px-2 py-1 bg-rose-500/10 dark:bg-rose-950/40 border border-rose-500/30 flex items-center gap-1.5 text-rose-800 dark:text-rose-300">
                 <AlertTriangle className="w-3 h-3 text-rose-600 dark:text-rose-400 shrink-0" />
                 <span className="text-[10px] leading-tight font-mono-tabular font-medium">
-                  Permanent wipe: The file on your computer will be deleted.
+                  {isCompletedItem
+                    ? 'Permanent wipe: The file on your computer will be deleted.'
+                    : 'Clean removal: Incomplete staging data (unconfirmed.*.downex) will be deleted with no orphan files left.'}
                 </span>
               </div>
-            ) : (
+            ) : isCompletedItem ? (
               <div className="px-2 py-1 bg-emerald-500/[0.08] dark:bg-emerald-950/30 border border-emerald-500/25 flex items-center gap-1.5 text-emerald-800 dark:text-emerald-300">
                 <ShieldCheck className="w-3 h-3 text-emerald-600 dark:text-emerald-400 shrink-0" />
                 <span className="text-[10px] leading-tight font-mono-tabular font-medium">
                   Safe mode: The file stays safely on your computer. Only the task record is removed.
+                </span>
+              </div>
+            ) : (
+              <div className="px-2 py-1 bg-amber-500/[0.08] dark:bg-amber-950/30 border border-amber-500/25 flex items-center gap-1.5 text-amber-800 dark:text-amber-300">
+                <ShieldCheck className="w-3 h-3 text-amber-600 dark:text-amber-400 shrink-0" />
+                <span className="text-[10px] leading-tight font-mono-tabular font-medium">
+                  Orphan guard: Unconfirmed .downex staging files are still cleaned up when an incomplete task is removed.
                 </span>
               </div>
             )}

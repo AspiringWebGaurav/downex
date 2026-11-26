@@ -23,13 +23,17 @@ export const FolderChangeModal: React.FC<FolderChangeModalProps> = ({
   const [currentPath, setCurrentPath] = useState<string>(initialPath || 'C:\\Downloads\\Downex');
   const [freeSpaceBytes, setFreeSpaceBytes] = useState<number | null>(null);
   const [isBrowsingNative, setIsBrowsingNative] = useState(false);
+  const diskCheckSeqRef = React.useRef(0);
 
   // Sync initial path and disk space whenever modal opens
   useEffect(() => {
     if (isOpen) {
       const startPath = initialPath || 'C:\\Downloads\\Downex';
       setCurrentPath(startPath);
-      getDiskFreeSpace(startPath).then((bytes) => setFreeSpaceBytes(bytes));
+      const seq = ++diskCheckSeqRef.current;
+      getDiskFreeSpace(startPath).then((bytes) => {
+        if (seq === diskCheckSeqRef.current) setFreeSpaceBytes(bytes);
+      });
     }
   }, [isOpen, initialPath]);
 
@@ -49,8 +53,11 @@ export const FolderChangeModal: React.FC<FolderChangeModalProps> = ({
 
   const handlePathChange = (val: string) => {
     setCurrentPath(val);
+    const seq = ++diskCheckSeqRef.current;
     if (val.trim()) {
-      getDiskFreeSpace(val.trim()).then((bytes) => setFreeSpaceBytes(bytes));
+      getDiskFreeSpace(val.trim()).then((bytes) => {
+        if (seq === diskCheckSeqRef.current) setFreeSpaceBytes(bytes);
+      });
     } else {
       setFreeSpaceBytes(null);
     }
@@ -85,9 +92,18 @@ export const FolderChangeModal: React.FC<FolderChangeModalProps> = ({
     }
   };
 
+  const isValidDirPath = (() => {
+    const trimmed = currentPath.trim();
+    if (!trimmed) return false;
+    const looksLikeWinPath = /^[A-Za-z]:[\\/]/.test(trimmed) || /^\\\\[^\\]+[\\/][^\\/]+/.test(trimmed);
+    if (!looksLikeWinPath) return false;
+    if (freeSpaceBytes !== null && freeSpaceBytes <= 0) return false;
+    return true;
+  })();
+
   const handleConfirm = () => {
     const trimmed = currentPath.trim();
-    if (trimmed) {
+    if (trimmed && isValidDirPath) {
       onSelect(trimmed);
       onClose();
     }
@@ -232,10 +248,16 @@ export const FolderChangeModal: React.FC<FolderChangeModalProps> = ({
               <div className="text-[9.5px] uppercase tracking-wider text-zinc-400 mb-0.5">
                 Storage State
               </div>
-              <div className="font-semibold text-emerald-600 dark:text-emerald-400 flex items-center gap-1">
-                <Check className="w-3 h-3" />
-                <span>VALID DIRECTORY</span>
-              </div>
+              {isValidDirPath ? (
+                <div className="font-semibold text-emerald-600 dark:text-emerald-400 flex items-center gap-1">
+                  <Check className="w-3 h-3" />
+                  <span>VALID DIRECTORY</span>
+                </div>
+              ) : (
+                <div className="font-semibold text-amber-600 dark:text-amber-400 flex items-center gap-1">
+                  <span>ENTER DRIVE PATH</span>
+                </div>
+              )}
             </div>
           </div>
 

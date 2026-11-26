@@ -57,15 +57,20 @@ pub struct ExtensionHttpBridge {
     auth_token: String,
 }
 
+const MAX_BRIDGE_BODY_BYTES: usize = 1024 * 1024; // 1 MB cap to prevent memory DoS
+
 fn is_allowed_origin(origin: &str) -> bool {
     let o = origin.trim();
+    if o.contains('\r') || o.contains('\n') {
+        return false;
+    }
     o.starts_with("chrome-extension://")
         || o.starts_with("moz-extension://")
         || o.starts_with("edge-extension://")
         || o == "tauri://localhost"
-        || o == "http://localhost:1420"
-        || o == "http://127.0.0.1:1420"
-        || o == "null"
+        || o == "http://tauri.localhost"
+        || (cfg!(debug_assertions)
+            && (o == "http://localhost:1420" || o == "http://127.0.0.1:1420"))
 }
 
 fn sanitize_destination_folder(folder: Option<String>, default_dir: &str, show_dialog: bool) -> Result<String, String> {
@@ -75,12 +80,12 @@ fn sanitize_destination_folder(folder: Option<String>, default_dir: &str, show_d
     }
 
     let raw = match folder {
-        Some(f) if !f.trim().is_empty() => f.trim().to_string(),
+        Some(f) if !f.trim().is_empty() => f.trim().replace('/', "\\"),
         _ => return Ok(default_dir.to_string()),
     };
 
-    if raw.contains("..") || raw.starts_with('.') {
-        return Err("Path traversal detected in destination folder".to_string());
+    if raw.contains("..") || raw.starts_with('.') || raw.starts_with("\\\\") {
+        return Err("Invalid or traversal path in destination folder".to_string());
     }
 
     let p = std::path::Path::new(&raw);
@@ -91,6 +96,9 @@ fn sanitize_destination_folder(folder: Option<String>, default_dir: &str, show_d
     let lower = raw.to_lowercase();
     if lower.contains("\\windows\\") || lower.ends_with("\\windows")
         || lower.contains("\\system32")
+        || lower.contains("\\syswow64")
+        || lower.contains("\\program files")
+        || lower.contains("\\appdata\\")
         || lower.contains("\\start menu\\programs\\startup")
         || lower.contains("\\startup")
     {
@@ -131,11 +139,20 @@ impl ExtensionHttpBridge {
                 }
             };
 
+            let conn_limit = Arc::new(tokio::sync::Semaphore::new(64));
             loop {
                 match listener.accept().await {
                     Ok((mut socket, _)) => {
+                        let permit = match conn_limit.clone().try_acquire_owned() {
+                            Ok(p) => p,
+                            Err(_) => {
+                                drop(socket);
+                                continue;
+                            }
+                        };
                         let bridge = self.clone();
                         tauri::async_runtime::spawn(async move {
+                            let _permit = permit;
                             if let Err(e) = bridge.handle_connection(&mut socket).await {
                                 eprintln!("[Downex Bridge] Connection error: {}", e);
                             }
@@ -143,6 +160,7 @@ impl ExtensionHttpBridge {
                     }
                     Err(e) => {
                         eprintln!("[Downex Bridge] Accept error: {}", e);
+                        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
                     }
                 }
             }
@@ -156,10 +174,15 @@ impl ExtensionHttpBridge {
         let mut buffer = vec![0u8; 8192];
         let mut bytes_read = 0;
 
-        // Read until \r\n\r\n or buffer limit
+        // Read until \r\n\r\n or buffer limit with strict 5s timeout (Slowloris defense)
         let mut header_end = None;
+        let read_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
         while bytes_read < buffer.len() {
-            let n = socket.read(&mut buffer[bytes_read..]).await?;
+            let n = match tokio::time::timeout_at(read_deadline, socket.read(&mut buffer[bytes_read..])).await {
+                Ok(Ok(n)) => n,
+                Ok(Err(e)) => return Err(e.into()),
+                Err(_) => return Ok(()),
+            };
             if n == 0 {
                 return Ok(());
             }
@@ -230,7 +253,10 @@ Connection: close\r\n\r\n\
             }
         }
 
-        let allow_origin = origin_header.as_deref().unwrap_or("tauri://localhost");
+        let allow_origin = origin_header
+            .as_deref()
+            .filter(|o| !o.contains('\r') && !o.contains('\n'))
+            .unwrap_or("tauri://localhost");
 
         // Handle CORS preflight
         if method == "OPTIONS" {
@@ -247,14 +273,34 @@ Content-Length: 0\r\n\r\n",
             return Ok(());
         }
 
-        // Read remaining body if Content-Length > 0
+        if content_length > MAX_BRIDGE_BODY_BYTES {
+            let err_body = "{\"success\":false,\"error\":\"Payload Too Large\"}";
+            let headers = format!(
+                "HTTP/1.1 413 Payload Too Large\r\n\
+Content-Type: application/json; charset=utf-8\r\n\
+Access-Control-Allow-Origin: {}\r\n\
+Content-Length: {}\r\n\
+Connection: close\r\n\r\n{}",
+                allow_origin,
+                err_body.len(),
+                err_body
+            );
+            socket.write_all(headers.as_bytes()).await?;
+            return Ok(());
+        }
+
+        // Read remaining body if Content-Length > 0 with timeout
         let body_start = header_pos + 4;
-        let _body_already_read = bytes_read - body_start;
         let mut body_bytes = buffer[body_start..bytes_read].to_vec();
 
+        let body_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
         while body_bytes.len() < content_length {
             let mut chunk = vec![0u8; (content_length - body_bytes.len()).min(8192)];
-            let n = socket.read(&mut chunk).await?;
+            let n = match tokio::time::timeout_at(body_deadline, socket.read(&mut chunk)).await {
+                Ok(Ok(n)) => n,
+                Ok(Err(e)) => return Err(e.into()),
+                Err(_) => return Ok(()),
+            };
             if n == 0 {
                 break;
             }
@@ -266,28 +312,36 @@ Content-Length: 0\r\n\r\n",
         // Verified Extension Origin: requests originating from installed browser extensions
         let is_extension_origin = if let Some(ref origin) = origin_header {
             let o = origin.trim();
-            o.starts_with("chrome-extension://")
-                || o.starts_with("moz-extension://")
-                || o.starts_with("edge-extension://")
+            if let Some(id) = o.strip_prefix("chrome-extension://").or_else(|| o.strip_prefix("edge-extension://")) {
+                id.len() == 32 && id.bytes().all(|b| matches!(b, b'a'..=b'p'))
+            } else if let Some(uuid) = o.strip_prefix("moz-extension://") {
+                uuid.len() == 36
+                    && uuid.bytes().enumerate().all(|(i, b)| {
+                        if matches!(i, 8 | 13 | 18 | 23) {
+                            b == b'-'
+                        } else {
+                            b.is_ascii_hexdigit()
+                        }
+                    })
+            } else {
+                false
+            }
         } else {
             false
         };
 
-        let is_authorized = if is_extension_origin {
-            // Verified browser extensions running on the local host are trusted
-            true
-        } else if let Some(ref auth) = auth_header {
+        let has_valid_token = if let Some(ref auth) = auth_header {
             let token = auth.strip_prefix("Bearer ").unwrap_or(auth).trim();
             token == self.auth_token
         } else {
             false
         };
 
-        let default_dir = if let Ok(u) = std::env::var("USERPROFILE") {
-            format!("{}\\Downloads\\Downex", u)
-        } else {
-            "Downloads".to_string()
-        };
+        let is_authorized = has_valid_token;
+        // Reveal bridge token only to verified browser extensions or already-authenticated callers
+        let can_receive_token = is_extension_origin || has_valid_token;
+
+        let default_dir = self.queue_manager.get_default_download_directory();
 
         // Routing
         let (status_code, response_json) = match (method, path) {
@@ -298,33 +352,25 @@ Content-Length: 0\r\n\r\n",
                     env!("CARGO_PKG_VERSION").to_string()
                 };
 
-                let downloads = self.db.get_all_downloads().unwrap_or_default();
-                let active_count = downloads
-                    .iter()
-                    .filter(|d| d.status == "downloading" || d.status == "probing")
-                    .count();
-                let total_count = downloads.len();
-                let total_speed: u64 = downloads
-                    .iter()
-                    .filter(|d| d.status == "downloading")
-                    .map(|d| d.speed_bytes_sec as u64)
-                    .sum();
+                let (active_count, _paused_count, total_count, total_speed) =
+                    self.db.get_download_stats().unwrap_or((0, 0, 0, 0));
 
                 let installed_ext_ver = crate::extension::get_installed_extension_version()
                     .unwrap_or_else(|| "1.0.0".to_string());
                 let should_reload = false;
+                let exposed_token = if can_receive_token { Some(self.auth_token.as_str()) } else { None };
 
                 (
                     200,
                     serde_json::json!({
                         "success": true,
-                        "token": self.auth_token,
+                        "token": exposed_token,
                         "should_reload_extension": should_reload,
                         "latest_extension_version": installed_ext_ver,
                         "data": {
                             "app": "Downex",
                             "version": current_ver,
-                            "token": self.auth_token,
+                            "token": exposed_token,
                             "status": "ready",
                             "is_dev": cfg!(debug_assertions),
                             "pid": std::process::id(),
@@ -338,19 +384,20 @@ Content-Length: 0\r\n\r\n",
                     }),
                 )
             }
-            ("GET", "/api/handshake") => {
+            ("GET", "/api/handshake") | ("POST", "/api/handshake") => {
                 let current_ver = if let Some(ref handle) = self.app_handle {
                     crate::version::resolve_installed_version(handle, Some(&self.db))
                 } else {
                     env!("CARGO_PKG_VERSION").to_string()
                 };
+                let exposed_token = if can_receive_token { Some(self.auth_token.as_str()) } else { None };
                 (
                     200,
                     serde_json::json!({
                         "success": true,
-                        "token": self.auth_token,
+                        "token": exposed_token,
                         "data": {
-                            "token": self.auth_token,
+                            "token": exposed_token,
                             "version": current_ver
                         }
                     }),
@@ -364,17 +411,8 @@ Content-Length: 0\r\n\r\n",
                 }),
             ),
             ("GET", "/api/status") => {
-                let downloads = self.db.get_all_downloads().unwrap_or_default();
-                let active_count = downloads
-                    .iter()
-                    .filter(|d| d.status == "downloading" || d.status == "probing")
-                    .count();
-                let total_count = downloads.len();
-                let total_speed: u64 = downloads
-                    .iter()
-                    .filter(|d| d.status == "downloading")
-                    .map(|d| d.speed_bytes_sec as u64)
-                    .sum();
+                let (active_count, _paused_count, total_count, total_speed) =
+                    self.db.get_download_stats().unwrap_or((0, 0, 0, 0));
                 (
                     200,
                     serde_json::json!({
@@ -387,11 +425,22 @@ Content-Length: 0\r\n\r\n",
                     }),
                 )
             }
-            ("POST", "/api/stop") if origin_header.is_none() => {
+            ("POST", "/api/stop") if !has_valid_token || origin_header.is_some() => (
+                401,
+                serde_json::json!({
+                    "success": false,
+                    "error": "Unauthorized: valid native bridge token required to stop Downex"
+                }),
+            ),
+            ("POST", "/api/stop") => {
                 if let Some(ref handle) = self.app_handle {
                     let h = handle.clone();
                     tauri::async_runtime::spawn(async move {
                         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                        crate::tray::clean_all_task_trays(&h);
+                        let _ = h.remove_tray_by_id("main-tray");
+                        #[cfg(target_os = "windows")]
+                        crate::tray::sweep_windows_zombie_tray_icons_force();
                         h.exit(0);
                     });
                 }
@@ -403,7 +452,14 @@ Content-Length: 0\r\n\r\n",
                     }),
                 )
             }
-            ("POST", "/api/bring_to_front") if origin_header.is_none() => {
+            ("POST", "/api/bring_to_front") if !has_valid_token || origin_header.is_some() => (
+                401,
+                serde_json::json!({
+                    "success": false,
+                    "error": "Unauthorized: valid native bridge token required"
+                }),
+            ),
+            ("POST", "/api/bring_to_front") => {
                 if let Some(ref handle) = self.app_handle {
                     let _ = crate::tray::create_or_show_main_window(handle);
                 }
@@ -425,42 +481,56 @@ Content-Length: 0\r\n\r\n",
             ("POST", "/api/probe") => {
                 match serde_json::from_str::<ExtensionProbeRequest>(&body_str) {
                     Ok(req) => {
-                        let mut custom_headers = HashMap::new();
-                        if let Some(cookie) = req.cookies {
-                            if !cookie.trim().is_empty() {
-                                custom_headers.insert("Cookie".to_string(), cookie);
+                        let url_check = req.url.clone();
+                        let val_res = tokio::task::spawn_blocking(move || {
+                            crate::engine::probe::validate_http_url(&url_check, true)
+                        })
+                        .await
+                        .unwrap_or_else(|e| Err(format!("URL validation failed: {}", e)));
+                        if let Err(err) = val_res {
+                            (
+                                400,
+                                serde_json::json!({ "success": false, "error": err }),
+                            )
+                        } else {
+                            let mut custom_headers = HashMap::new();
+                            if let Some(cookie) = req.cookies {
+                                if !cookie.trim().is_empty() {
+                                    custom_headers.insert("Cookie".to_string(), cookie);
+                                }
                             }
-                        }
-                        if let Some(ref_url) = req.referer {
-                            if !ref_url.trim().is_empty() {
-                                custom_headers.insert("Referer".to_string(), ref_url);
+                            if let Some(ref_url) = req.referer {
+                                if !ref_url.trim().is_empty() {
+                                    custom_headers.insert("Referer".to_string(), ref_url);
+                                }
                             }
-                        }
-                        if let Some(ua) = req.user_agent {
-                            if !ua.trim().is_empty() {
-                                custom_headers.insert("User-Agent".to_string(), ua);
+                            if let Some(ua) = req.user_agent {
+                                if !ua.trim().is_empty() {
+                                    custom_headers.insert("User-Agent".to_string(), ua);
+                                }
                             }
-                        }
-                        let headers_opt = if custom_headers.is_empty() { None } else { Some(&custom_headers) };
-                        match self.queue_manager.probe_url_info(&req.url, headers_opt).await {
-                            Ok(probe) => (
-                                200,
-                                serde_json::json!({
-                                    "success": true,
-                                    "data": {
-                                        "filename": probe.filename,
-                                        "total_bytes": probe.total_bytes,
-                                        "supports_ranges": probe.supports_ranges,
-                                    }
-                                }),
-                            ),
-                            Err(e) => (
-                                500,
-                                serde_json::json!({
-                                    "success": false,
-                                    "error": format!("Probe failed: {}", e)
-                                }),
-                            ),
+                            let headers_opt = if custom_headers.is_empty() { None } else { Some(&custom_headers) };
+                            let bridge_client = crate::engine::probe::build_bridge_http_client();
+                            match crate::engine::probe::probe_url(&bridge_client, &req.url, headers_opt).await {
+                                Ok(probe) => (
+                                    200,
+                                    serde_json::json!({
+                                        "success": true,
+                                        "data": {
+                                            "filename": probe.filename,
+                                            "total_bytes": probe.total_bytes,
+                                            "supports_ranges": probe.supports_ranges,
+                                        }
+                                    }),
+                                ),
+                                Err(e) => (
+                                    500,
+                                    serde_json::json!({
+                                        "success": false,
+                                        "error": format!("Probe failed: {}", e)
+                                    }),
+                                ),
+                            }
                         }
                     }
                     Err(e) => (
@@ -482,6 +552,27 @@ Content-Length: 0\r\n\r\n",
             ("POST", "/api/download") => {
                 match serde_json::from_str::<ExtensionDownloadRequest>(&body_str) {
                     Ok(req) => {
+                        let url_check = req.url.clone();
+                        let val_res = tokio::task::spawn_blocking(move || {
+                            crate::engine::probe::validate_http_url(&url_check, true)
+                        })
+                        .await
+                        .unwrap_or_else(|e| Err(format!("URL validation failed: {}", e)));
+                        if let Err(e) = val_res {
+                            return {
+                                let err_json = serde_json::json!({ "success": false, "error": e });
+                                let err_body = serde_json::to_string(&err_json)?;
+                                let headers = format!(
+                                    "HTTP/1.1 400 Bad Request\r\nContent-Type: application/json; charset=utf-8\r\nAccess-Control-Allow-Origin: {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                                    allow_origin, err_body.len()
+                                );
+                                socket.write_all(headers.as_bytes()).await?;
+                                socket.write_all(err_body.as_bytes()).await?;
+                                socket.flush().await?;
+                                Ok(())
+                            };
+                        }
+                        let sanitized_req_filename = req.filename.as_ref().map(|f| crate::engine::probe::sanitize_filename(f));
                         let should_show_dialog = req.show_dialog.unwrap_or(true);
                         let safe_dest = match sanitize_destination_folder(req.destination_folder, &default_dir, should_show_dialog) {
                             Ok(d) => d,
@@ -533,19 +624,20 @@ Connection: close\r\n\r\n",
 
                         if should_show_dialog && self.app_handle.is_some() {
                             // FAST PATH: Resolve immediate filename from extension or URL to eliminate popup delay
-                            let initial_filename = req.filename.clone().unwrap_or_else(|| {
-                                req.url
+                            let initial_filename = sanitized_req_filename.clone().unwrap_or_else(|| {
+                                let raw_seg = req.url
                                     .split('?')
                                     .next()
                                     .unwrap_or(&req.url)
                                     .split('/')
                                     .last()
-                                    .unwrap_or("download.bin")
-                                    .to_string()
+                                    .unwrap_or("download.bin");
+                                crate::engine::probe::sanitize_filename(raw_seg)
                             });
 
                             let handle = self.app_handle.as_ref().unwrap().clone();
                             let detected_size = req.total_bytes.or_else(|| crate::engine::probe::extract_size_from_url(&req.url));
+                            let safe_dest_init = safe_dest.clone();
                             let initial_payload = serde_json::json!({
                                 "url": req.url,
                                 "filename": initial_filename,
@@ -554,22 +646,24 @@ Connection: close\r\n\r\n",
                                 "cookies": req.cookies,
                                 "referer": req.referer,
                                 "user_agent": req.user_agent,
+                                "destination_folder": safe_dest_init,
                             });
 
                             // INSTANT: Show dialog in front within milliseconds!
                             crate::commands::show_download_dialog(&handle, Some(initial_payload));
 
                             // ASYNC BACKGROUND PROBE: Query server in background to get precise Content-Length & range support
-                            let qm = self.queue_manager.clone();
                             let url_clone = req.url.clone();
-                            let req_filename_clone = req.filename.clone();
+                            let req_filename_clone = sanitized_req_filename.clone();
                             let custom_headers_clone = headers_opt.clone();
                             let cookies_clone = req.cookies.clone();
                             let referer_clone = req.referer.clone();
                             let ua_clone = req.user_agent.clone();
+                            let safe_dest_probe = safe_dest;
                             tauri::async_runtime::spawn(async move {
                                 let headers_ref = custom_headers_clone.as_ref();
-                                if let Ok(p) = qm.probe_url_info(&url_clone, headers_ref).await {
+                                let bridge_client = crate::engine::probe::build_bridge_http_client();
+                                if let Ok(p) = crate::engine::probe::probe_url(&bridge_client, &url_clone, headers_ref).await {
                                     use tauri::Emitter;
                                     let resolved_name = match req_filename_clone {
                                         Some(ref cf) if cf.contains('.') => cf.clone(),
@@ -583,6 +677,7 @@ Connection: close\r\n\r\n",
                                         "cookies": cookies_clone,
                                         "referer": referer_clone,
                                         "user_agent": ua_clone,
+                                        "destination_folder": safe_dest_probe,
                                     });
                                     if let Some(dialog_win) = handle.get_webview_window("download_dialog") {
                                         let _ = dialog_win.emit("open-download-info-modal", update_payload);
@@ -602,7 +697,7 @@ Connection: close\r\n\r\n",
                             )
                         } else {
                             let start_immediately = !req.download_later.unwrap_or(false);
-                            let chosen_filename = req.filename;
+                            let chosen_filename = sanitized_req_filename;
                             match self
                                 .queue_manager
                                 .create_task(
@@ -655,86 +750,107 @@ Connection: close\r\n\r\n",
             ("POST", "/api/download-adaptive") => {
                 match serde_json::from_str::<ExtensionAdaptiveRequest>(&body_str) {
                     Ok(req) => {
-                        let mut custom_headers = HashMap::new();
-                        if let Some(cookie) = req.cookies {
-                            if !cookie.trim().is_empty() {
-                                custom_headers.insert("Cookie".to_string(), cookie);
+                        let v_check = req.video_url.clone();
+                        let a_check = req.audio_url.clone();
+                        let val_res = tokio::task::spawn_blocking(move || {
+                            crate::engine::probe::validate_http_url(&v_check, true)?;
+                            if let Some(ref au) = a_check {
+                                crate::engine::probe::validate_http_url(au, true).map_err(|_| "Invalid adaptive audio URL".to_string())?;
                             }
-                        }
-                        if let Some(ref_url) = req.referer {
-                            if !ref_url.trim().is_empty() {
-                                custom_headers.insert("Referer".to_string(), ref_url);
-                            }
-                        }
-                        if let Some(ua) = req.user_agent {
-                            if !ua.trim().is_empty() {
-                                custom_headers.insert("User-Agent".to_string(), ua);
-                            }
-                        }
-
-                        let headers_opt = if custom_headers.is_empty() {
-                            None
-                        } else {
-                            Some(custom_headers)
-                        };
-
-                        let start_immediately = !req.download_later.unwrap_or(false);
-                        let ext = req.extension.unwrap_or_else(|| "mp4".to_string());
-                        let video_filename = Some(format!("{}.{}", req.title, ext));
-                        let audio_filename = Some(format!("{}_audio.m4a", req.title));
-
-                        // Add video component
-                        let video_task = self
-                            .queue_manager
-                            .create_task(
-                                req.video_url,
-                                Some(default_dir.clone()),
-                                Some("adaptive_media".to_string()),
-                                headers_opt.clone(),
-                                start_immediately,
-                                video_filename,
+                            Ok::<(), String>(())
+                        })
+                        .await
+                        .unwrap_or_else(|e| Err(format!("URL validation failed: {}", e)));
+                        if let Err(err) = val_res {
+                            (
+                                400,
+                                serde_json::json!({ "success": false, "error": err }),
                             )
-                            .await;
+                        } else {
+                            let mut custom_headers = HashMap::new();
+                            if let Some(cookie) = req.cookies {
+                                if !cookie.trim().is_empty() {
+                                    custom_headers.insert("Cookie".to_string(), cookie);
+                                }
+                            }
+                            if let Some(ref_url) = req.referer {
+                                if !ref_url.trim().is_empty() {
+                                    custom_headers.insert("Referer".to_string(), ref_url);
+                                }
+                            }
+                            if let Some(ua) = req.user_agent {
+                                if !ua.trim().is_empty() {
+                                    custom_headers.insert("User-Agent".to_string(), ua);
+                                }
+                            }
 
-                        // Add audio component if present
-                        let mut audio_task_id = None;
-                        if let Some(audio_url) = req.audio_url {
-                            if let Ok(audio_task) = self
+                            let headers_opt = if custom_headers.is_empty() {
+                                None
+                            } else {
+                                Some(custom_headers)
+                            };
+
+                            let start_immediately = !req.download_later.unwrap_or(false);
+                            let safe_title = crate::engine::probe::sanitize_filename(&req.title);
+                            let raw_ext = req.extension.unwrap_or_else(|| "mp4".to_string());
+                            let safe_ext: String = raw_ext.chars().filter(|c| c.is_ascii_alphanumeric()).take(8).collect();
+                            let safe_ext = if safe_ext.is_empty() { "mp4".to_string() } else { safe_ext };
+                            let video_filename = Some(format!("{}.{}", safe_title, safe_ext));
+                            let audio_filename = Some(format!("{}_audio.m4a", safe_title));
+
+                            // Add video component
+                            let video_task = self
                                 .queue_manager
                                 .create_task(
-                                    audio_url,
-                                    Some(default_dir),
+                                    req.video_url,
+                                    Some(default_dir.clone()),
                                     Some("adaptive_media".to_string()),
-                                    headers_opt,
+                                    headers_opt.clone(),
                                     start_immediately,
-                                    audio_filename,
+                                    video_filename,
                                 )
-                                .await
-                            {
-                                audio_task_id = Some(audio_task.id);
-                            }
-                        }
+                                .await;
 
-                        match video_task {
-                            Ok(vt) => (
-                                200,
-                                serde_json::json!({
-                                    "success": true,
-                                    "data": {
-                                        "video_task_id": vt.id,
-                                        "audio_task_id": audio_task_id,
-                                        "title": req.title,
-                                        "status": "queued"
-                                    }
-                                }),
-                            ),
-                            Err(e) => (
-                                500,
-                                serde_json::json!({
-                                    "success": false,
-                                    "error": format!("Failed to add adaptive media: {}", e)
-                                }),
-                            ),
+                            // Add audio component if present
+                            let mut audio_task_id = None;
+                            if let Some(audio_url) = req.audio_url {
+                                if let Ok(audio_task) = self
+                                    .queue_manager
+                                    .create_task(
+                                        audio_url,
+                                        Some(default_dir),
+                                        Some("adaptive_media".to_string()),
+                                        headers_opt,
+                                        start_immediately,
+                                        audio_filename,
+                                    )
+                                    .await
+                                {
+                                    audio_task_id = Some(audio_task.id);
+                                }
+                            }
+
+                            match video_task {
+                                Ok(vt) => (
+                                    200,
+                                    serde_json::json!({
+                                        "success": true,
+                                        "data": {
+                                            "video_task_id": vt.id,
+                                            "audio_task_id": audio_task_id,
+                                            "title": safe_title,
+                                            "status": "queued"
+                                        }
+                                    }),
+                                ),
+                                Err(e) => (
+                                    500,
+                                    serde_json::json!({
+                                        "success": false,
+                                        "error": format!("Failed to add adaptive media: {}", e)
+                                    }),
+                                ),
+                            }
                         }
                     }
                     Err(e) => (
@@ -763,6 +879,7 @@ Connection: close\r\n\r\n",
             401 => "Unauthorized",
             403 => "Forbidden",
             404 => "Not Found",
+            413 => "Payload Too Large",
             _ => "Internal Server Error",
         };
 

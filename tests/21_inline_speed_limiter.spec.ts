@@ -109,15 +109,17 @@ test.describe('Downex — Inline Speed Limiter & Dynamic MB Controls', () => {
     const btn100 = page.locator('[data-testid="speed-limiter-preset-100"]').first();
     const btn150 = page.locator('[data-testid="speed-limiter-preset-150"]').first();
     const btn180 = page.locator('[data-testid="speed-limiter-preset-180"]').first();
+    const btn190 = page.locator('[data-testid="speed-limiter-preset-190"]').first();
     const btn200 = page.locator('[data-testid="speed-limiter-preset-200"]').first();
     const resetBtn = page.locator('[data-testid="speed-limiter-reset"]').first();
 
-    // Verify all 5 starter options are present
-    await expect(btn50).toBeVisible();
-    await expect(btn100).toBeVisible();
-    await expect(btn150).toBeVisible();
-    await expect(btn180).toBeVisible();
-    await expect(btn200).toBeVisible();
+    // Verify all 6 starter options are present with clear Mb units
+    await expect(btn50).toHaveText('50Mb');
+    await expect(btn100).toHaveText('100Mb');
+    await expect(btn150).toHaveText('150Mb');
+    await expect(btn180).toHaveText('180Mb');
+    await expect(btn190).toHaveText('190Mb');
+    await expect(btn200).toHaveText('200Mb');
 
     // Initial state: Unthrottled, reset button disabled
     await expect(resetBtn).toBeDisabled();
@@ -172,6 +174,7 @@ test.describe('Downex — Inline Speed Limiter & Dynamic MB Controls', () => {
 
     const customContainer = page.locator('[data-testid="speed-limiter-custom-container"]').first();
     await expect(customContainer).toBeVisible();
+    await expect(customContainer).toContainText('Mb');
 
     // Verify smooth hover styling is active without transition-all layout reflows
     await customContainer.hover();
@@ -307,5 +310,121 @@ test.describe('Downex — Inline Speed Limiter & Dynamic MB Controls', () => {
     // State stays intact
     await expect(input).toHaveValue('150');
     await expect(status).toHaveText(/150 Mbps Cap \(=18\.(75|8) MB\/s\)/);
+  });
+
+  test('Saving custom speed with Enter at compact 780x540 desktop viewport never clips input or cap badge', async ({ page }) => {
+    await page.setViewportSize({ width: 780, height: 540 });
+
+    await page.evaluate(() => {
+      const mockItems = [
+        {
+          id: 'compact-viewport-dl',
+          url: 'https://cdn.example.org/bundle.iso',
+          filename: 'bundle.iso',
+          destination_path: 'C:\\Downloads\\bundle.iso',
+          total_bytes: 500000000,
+          downloaded_bytes: 120000000,
+          status: 'downloading',
+          queue_id: 'default',
+          speed_bytes_sec: 12500000,
+          eta_seconds: 30,
+          created_at: Date.now(),
+          updated_at: Date.now(),
+          segments: [],
+        },
+      ];
+      sessionStorage.setItem('downex_mock_downloads', JSON.stringify(mockItems));
+    });
+
+    await page.reload();
+
+    const input = page.locator('[data-testid="speed-limiter-input"]').first();
+    const customContainer = page.locator('[data-testid="speed-limiter-custom-container"]').first();
+    const limiter = page.locator('[data-testid="inline-speed-limiter"]').first();
+
+    await input.click();
+    await input.fill('192');
+    await input.press('Enter');
+
+    const status = page.locator('[data-testid="speed-limiter-status"]').first();
+    const savedIndicator = page.locator('[data-testid="speed-limiter-saved-indicator"]').first();
+    await expect(status).toHaveText(/192 Mbps Cap \(=24 MB\/s\)/);
+    await expect(savedIndicator).toBeVisible();
+
+    const boxes = await Promise.all([
+      limiter.boundingBox(),
+      customContainer.boundingBox(),
+      status.boundingBox(),
+    ]);
+    const [limiterBox, customBox, statusBox] = boxes;
+    expect(limiterBox).not.toBeNull();
+    expect(customBox).not.toBeNull();
+    expect(statusBox).not.toBeNull();
+
+    // Custom box must be completely clear of right cap badge and contained cleanly inside limiter row
+    expect(customBox!.x + customBox!.width).toBeLessThanOrEqual(statusBox!.x);
+    expect(statusBox!.x + statusBox!.width).toBeLessThan(limiterBox!.x + limiterBox!.width);
+  });
+
+  test('After saving custom speed and Reset, clicking input shows Tab chip and Tab key or click fills saved value for reuse', async ({ page }) => {
+    await page.setViewportSize({ width: 780, height: 540 });
+
+    await page.evaluate(() => {
+      const mockItems = [
+        {
+          id: 'tab-fill-dl',
+          url: 'https://cdn.example.org/ubuntu.iso',
+          filename: 'ubuntu.iso',
+          destination_path: 'C:\\Downloads\\ubuntu.iso',
+          total_bytes: 500000000,
+          downloaded_bytes: 100000000,
+          status: 'downloading',
+          queue_id: 'default',
+          speed_bytes_sec: 12500000,
+          eta_seconds: 32,
+          created_at: Date.now(),
+          updated_at: Date.now(),
+          segments: [],
+        },
+      ];
+      sessionStorage.setItem('downex_mock_downloads', JSON.stringify(mockItems));
+    });
+
+    await page.reload();
+
+    const input = page.locator('[data-testid="speed-limiter-input"]').first();
+    const resetBtn = page.locator('[data-testid="speed-limiter-reset"]').first();
+    const tabBtn = page.locator('[data-testid="speed-limiter-tab-fill"]').first();
+    const status = page.locator('[data-testid="speed-limiter-status"]').first();
+
+    // 1. Save 192 custom cap then click Reset
+    await input.click();
+    await input.fill('192');
+    await input.press('Enter');
+    await expect(status).toHaveText(/192 Mbps Cap \(=24 MB\/s\)/);
+
+    await resetBtn.click();
+    await expect(input).toHaveValue('');
+    await expect(input).toHaveAttribute('placeholder', '192');
+
+    // 2. Click input -> Tab button appears -> press Tab key -> fills 192 -> Enter reapplies
+    await input.click();
+    await expect(tabBtn).toBeVisible();
+    await input.press('Tab');
+    await expect(input).toHaveValue('192');
+    await expect(tabBtn).toHaveCount(0);
+
+    await input.press('Enter');
+    await expect(status).toHaveText(/192 Mbps Cap \(=24 MB\/s\)/);
+
+    // 3. Reset again, click input, and click the Tab button directly -> fills 192
+    await resetBtn.click();
+    await expect(input).toHaveValue('');
+    await input.click();
+    await expect(tabBtn).toBeVisible();
+    await tabBtn.click();
+    await expect(input).toHaveValue('192');
+    await input.press('Enter');
+    await expect(status).toHaveText(/192 Mbps Cap \(=24 MB\/s\)/);
   });
 });

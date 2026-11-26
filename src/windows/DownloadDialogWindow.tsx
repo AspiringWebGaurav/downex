@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { 
   X, 
   Folder, 
@@ -34,6 +34,8 @@ import {
   restoreManagerWindow,
   getClipboardText,
   extractSizeFromUrl,
+  checkIsHardwareBanned,
+  onHardwareBanChanged,
   DownloadInfoModalPayload,
   isTauri,
   openExternalUrl,
@@ -188,7 +190,16 @@ export const DownloadDialogWindow: React.FC = () => {
   useEffect(() => {
     useHardwareBanStore.getState().initBanStatus();
     const cleanup = initHardwareEventService();
+    const unlistenBan = onHardwareBanChanged(async (payload) => {
+      if (isTauri) {
+        const confirmed = await checkIsHardwareBanned().catch(() => Boolean(payload.is_banned));
+        useHardwareBanStore.getState().setBannedLive(confirmed, payload.reason);
+      } else {
+        useHardwareBanStore.getState().setBannedLive(Boolean(payload.is_banned), payload.reason);
+      }
+    });
     return () => {
+      unlistenBan();
       cleanup();
     };
   }, []);
@@ -214,6 +225,7 @@ export const DownloadDialogWindow: React.FC = () => {
   };
 
   const [copiedId, setCopiedId] = useState(false);
+  const probeSeqRef = useRef(0);
   const handleCopyId = async (e: React.MouseEvent) => {
     e.stopPropagation();
     if (!hwid) return;
@@ -305,8 +317,14 @@ export const DownloadDialogWindow: React.FC = () => {
   useEffect(() => {
     const trimmed = url.trim();
     if (!trimmed) {
+      probeSeqRef.current += 1;
       setFileBaseName('');
       setFileExtension('');
+      setTotalBytes(undefined);
+      setIsProbing(false);
+      setIncomingHeaders(undefined);
+    } else if (!trimmed.startsWith('http://') && !trimmed.startsWith('https://')) {
+      probeSeqRef.current += 1;
       setTotalBytes(undefined);
       setIsProbing(false);
     }
@@ -315,9 +333,34 @@ export const DownloadDialogWindow: React.FC = () => {
   const applyPayload = useCallback((payload: DownloadInfoModalPayload) => {
     if (!payload || !payload.url) return;
 
+    probeSeqRef.current += 1;
     setUrl(payload.url);
     const name = payload.filename || payload.url.split('?')[0].split('/').pop() || 'download.bin';
     applyFilename(name);
+
+    if (payload.destination_folder && payload.destination_folder.trim()) {
+      setSavePath(payload.destination_folder.trim());
+    }
+
+    if (isTauri) {
+      checkIsHardwareBanned()
+        .then((banned) => {
+          if (banned) {
+            useHardwareBanStore.getState().setBannedLive(true);
+          }
+        })
+        .catch(() => {});
+    }
+
+    const next: Record<string, string> = {};
+    if (payload.cookies) next['Cookie'] = payload.cookies;
+    if (payload.referer) next['Referer'] = payload.referer;
+    if (payload.user_agent) next['User-Agent'] = payload.user_agent;
+    setIncomingHeaders(Object.keys(next).length > 0 ? next : undefined);
+
+    if (payload.supports_ranges !== undefined) {
+      setSupportsRanges(payload.supports_ranges);
+    }
 
     const detectedSize = (payload.total_bytes && payload.total_bytes > 0)
       ? payload.total_bytes
@@ -328,19 +371,8 @@ export const DownloadDialogWindow: React.FC = () => {
       setIsProbing(false);
     } else {
       setTotalBytes(undefined);
-      setIsProbing(true);
+      void probeServer(payload.url);
     }
-    if (payload.supports_ranges !== undefined) {
-      setSupportsRanges(payload.supports_ranges);
-    }
-
-    setIncomingHeaders((prev) => {
-      const next: Record<string, string> = { ...(prev || {}) };
-      if (payload.cookies) next['Cookie'] = payload.cookies;
-      if (payload.referer) next['Referer'] = payload.referer;
-      if (payload.user_agent) next['User-Agent'] = payload.user_agent;
-      return Object.keys(next).length > 0 ? next : undefined;
-    });
   }, [applyFilename]);
 
   const applyScenario = useCallback((scenarioKey: string) => {
@@ -408,6 +440,7 @@ export const DownloadDialogWindow: React.FC = () => {
   }, [applyFilename, showToast]);
 
   const probeServer = async (targetUrl: string) => {
+    const seq = ++probeSeqRef.current;
     const preSize = extractSizeFromUrl(targetUrl);
     if (preSize && preSize > 0) {
       setTotalBytes(preSize);
@@ -415,6 +448,7 @@ export const DownloadDialogWindow: React.FC = () => {
     setIsProbing(true);
     try {
       const result = await probeUrl(targetUrl);
+      if (seq !== probeSeqRef.current) return;
       if (result) {
         if (result.filename) {
           applyFilename(result.filename);
@@ -429,8 +463,10 @@ export const DownloadDialogWindow: React.FC = () => {
     } catch (e) {
       console.warn('Probe error:', e);
     } finally {
-      setIsProbing(false);
-      setTotalBytes((prev) => prev || extractSizeFromUrl(targetUrl));
+      if (seq === probeSeqRef.current) {
+        setIsProbing(false);
+        setTotalBytes((prev) => prev || extractSizeFromUrl(targetUrl));
+      }
     }
   };
 
@@ -441,7 +477,7 @@ export const DownloadDialogWindow: React.FC = () => {
         setSavePath(selected);
       } else if (!isTauri) {
         // Browser quick folder choices
-        const choices = ['C:\Users\User\Downloads', 'D:\Downloads\ISOs', 'E:\Media\Videos', 'C:\Software\Packages'];
+        const choices = ['C:\\Users\\User\\Downloads', 'D:\\Downloads\\ISOs', 'E:\\Media\\Videos', 'C:\\Software\\Packages'];
         const nextChoice = choices[(choices.indexOf(savePath) + 1) % choices.length] || choices[0];
         setSavePath(nextChoice);
         showToast(`Selected mock folder: ${nextChoice}`);
@@ -463,21 +499,36 @@ export const DownloadDialogWindow: React.FC = () => {
   };
 
   const handleClearForm = () => {
+    probeSeqRef.current += 1;
     setUrl('');
     setFileBaseName('');
     setFileExtension('');
     setTotalBytes(undefined);
     setIsProbing(false);
     setActiveScenarioId('');
+    setIncomingHeaders(undefined);
     showToast('Form cleared (Empty state)');
   };
 
   const handleStartDownload = async (startImmediately: boolean) => {
-    if (!url.trim()) return;
+    if (submitting || !url.trim()) return;
+    try {
+      const parsed = new URL(url.trim());
+      if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+        showToast('Only http:// and https:// URLs are supported');
+        return;
+      }
+    } catch {
+      showToast('Please enter a valid http:// or https:// URL');
+      return;
+    }
 
     setSubmitting(true);
     try {
-      const fullFilename = (fileBaseName.trim() + fileExtension.trim()) || undefined;
+      const sanitizedRawName = (fileBaseName.trim() + fileExtension.trim())
+        .replace(/[\\/:*?"<>|\x00-\x1f]/g, '_')
+        .trim();
+      const fullFilename = sanitizedRawName || undefined;
 
       // Persist chosen directory if "Remember this folder" is checked
       if (rememberPath && savePath.trim()) {
@@ -512,7 +563,7 @@ export const DownloadDialogWindow: React.FC = () => {
       if (!isTauri) {
         showToast('🚀 Download simulated in browser mode');
       } else {
-        alert('Failed to initiate download: ' + err);
+        showToast(`Failed to initiate download: ${err instanceof Error ? err.message : String(err)}`);
       }
     } finally {
       setSubmitting(false);
@@ -526,13 +577,22 @@ export const DownloadDialogWindow: React.FC = () => {
         e.preventDefault();
         handleClose();
       } else if (e.key === 'Enter' && !e.shiftKey && !e.ctrlKey) {
-        e.preventDefault();
-        handleStartDownload(true);
+        if (isBanned) {
+          e.preventDefault();
+          handleClose();
+          return;
+        }
+        const tag = document.activeElement?.tagName;
+        if (tag === 'BUTTON' || tag === 'A') return;
+        if (url.trim() && !submitting) {
+          e.preventDefault();
+          handleStartDownload(true);
+        }
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [url, fileBaseName, fileExtension, savePath, incomingHeaders]);
+  }, [url, fileBaseName, fileExtension, savePath, incomingHeaders, rememberPath, submitting, isBanned]);
 
   const handleCopyUrl = () => {
     if (!url) return;

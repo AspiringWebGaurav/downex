@@ -234,4 +234,25 @@ test.describe('Downex — Production Reload Guard & Shortcut Lockdown', () => {
     });
     expect(prodHistory).toBe(true);
   });
+
+  test('Dev QA is dynamically shown in Dev mode and completely disabled in Production mode', async ({ page }) => {
+    const devQaPill = page.locator('[data-testid="dev-qa-pill-trigger"]');
+    await expect(devQaPill).toBeVisible({ timeout: 5000 });
+
+    // Switch dynamically to simulated production mode
+    await page.evaluate(() => {
+      (window as any).__DOWNEX_FORCE_PRODUCTION__ = true;
+    });
+
+    await expect(devQaPill).toBeHidden({ timeout: 3000 });
+    await page.keyboard.press('Control+Shift+D');
+    await expect(page.locator('text=Dev QA & Control Center')).toBeHidden();
+
+    // Restore dynamically back to Dev mode
+    await page.evaluate(() => {
+      (window as any).__DOWNEX_FORCE_PRODUCTION__ = false;
+    });
+
+    await expect(devQaPill).toBeVisible({ timeout: 3000 });
+  });
 });

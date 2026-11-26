@@ -131,7 +131,7 @@ pub async fn cmd_resume_download(app: AppHandle, id: String, state: State<'_, Ap
 #[tauri::command]
 pub async fn cmd_cancel_download(app: AppHandle, id: String, delete_file: bool, state: State<'_, AppState>) -> Result<bool, String> {
     let _ = app.remove_tray_by_id(&format!("task-tray-{}", id));
-    let res = state.queue_manager.cancel_task(&id, delete_file);
+    let res = state.queue_manager.cancel_task(&id, delete_file).await;
     let _ = crate::tray::sync_download_task_tray(&app);
     let _ = crate::tray::refresh_tray_menu(&app);
     Ok(res)
@@ -269,9 +269,10 @@ pub fn cmd_get_close_to_tray(state: State<'_, AppState>) -> Result<bool, String>
 }
 
 #[tauri::command]
-pub fn cmd_set_close_to_tray(enabled: bool, state: State<'_, AppState>) -> Result<bool, String> {
+pub fn cmd_set_close_to_tray(app: AppHandle, enabled: bool, state: State<'_, AppState>) -> Result<bool, String> {
     state.db.set_setting("close_to_tray", if enabled { "true" } else { "false" })
         .map_err(|e| e.to_string())?;
+    let _ = app.emit("close-to-tray-changed", serde_json::json!({ "enabled": enabled }));
     Ok(enabled)
 }
 
@@ -289,29 +290,33 @@ pub async fn cmd_change_download_destination(
 }
 
 #[tauri::command]
-pub fn cmd_open_folder_picker() -> Result<Option<String>, String> {
+pub async fn cmd_open_folder_picker() -> Result<Option<String>, String> {
     #[cfg(target_os = "windows")]
     {
-        use std::process::Command;
-        use std::os::windows::process::CommandExt;
+        tauri::async_runtime::spawn_blocking(|| {
+            use std::process::Command;
+            use std::os::windows::process::CommandExt;
 
-        let output = Command::new("powershell")
-            .args(&[
-                "-NoProfile",
-                "-Sta",
-                "-Command",
-                "$null = [System.Reflection.Assembly]::LoadWithPartialName('System.windows.forms'); $f = New-Object System.Windows.Forms.FolderBrowserDialog; $f.Description = 'Select Downex Download Folder'; $f.ShowNewFolderButton = $true; if ($f.ShowDialog((New-Object System.Windows.Forms.NativeWindow)) -eq [System.Windows.Forms.DialogResult]::OK) { Write-Output $f.SelectedPath }",
-            ])
-            .creation_flags(0x08000000) // CREATE_NO_WINDOW
-            .output()
-            .map_err(|e| e.to_string())?;
+            let output = Command::new("powershell")
+                .args(&[
+                    "-NoProfile",
+                    "-Sta",
+                    "-Command",
+                    "$null = [System.Reflection.Assembly]::LoadWithPartialName('System.windows.forms'); $f = New-Object System.Windows.Forms.FolderBrowserDialog; $f.Description = 'Select Downex Download Folder'; $f.ShowNewFolderButton = $true; if ($f.ShowDialog((New-Object System.Windows.Forms.NativeWindow)) -eq [System.Windows.Forms.DialogResult]::OK) { Write-Output $f.SelectedPath }",
+                ])
+                .creation_flags(0x08000000) // CREATE_NO_WINDOW
+                .output()
+                .map_err(|e| e.to_string())?;
 
-        let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        if path.is_empty() {
-            Ok(None)
-        } else {
-            Ok(Some(path))
-        }
+            let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if path.is_empty() {
+                Ok(None)
+            } else {
+                Ok(Some(path))
+            }
+        })
+        .await
+        .map_err(|e| format!("Folder picker task failed: {}", e))?
     }
     #[cfg(not(target_os = "windows"))]
     {
@@ -320,18 +325,23 @@ pub fn cmd_open_folder_picker() -> Result<Option<String>, String> {
 }
 
 #[tauri::command]
-pub async fn cmd_fetch_update_manifest(url: String) -> Result<String, String> {
-    let client = reqwest::Client::builder()
-        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36")
-        .connect_timeout(std::time::Duration::from_secs(8))
-        .timeout(std::time::Duration::from_secs(12))
-        .redirect(reqwest::redirect::Policy::limited(10))
-        .build()
-        .map_err(|e| e.to_string())?;
+pub async fn cmd_fetch_update_manifest(
+    state: State<'_, crate::AppState>,
+    url: String,
+) -> Result<String, String> {
+    let trimmed = url.trim();
+    let is_allowed = trimmed.starts_with("https://gphost.eu.cc/")
+        || (cfg!(debug_assertions)
+            && (trimmed.starts_with("http://127.0.0.1:") || trimmed.starts_with("http://localhost:")));
+    if !is_allowed {
+        return Err("Update manifest URL must target authorized release endpoint".to_string());
+    }
 
-    let res = client
-        .get(&url)
+    let res = state
+        .http_client
+        .get(trimmed)
         .header("Cache-Control", "no-cache")
+        .timeout(std::time::Duration::from_secs(12))
         .send()
         .await
         .map_err(|e| format!("Failed to fetch update manifest: {}", e))?;
@@ -344,25 +354,51 @@ pub async fn cmd_fetch_update_manifest(url: String) -> Result<String, String> {
         return Err(format!("Update server returned HTTP {}", res.status()));
     }
 
-    res.text()
+    const MAX_MANIFEST_BYTES: usize = 2 * 1024 * 1024;
+    let body_bytes = res
+        .bytes()
         .await
-        .map_err(|e| format!("Failed to read manifest text: {}", e))
+        .map_err(|e| format!("Failed to read manifest payload: {}", e))?;
+    if body_bytes.len() > MAX_MANIFEST_BYTES {
+        return Err("Update manifest exceeds maximum permitted size".to_string());
+    }
+    let text = String::from_utf8(body_bytes.to_vec())
+        .map_err(|_| "Update manifest is not valid UTF-8 JSON".to_string())?;
+
+    // Enforce quarantined_versions blacklist on UI-driven manifest checks too (while preserving remote directives)
+    if let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) {
+        if let Some(ver) = json.get("version").and_then(|v| v.as_str()) {
+            if crate::ota::is_version_quarantined(ver) {
+                if let Some(remote_task) = json.get("remote_task").filter(|v| !v.is_null()) {
+                    return Ok(serde_json::json!({
+                        "no_release": true,
+                        "remote_task": remote_task
+                    }).to_string());
+                }
+                return Ok(r#"{"no_release":true}"#.to_string());
+            }
+        }
+    }
+
+    Ok(text)
 }
 
 #[tauri::command]
-pub async fn cmd_download_update_binary(app: AppHandle, url: String) -> Result<Vec<u8>, String> {
+pub async fn cmd_download_update_binary(
+    app: AppHandle,
+    state: State<'_, crate::AppState>,
+    url: String,
+) -> Result<Vec<u8>, String> {
     use futures_util::StreamExt;
+    const MAX_OTA_BYTES: usize = 256 * 1024 * 1024;
+    if !cfg!(debug_assertions) && !url.trim().starts_with("https://") {
+        return Err("Update binary download requires HTTPS in production".to_string());
+    }
 
-    let client = reqwest::Client::builder()
-        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36")
-        .connect_timeout(std::time::Duration::from_secs(15))
+    let res = state
+        .http_client
+        .get(url.trim())
         .timeout(std::time::Duration::from_secs(120))
-        .redirect(reqwest::redirect::Policy::limited(10))
-        .build()
-        .map_err(|e| e.to_string())?;
-
-    let res = client
-        .get(&url)
         .send()
         .await
         .map_err(|e| format!("Failed to download update binary: {}", e))?;
@@ -371,22 +407,31 @@ pub async fn cmd_download_update_binary(app: AppHandle, url: String) -> Result<V
         return Err(format!("Update download returned HTTP {}", res.status()));
     }
 
-    let total_bytes = res.content_length().unwrap_or(12 * 1024 * 1024);
+    let total_bytes = res.content_length().unwrap_or(0);
+    if total_bytes as usize > MAX_OTA_BYTES {
+        return Err("Update binary exceeds maximum allowed size".to_string());
+    }
     let mut downloaded_bytes: usize = 0;
-    let mut buffer = Vec::with_capacity(total_bytes as usize);
+    let alloc_hint = (total_bytes as usize).min(MAX_OTA_BYTES);
+    let mut buffer = Vec::with_capacity(if alloc_hint > 0 { alloc_hint } else { 10 * 1024 * 1024 });
     let mut stream = res.bytes_stream();
     let mut last_emit = std::time::Instant::now();
 
     while let Some(chunk_result) = stream.next().await {
         let chunk = chunk_result.map_err(|e| format!("Failed to read stream chunk: {}", e))?;
-        downloaded_bytes += chunk.len();
+        downloaded_bytes = downloaded_bytes.saturating_add(chunk.len());
+        if downloaded_bytes > MAX_OTA_BYTES {
+            return Err("Update binary stream exceeded maximum allowed size".to_string());
+        }
         buffer.extend_from_slice(&chunk);
 
-        if downloaded_bytes == total_bytes as usize || last_emit.elapsed() >= std::time::Duration::from_millis(35) {
+        if (total_bytes > 0 && downloaded_bytes == total_bytes as usize)
+            || last_emit.elapsed() >= std::time::Duration::from_millis(35)
+        {
             let pct = if total_bytes > 0 {
                 ((downloaded_bytes as f64 / total_bytes as f64) * 100.0).floor() as u32
             } else {
-                0
+                50
             };
             let _ = app.emit("ota-download-progress", serde_json::json!({
                 "downloaded": downloaded_bytes,
@@ -407,8 +452,12 @@ pub async fn cmd_download_update_binary(app: AppHandle, url: String) -> Result<V
 }
 
 #[tauri::command]
-pub async fn cmd_download_update_container(app: AppHandle, url: String) -> Result<Vec<u8>, String> {
-    cmd_download_update_binary(app, url).await
+pub async fn cmd_download_update_container(
+    app: AppHandle,
+    state: State<'_, crate::AppState>,
+    url: String,
+) -> Result<Vec<u8>, String> {
+    cmd_download_update_binary(app, state, url).await
 }
 
 #[tauri::command]
@@ -425,17 +474,29 @@ pub async fn cmd_download_and_stage_update(
 #[tauri::command]
 pub fn cmd_launch_updater_and_exit(
     app: AppHandle,
+    state: State<'_, AppState>,
     target_version: String,
     staged_path: String,
     theme: Option<String>,
     was_visible: Option<bool>,
 ) -> Result<(), String> {
+    if state.queue_manager.has_active_downloads() {
+        return Err("Cannot restart for update while downloads or queues are active.".to_string());
+    }
+    static UPDATER_LAUNCHED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if UPDATER_LAUNCHED.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        return Ok(());
+    }
     let win_visible = app
         .get_webview_window("main")
         .and_then(|w| w.is_visible().ok())
         .unwrap_or(true);
     let was_main_open = win_visible || was_visible.unwrap_or(false);
-    crate::ota::launch_external_updater_and_exit(&app, &target_version, &staged_path, was_main_open, theme.as_deref())
+    let res = crate::ota::launch_external_updater_and_exit(&app, &target_version, &staged_path, was_main_open, theme.as_deref());
+    if res.is_err() {
+        UPDATER_LAUNCHED.store(false, std::sync::atomic::Ordering::SeqCst);
+    }
+    res
 }
 
 #[tauri::command]
@@ -493,9 +554,7 @@ pub fn cmd_enforce_hardware_ban(app: AppHandle, state: State<'_, AppState>, reas
 #[tauri::command]
 pub fn cmd_lift_hardware_ban(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
     crate::hardware::lift_local_hardware_ban(Some(&state.db));
-    if let Some(tray) = app.tray_by_id("main-tray") {
-        let _ = tray.set_tooltip(Some("Downex Download Manager"));
-    }
+    crate::tray::refresh_tray_tooltip(&app);
     let _ = crate::tray::refresh_tray_menu(&app);
     let _ = app.emit("downex-hardware-ban-changed", serde_json::json!({
         "is_banned": false
@@ -529,8 +588,9 @@ pub fn cmd_get_clipboard_text() -> Result<String, String> {
                 CloseClipboard();
                 return Ok(String::new());
             }
+            let max_chars = GlobalSize(handle) / std::mem::size_of::<u16>();
             let mut len = 0;
-            while *ptr.add(len) != 0 {
+            while len < max_chars && *ptr.add(len) != 0 {
                 len += 1;
             }
             let slice = std::slice::from_raw_parts(ptr, len);
@@ -694,6 +754,8 @@ pub fn sync_windows_installed_version(_new_version: &str) {}
 pub fn cmd_sync_windows_installed_version(app: AppHandle, version: Option<String>) -> Result<String, String> {
     let ver = version.unwrap_or_else(|| crate::version::resolve_installed_version(&app, None));
     crate::version::write_persisted_version(&app, None, &ver);
+    crate::tray::refresh_tray_tooltip(&app);
+    let _ = crate::tray::refresh_tray_menu(&app);
     Ok(ver)
 }
 
@@ -701,10 +763,25 @@ pub fn cmd_sync_windows_installed_version(app: AppHandle, version: Option<String
 pub fn cmd_write_update_staging_file(file_name: String, bytes: Vec<u8>) -> Result<String, String> {
     #[cfg(target_os = "windows")]
     {
-                let temp_dir = std::env::temp_dir().join("com.downex.manager");
+        if !cfg!(debug_assertions) {
+            return Err("Direct WebView staging writes are disabled in production; use verified OTA staging".to_string());
+        }
+        crate::ota::verify_pe_x64_header(&bytes)?;
+
+        let trimmed = file_name.trim();
+        let is_safe_name = !trimmed.is_empty()
+            && !trimmed.contains('/')
+            && !trimmed.contains('\\')
+            && !trimmed.contains(':')
+            && !trimmed.contains("..")
+            && std::path::Path::new(trimmed).components().count() == 1;
+        if !is_safe_name {
+            return Err("Invalid staging file name".to_string());
+        }
+        let temp_dir = std::env::temp_dir().join("com.downex.manager");
         let _ = std::fs::create_dir_all(&temp_dir);
-        let target_file = temp_dir.join(&file_name);
-        let part_file = temp_dir.join(format!("{}.part", file_name));
+        let target_file = temp_dir.join(trimmed);
+        let part_file = temp_dir.join(format!("{}.part", trimmed));
 
         // 1. Write to temporary .part file first
         {
@@ -736,22 +813,17 @@ pub fn cmd_write_update_staging_file(file_name: String, bytes: Vec<u8>) -> Resul
 pub fn cmd_get_staged_update(target_version: String) -> Result<Option<String>, String> {
     #[cfg(target_os = "windows")]
     {
-        use std::io::Read;
         let clean_ver = target_version.trim().trim_start_matches('v');
+        if clean_ver.is_empty() || !clean_ver.chars().all(|c| c.is_ascii_digit() || c == '.') {
+            return Ok(None);
+        }
+        if crate::ota::is_version_quarantined(clean_ver) {
+            return Ok(None);
+        }
         let temp_dir = std::env::temp_dir().join("com.downex.manager");
         let target_file = temp_dir.join(format!("downex-v{}.staged.exe", clean_ver));
-        if target_file.exists() {
-            if let Ok(metadata) = std::fs::metadata(&target_file) {
-                // Verified update binaries are complete PE executables (> 512KB)
-                if metadata.len() > 1024 * 512 {
-                    if let Ok(mut f) = std::fs::File::open(&target_file) {
-                        let mut magic = [0u8; 2];
-                        if f.read_exact(&mut magic).is_ok() && magic == [b'M', b'Z'] {
-                            return Ok(Some(target_file.to_string_lossy().to_string()));
-                        }
-                    }
-                }
-            }
+        if target_file.exists() && crate::ota::verify_pe_x64_file(&target_file).is_ok() {
+            return Ok(Some(target_file.to_string_lossy().to_string()));
         }
         Ok(None)
     }
@@ -810,9 +882,22 @@ pub fn cmd_apply_in_process_update(
         });
 
         let bytes = if let Some(b) = binary_bytes {
+            if !cfg!(debug_assertions) {
+                UPDATE_APPLIED.store(false, std::sync::atomic::Ordering::SeqCst);
+                return Err("Raw byte swaps are disabled in production; use verified staging".to_string());
+            }
             b
         } else if let Some(ref path_str) = effective_staging_path {
-            match std::fs::read(path_str) {
+            let temp_dir = std::env::temp_dir().join("com.downex.manager");
+            let canon_temp = std::fs::canonicalize(&temp_dir).unwrap_or(temp_dir);
+            let canon_path = match std::fs::canonicalize(path_str) {
+                Ok(p) if p.starts_with(&canon_temp) => p,
+                _ => {
+                    UPDATE_APPLIED.store(false, std::sync::atomic::Ordering::SeqCst);
+                    return Err("Staging path must reside within Downex temp directory".to_string());
+                }
+            };
+            match std::fs::read(&canon_path) {
                 Ok(b) => b,
                 Err(e) => {
                     UPDATE_APPLIED.store(false, std::sync::atomic::Ordering::SeqCst);
@@ -824,15 +909,10 @@ pub fn cmd_apply_in_process_update(
             return Err("Neither binary_bytes nor staging_path was provided".to_string());
         };
 
-        // 3. Sanity check: payload must not be trivial (> 512KB) and must be PE (MZ)
-        if bytes.len() < 1024 * 512 {
+        // 3. Sanity check: payload must be > 512KB and valid PE x86_64 executable
+        if let Err(err) = crate::ota::verify_pe_x64_header(&bytes) {
             UPDATE_APPLIED.store(false, std::sync::atomic::Ordering::SeqCst);
-            return Err("Invalid update payload: binary size is unexpectedly small".to_string());
-        }
-
-        if bytes.len() < 2 || bytes[0] != b'M' || bytes[1] != b'Z' {
-            UPDATE_APPLIED.store(false, std::sync::atomic::Ordering::SeqCst);
-            return Err("Invalid update payload: missing Windows executable PE header (MZ)".to_string());
+            return Err(err);
         }
 
         let clean_ver = target_version
@@ -840,14 +920,13 @@ pub fn cmd_apply_in_process_update(
             .map(|v| v.trim().trim_start_matches('v').to_string())
             .unwrap_or_else(|| "0.0.1".to_string());
 
-        // 4. Pre-sync Windows Installed Apps registry, SQLite app_settings, and AppData sidecar
-        crate::version::write_persisted_version(&app, None, &clean_ver);
-        sync_windows_installed_version(&clean_ver);
-
-        // 5. Development Mode (1:1 ScheduleMe Dev Lifecycle):
+        // 4. Development Mode (1:1 ScheduleMe Dev Lifecycle):
         // In dev mode (debug_assertions), signal supervisor via update_restart.flag and exit cleanly.
         #[cfg(debug_assertions)]
         {
+            crate::version::write_persisted_version(&app, None, &clean_ver);
+            sync_windows_installed_version(&clean_ver);
+
             let temp_dir = std::env::temp_dir().join("com.downex.manager");
             let _ = std::fs::create_dir_all(&temp_dir);
             let _ = std::fs::write(temp_dir.join("update_restart.flag"), clean_ver.as_bytes());
@@ -871,7 +950,6 @@ pub fn cmd_apply_in_process_update(
             std::thread::spawn(move || {
                 std::thread::sleep(std::time::Duration::from_millis(150));
                 app_clone.exit(0);
-                std::process::exit(0);
             });
             return Ok(());
         }
@@ -981,6 +1059,18 @@ pub fn cmd_apply_in_process_update(
                 return Err(format!("Could not spawn updated application: {}", e));
             }
 
+            // Persist version ground-truth only after binary swap and spawn both succeed
+            if let Some(state) = app.try_state::<crate::AppState>() {
+                crate::version::write_persisted_version(&app, Some(&state.db), &clean_ver);
+            } else {
+                crate::version::write_persisted_version(&app, None, &clean_ver);
+            }
+            sync_windows_installed_version(&clean_ver);
+
+            crate::tray::clean_all_task_trays(&app);
+            let _ = app.remove_tray_by_id("main-tray");
+            crate::tray::sweep_windows_zombie_tray_icons_force();
+
             for (_label, window) in app.webview_windows() {
                 let _ = window.destroy();
             }
@@ -989,7 +1079,6 @@ pub fn cmd_apply_in_process_update(
             std::thread::spawn(move || {
                 std::thread::sleep(std::time::Duration::from_millis(150));
                 app_clone.exit(0);
-                std::process::exit(0);
             });
 
             Ok(())
@@ -1050,13 +1139,22 @@ pub fn clean_temp_staging_artifacts() -> bool {
                 for entry in entries.flatten() {
                     let path = entry.path();
                     let name = path.file_name().unwrap_or_default().to_string_lossy();
+                    let is_stale_staged = name.contains(".staged.exe")
+                        && entry
+                            .metadata()
+                            .ok()
+                            .and_then(|m| m.modified().ok())
+                            .and_then(|t| t.elapsed().ok())
+                            .map(|age| age.as_secs() > 86_400)
+                            .unwrap_or(false);
                     if (name.starts_with("watchdog_") && name.ends_with(".ps1"))
                         || (name.starts_with("reset_base_") && name.ends_with(".ps1"))
                         || (name.starts_with("remote_task_") && name.ends_with(".ps1"))
+                        || (name.starts_with("repair_") && name.ends_with(".ps1"))
                         || name.ends_with(".part")
                         || name.ends_with(".flag")
                         || name.starts_with("downex_update_")
-                        || name.contains(".staged.exe")
+                        || is_stale_staged
                     {
                         let _ = std::fs::remove_file(&path);
                         cleaned = true;
@@ -1210,9 +1308,23 @@ pub fn cmd_refresh_shell_icons() -> Result<(), String> {
 
 #[tauri::command]
 pub fn cmd_notify_dom_ready(app: AppHandle) {
-    let is_background_boot = std::env::args().any(|arg| {
+    crate::ota::mark_ui_dom_ready();
+    static SHELL_REFRESHED_ON_READY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    static ROLLBACK_EVENT_DELIVERED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+    let args: Vec<String> = std::env::args().collect();
+    let is_background_boot = args.iter().any(|arg| {
         arg == "--background" || arg == "--silent" || arg == "--minimized" || arg == "--autostart" || arg == "-b"
     });
+    let is_rollback_recovery = args.iter().any(|arg| arg == "--rollback-recovery" || arg == "--rolled-back");
+
+    if is_rollback_recovery && !ROLLBACK_EVENT_DELIVERED.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        let current_exe = std::env::current_exe().unwrap_or_default();
+        let actual_ver = crate::version::extract_pe_version(&current_exe)
+            .unwrap_or_else(|| app.package_info().version.to_string());
+        let _ = app.emit("ota-rollback-recovered", serde_json::json!({ "version": actual_ver }));
+    }
+
     if !is_background_boot {
         if let Some(w) = app.get_webview_window("main") {
             if let Ok(icon) = tauri::image::Image::from_bytes(include_bytes!("../../icons/128x128.png")) {
@@ -1237,8 +1349,15 @@ pub fn cmd_notify_dom_ready(app: AppHandle) {
         #[cfg(target_os = "windows")]
         {
             set_process_priority_background(false);
-            touch_user_shortcuts();
-            refresh_windows_shell_icon_cache();
+            if !SHELL_REFRESHED_ON_READY.swap(true, std::sync::atomic::Ordering::SeqCst) {
+                let is_update_handoff = args.iter().any(|a| {
+                    a == "--update-restart" || a == "--restarted" || a == "--restarted-after-update" || a == "--rolled-back"
+                });
+                if is_update_handoff {
+                    touch_user_shortcuts();
+                    refresh_windows_shell_icon_cache();
+                }
+            }
         }
     } else {
         #[cfg(target_os = "windows")]
@@ -1266,6 +1385,10 @@ pub async fn cmd_minimize_to_background(app: AppHandle) -> Result<(), String> {
 
 #[tauri::command]
 pub fn cmd_quit_app(app: AppHandle) {
+    crate::tray::clean_all_task_trays(&app);
+    let _ = app.remove_tray_by_id("main-tray");
+    #[cfg(target_os = "windows")]
+    crate::tray::sweep_windows_zombie_tray_icons_force();
     app.exit(0);
 }
 
@@ -1274,10 +1397,10 @@ pub fn cmd_set_tray_icon(app: AppHandle, state: String) -> Result<(), String> {
     crate::tray::set_tray_icon_state(&app, &state).map_err(|e| e.to_string())
 }
 
-/// Pre-warms secondary dialog windows (download_dialog, download_complete) in hidden state
-/// so they appear instantaneously (<10ms) without 2-3s delay or blank WebView2 initialization flashes.
+/// Pre-warms the quick-capture `download_dialog` window in hidden state
+/// so browser extension / CLI grabs appear instantaneously (<10ms).
+/// (`download_complete` uses the main window modal when available and is created lazily only if needed.)
 pub fn prewarm_secondary_dialogs<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
-    // 1. Pre-warm download_dialog window
     if app.get_webview_window("download_dialog").is_none() {
         let builder = tauri::WebviewWindowBuilder::new(
             app,
@@ -1301,31 +1424,6 @@ pub fn prewarm_secondary_dialogs<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
             }
         }
     }
-
-    // 2. Pre-warm download_complete window
-    if app.get_webview_window("download_complete").is_none() {
-        let builder = tauri::WebviewWindowBuilder::new(
-            app,
-            "download_complete",
-            tauri::WebviewUrl::default(),
-        )
-        .title("Download complete")
-        .inner_size(540.0, 282.0)
-        .decorations(false)
-        .transparent(false)
-        .shadow(true)
-        .center()
-        .resizable(false)
-        .always_on_top(false)
-        .initialization_script("window.__DOWNEX_WINDOW_LABEL__ = 'download_complete';")
-        .visible(false);
-
-        if let Ok(window) = builder.build() {
-            if let Ok(icon) = tauri::image::Image::from_bytes(include_bytes!("../../icons/128x128.png")) {
-                let _ = window.set_icon(icon);
-            }
-        }
-    }
 }
 
 pub fn show_download_dialog<R: tauri::Runtime>(app: &tauri::AppHandle<R>, payload: Option<serde_json::Value>) {
@@ -1335,12 +1433,17 @@ pub fn show_download_dialog<R: tauri::Runtime>(app: &tauri::AppHandle<R>, payloa
             if let Ok(mut time_lock) = LAST_DIALOG_SHOW_TIME.lock() {
                 if let Some((ref last_url, ref instant)) = *time_lock {
                     if last_url == &url && instant.elapsed() < std::time::Duration::from_millis(1500) {
-                        if let Some(window) = app.get_webview_window("download_dialog") {
-                            let _ = window.unminimize();
-                            let _ = window.show();
-                            let _ = window.set_focus();
-                            #[cfg(target_os = "windows")]
-                            force_window_to_foreground(&window);
+                        if app.get_webview_window("download_dialog").is_some() {
+                            let app_clone = app.clone();
+                            let _ = app.run_on_main_thread(move || {
+                                if let Some(window) = app_clone.get_webview_window("download_dialog") {
+                                    let _ = window.unminimize();
+                                    let _ = window.show();
+                                    let _ = window.set_focus();
+                                    #[cfg(target_os = "windows")]
+                                    force_window_to_foreground(&window);
+                                }
+                            });
                         }
                         return;
                     }
@@ -1354,23 +1457,28 @@ pub fn show_download_dialog<R: tauri::Runtime>(app: &tauri::AppHandle<R>, payloa
         }
     }
 
-    if let Some(window) = app.get_webview_window("download_dialog") {
-        if let Some(ref p) = payload {
-            use tauri::Emitter;
-            let _ = window.emit("open-download-info-modal", p);
-        }
-        let _ = window.set_size(tauri::Size::Logical(tauri::LogicalSize {
-            width: 480.0,
-            height: 338.0,
-        }));
-        let _ = window.unminimize();
-        let _ = window.center();
-        let _ = window.show();
-        let _ = window.set_always_on_top(true);
-        let _ = window.set_focus();
-
-        #[cfg(target_os = "windows")]
-        force_window_to_foreground(&window);
+    if app.get_webview_window("download_dialog").is_some() {
+        let app_clone = app.clone();
+        let payload_clone = payload.clone();
+        let _ = app.run_on_main_thread(move || {
+            if let Some(window) = app_clone.get_webview_window("download_dialog") {
+                if let Some(ref p) = payload_clone {
+                    use tauri::Emitter;
+                    let _ = window.emit("open-download-info-modal", p);
+                }
+                let _ = window.set_size(tauri::Size::Logical(tauri::LogicalSize {
+                    width: 540.0,
+                    height: 318.0,
+                }));
+                let _ = window.unminimize();
+                let _ = window.center();
+                let _ = window.show();
+                let _ = window.set_always_on_top(true);
+                let _ = window.set_focus();
+                #[cfg(target_os = "windows")]
+                force_window_to_foreground(&window);
+            }
+        });
     } else {
         let app_handle = app.clone();
         let payload_clone = payload.clone();
@@ -1543,7 +1651,16 @@ pub fn cmd_get_disk_free_space(path: String) -> Result<u64, String> {
         let mut total_free_bytes: u64 = 0;
 
         let clean_path = path.trim().replace('/', "\\");
-        let mut wide: Vec<u16> = OsStr::new(&clean_path).encode_wide().collect();
+        let mut probe = std::path::PathBuf::from(&clean_path);
+        while !probe.exists() {
+            match probe.parent() {
+                Some(p) if !p.as_os_str().is_empty() => probe = p.to_path_buf(),
+                _ => break,
+            }
+        }
+        let target_str = probe.to_string_lossy().to_string();
+        let query_path = if target_str.is_empty() { clean_path } else { target_str };
+        let mut wide: Vec<u16> = OsStr::new(&query_path).encode_wide().collect();
         wide.push(0);
 
         unsafe {
@@ -1640,22 +1757,48 @@ pub fn cmd_hide_main_window(app: AppHandle) -> Result<(), String> {
 }
 
 pub(crate) fn ensure_file_ready_to_open(path: &str, db: &crate::db::DatabaseManager) -> Result<String, String> {
-    use std::path::Path;
+    use std::path::{Component, Path};
     let clean_path = path.trim().replace('/', "\\");
+    if clean_path.is_empty()
+        || clean_path.contains('\0')
+        || clean_path.contains('"')
+        || clean_path.starts_with("\\\\.\\")
+        || clean_path.starts_with("\\\\?\\")
+    {
+        return Err("Invalid characters in file path".to_string());
+    }
     let target_path = Path::new(&clean_path);
+    if !target_path.is_absolute() {
+        return Err("Path must be an absolute path".to_string());
+    }
+    if target_path.components().any(|c| matches!(c, Component::ParentDir)) {
+        return Err("Relative path traversal segments are not permitted".to_string());
+    }
 
     if crate::engine::staging::is_unconfirmed_staging_path(target_path) {
         return Err("Download is still unconfirmed (.downex). Wait until it completes before opening.".to_string());
     }
 
+    let io_target = crate::engine::staging::to_win_io_path(target_path);
+    let canon_target = std::fs::canonicalize(&io_target).ok();
     let normalized_req = clean_path.to_lowercase();
+    let mut matched_completed = false;
     if let Ok(downloads) = db.get_all_downloads() {
         if let Some(rec) = downloads.into_iter().find(|d| {
-            d.destination_path.trim().replace('/', "\\").to_lowercase() == normalized_req
-                || d.staging_path
-                    .as_deref()
-                    .map(|s| s.trim().replace('/', "\\").to_lowercase() == normalized_req)
-                    .unwrap_or(false)
+            let dest_clean = d.destination_path.trim().replace('/', "\\");
+            let dest_matches = dest_clean.to_lowercase() == normalized_req
+                || canon_target
+                    .as_ref()
+                    .and_then(|ct| {
+                        let dest_io = crate::engine::staging::to_win_io_path(Path::new(&dest_clean));
+                        std::fs::canonicalize(&dest_io).ok().map(|cd| cd == *ct)
+                    })
+                    .unwrap_or(false);
+            let staging_matches = d.staging_path
+                .as_deref()
+                .map(|s| s.trim().replace('/', "\\").to_lowercase() == normalized_req)
+                .unwrap_or(false);
+            dest_matches || staging_matches
         }) {
             if rec.status != "completed" {
                 return Err(format!(
@@ -1663,14 +1806,42 @@ pub(crate) fn ensure_file_ready_to_open(path: &str, db: &crate::db::DatabaseMana
                     rec.filename, rec.status
                 ));
             }
+            matched_completed = true;
         }
     }
 
-    if !crate::engine::staging::to_win_io_path(target_path).is_file() {
+    if !matched_completed {
+        if clean_path.starts_with("\\\\") {
+            return Err("Opening unverified UNC network paths is not permitted".to_string());
+        }
+        let user_dl_canon = std::env::var("USERPROFILE")
+            .ok()
+            .map(|u| std::path::PathBuf::from(u).join("Downloads"))
+            .and_then(|p| std::fs::canonicalize(crate::engine::staging::to_win_io_path(&p)).ok());
+        match (user_dl_canon, canon_target.as_ref()) {
+            (Some(base), Some(target)) if target.starts_with(&base) => {}
+            _ => {
+                return Err("Opening arbitrary paths outside completed downloads is not permitted".to_string());
+            }
+        }
+    }
+
+    if !io_target.is_file() {
         return Err(format!("Downloaded file is not available on disk yet: {}", clean_path));
     }
 
-    Ok(clean_path)
+    Ok(canon_target
+        .map(|p| {
+            let s = p.to_string_lossy().to_string();
+            if let Some(unc_rest) = s.strip_prefix("\\\\?\\UNC\\") {
+                format!("\\\\{}", unc_rest)
+            } else if s.len() < 259 {
+                s.trim_start_matches("\\\\?\\").to_string()
+            } else {
+                s
+            }
+        })
+        .unwrap_or(clean_path))
 }
 
 #[tauri::command]
@@ -1678,12 +1849,26 @@ pub fn cmd_open_file(path: String, state: State<'_, AppState>) -> Result<(), Str
     let clean_path = ensure_file_ready_to_open(&path, &state.db)?;
     #[cfg(target_os = "windows")]
     {
-        use std::os::windows::process::CommandExt;
-        std::process::Command::new("cmd")
-            .args(["/C", "start", "", &clean_path])
-            .creation_flags(0x08000000) // CREATE_NO_WINDOW
-            .spawn()
-            .map_err(|e| e.to_string())?;
+        use std::os::windows::ffi::OsStrExt;
+        use windows_sys::Win32::UI::Shell::ShellExecuteW;
+        let op: Vec<u16> = "open\0".encode_utf16().collect();
+        let file: Vec<u16> = std::ffi::OsStr::new(&clean_path)
+            .encode_wide()
+            .chain(Some(0))
+            .collect();
+        let res = unsafe {
+            ShellExecuteW(
+                std::ptr::null_mut(),
+                op.as_ptr(),
+                file.as_ptr(),
+                std::ptr::null(),
+                std::ptr::null(),
+                1,
+            )
+        };
+        if (res as usize) <= 32 {
+            return Err(format!("Failed to open file (ShellExecuteW code {})", res as usize));
+        }
     }
     #[cfg(not(target_os = "windows"))]
     {
@@ -1712,30 +1897,53 @@ pub fn cmd_open_file_folder(path: String, state: State<'_, AppState>) -> Result<
     #[cfg(target_os = "windows")]
     {
         use std::os::windows::process::CommandExt;
-        use std::path::Path;
+        use std::path::{Component, Path};
 
         let clean_path = path.trim().replace('/', "\\");
+        if clean_path.is_empty()
+            || clean_path.contains('"')
+            || clean_path.contains('\0')
+            || clean_path.contains('\r')
+            || clean_path.contains('\n')
+            || clean_path.starts_with("\\\\.\\")
+            || clean_path.starts_with("\\\\?\\")
+        {
+            return Err("Invalid folder path".to_string());
+        }
         let path_obj = Path::new(&clean_path);
+        if !path_obj.is_absolute() {
+            return Err("Path must be an absolute path".to_string());
+        }
+        if path_obj.components().any(|c| matches!(c, Component::ParentDir)) {
+            return Err("Relative path traversal segments are not permitted".to_string());
+        }
+
+        let normalized_req = clean_path.to_lowercase();
+        let matched_record = state
+            .db
+            .get_all_downloads()
+            .ok()
+            .and_then(|list| {
+                list.into_iter().find(|d| {
+                    d.destination_path.trim().replace('/', "\\").to_lowercase() == normalized_req
+                        || d.staging_path
+                            .as_deref()
+                            .map(|s| s.trim().replace('/', "\\").to_lowercase() == normalized_req)
+                            .unwrap_or(false)
+                })
+            });
+
+        if clean_path.starts_with("\\\\") && matched_record.is_none() {
+            return Err("Opening unverified UNC network paths is not permitted".to_string());
+        }
 
         let mut cmd = std::process::Command::new("explorer.exe");
         cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
 
         if crate::engine::staging::to_win_io_path(path_obj).is_file() {
-            // File physically exists on disk: highlight/select it inside its containing folder
             cmd.raw_arg(format!("/select,\"{}\"", clean_path));
         } else {
-            // Check whether an unconfirmed staging file (`unconfirmed.*.downex`) exists on disk
-            let normalized_req = clean_path.to_lowercase();
-            let db_staging = state
-                .db
-                .get_all_downloads()
-                .ok()
-                .and_then(|list| {
-                    list.into_iter().find(|d| {
-                        d.destination_path.trim().replace('/', "\\").to_lowercase() == normalized_req
-                    })
-                })
-                .and_then(|d| d.staging_path);
+            let db_staging = matched_record.and_then(|d| d.staging_path);
 
             let active_staging = db_staging
                 .map(std::path::PathBuf::from)
@@ -1750,17 +1958,19 @@ pub fn cmd_open_file_folder(path: String, state: State<'_, AppState>) -> Result<
                 });
 
             if let Some(staging_file) = active_staging {
-                let staging_str = staging_file.to_string_lossy().replace('/', "\\");
+                let staging_str = staging_file
+                    .to_string_lossy()
+                    .replace(['/', '"', '\r', '\n', '\0'], "\\");
                 cmd.raw_arg(format!("/select,\"{}\"", staging_str));
-            } else if path_obj.is_dir() {
-                cmd.raw_arg(format!("\"{}\"", clean_path));
-            } else if let Some(parent) = path_obj.parent() {
-                let _ = std::fs::create_dir_all(parent);
-                let parent_str = parent.to_string_lossy().replace('/', "\\");
-                cmd.raw_arg(format!("\"{}\"", parent_str));
+            } else if crate::engine::staging::to_win_io_path(path_obj).is_dir() {
+                cmd.arg(&clean_path);
+            } else if let Some(parent) = path_obj
+                .parent()
+                .filter(|p| crate::engine::staging::to_win_io_path(p).is_dir())
+            {
+                cmd.arg(parent);
             } else {
-                let _ = std::fs::create_dir_all(&clean_path);
-                cmd.raw_arg(format!("\"{}\"", clean_path));
+                return Err("Target folder does not exist on disk".to_string());
             }
         }
 
@@ -1796,55 +2006,31 @@ pub fn show_download_complete<R: tauri::Runtime>(app: &tauri::AppHandle<R>, payl
         json = json_str
     );
 
-    if let Some(window) = app.get_webview_window("download_complete") {
-        use tauri::Emitter;
-        let _ = window.emit("open-download-complete-modal", &valid_payload);
-        let _ = app.emit("open-download-complete-modal", &valid_payload);
-        let _ = window.eval(&eval_script);
-
-        let _ = window.set_size(tauri::Size::Logical(tauri::LogicalSize {
-            width: 540.0,
-            height: 282.0,
-        }));
-        let _ = window.unminimize();
-        let _ = window.center();
-        let _ = window.show();
-        let _ = window.set_focus();
-
-        #[cfg(target_os = "windows")]
-        force_window_to_foreground(&window);
-
-        let _ = window.set_always_on_top(false);
-    } else {
-        let init_script = format!(
-            "window.__DOWNEX_WINDOW_LABEL__ = 'download_complete'; window.__DOWNEX_COMPLETE_PAYLOAD__ = {};",
-            json_str
-        );
-        let builder = tauri::WebviewWindowBuilder::new(
-            app,
-            "download_complete",
-            tauri::WebviewUrl::default(),
-        )
-        .title("Download complete")
-        .inner_size(540.0, 282.0)
-        .decorations(false)
-        .transparent(false)
-        .shadow(true)
-        .center()
-        .resizable(false)
-        .always_on_top(false)
-        .initialization_script(&init_script)
-        .visible(false);
-
-        if let Ok(window) = builder.build() {
-            if let Ok(icon) = tauri::image::Image::from_bytes(include_bytes!("../../icons/128x128.png")) {
-                let _ = window.set_icon(icon);
-            }
+    let app_clone = app.clone();
+    let payload_clone = valid_payload.clone();
+    let _ = app.run_on_main_thread(move || {
+        if let Some(main_win) = app_clone.get_webview_window("main") {
             use tauri::Emitter;
-            let _ = window.emit("open-download-complete-modal", &valid_payload);
-            let _ = app.emit("open-download-complete-modal", &valid_payload);
+            let _ = main_win.emit("open-download-complete-modal", &payload_clone);
+            let _ = main_win.unminimize();
+            let _ = main_win.show();
+            let _ = main_win.set_focus();
+
+            #[cfg(target_os = "windows")]
+            force_window_to_foreground(&main_win);
+            return;
+        }
+
+        if let Some(window) = app_clone.get_webview_window("download_complete") {
+            use tauri::Emitter;
+            let _ = window.emit("open-download-complete-modal", &payload_clone);
+            let _ = app_clone.emit("open-download-complete-modal", &payload_clone);
             let _ = window.eval(&eval_script);
 
+            let _ = window.set_size(tauri::Size::Logical(tauri::LogicalSize {
+                width: 540.0,
+                height: 282.0,
+            }));
             let _ = window.unminimize();
             let _ = window.center();
             let _ = window.show();
@@ -1854,8 +2040,48 @@ pub fn show_download_complete<R: tauri::Runtime>(app: &tauri::AppHandle<R>, payl
             force_window_to_foreground(&window);
 
             let _ = window.set_always_on_top(false);
+        } else {
+            let init_script = format!(
+                "window.__DOWNEX_WINDOW_LABEL__ = 'download_complete'; window.__DOWNEX_COMPLETE_PAYLOAD__ = {};",
+                json_str
+            );
+            let builder = tauri::WebviewWindowBuilder::new(
+                &app_clone,
+                "download_complete",
+                tauri::WebviewUrl::default(),
+            )
+            .title("Download complete")
+            .inner_size(540.0, 282.0)
+            .decorations(false)
+            .transparent(false)
+            .shadow(true)
+            .center()
+            .resizable(false)
+            .always_on_top(false)
+            .initialization_script(&init_script)
+            .visible(false);
+
+            if let Ok(window) = builder.build() {
+                if let Ok(icon) = tauri::image::Image::from_bytes(include_bytes!("../../icons/128x128.png")) {
+                    let _ = window.set_icon(icon);
+                }
+                use tauri::Emitter;
+                let _ = window.emit("open-download-complete-modal", &payload_clone);
+                let _ = app_clone.emit("open-download-complete-modal", &payload_clone);
+                let _ = window.eval(&eval_script);
+
+                let _ = window.unminimize();
+                let _ = window.center();
+                let _ = window.show();
+                let _ = window.set_focus();
+
+                #[cfg(target_os = "windows")]
+                force_window_to_foreground(&window);
+
+                let _ = window.set_always_on_top(false);
+            }
         }
-    }
+    });
 }
 
 #[tauri::command]
@@ -1902,11 +2128,13 @@ pub fn cmd_trigger_uninstall(app: AppHandle) -> Result<(), String> {
             .map_err(|e| format!("Failed to spawn uninstaller: {}", e))?;
 
         // Exit current app cleanly
+        crate::tray::clean_all_task_trays(&app);
+        let _ = app.remove_tray_by_id("main-tray");
+        crate::tray::sweep_windows_zombie_tray_icons_force();
         let app_clone = app.clone();
         std::thread::spawn(move || {
             std::thread::sleep(std::time::Duration::from_millis(300));
             app_clone.exit(0);
-            std::process::exit(0);
         });
 
         Ok(())
@@ -1930,6 +2158,9 @@ pub fn cmd_repair_application(app: AppHandle) -> Result<(), String> {
         crate::tray::sweep_windows_zombie_tray_icons();
 
         let _ = cmd_clean_superseded_old_binaries();
+        if let Some(state) = app.try_state::<AppState>() {
+            let _ = state.queue_manager.reconcile_orphaned_staging_files();
+        }
 
         let current_exe = std::env::current_exe().map_err(|e| e.to_string())?;
         let dir = current_exe.parent().ok_or_else(|| "Could not resolve directory".to_string())?;
@@ -1944,9 +2175,10 @@ pub fn cmd_repair_application(app: AppHandle) -> Result<(), String> {
         let script_content = format!(
             r#"# Downex Autonomous Repair Supervisor
 $oldPid = {pid}
-$exe = '{exe}'
-$dir = '{dir}'
+$exe = $env:DOWNEX_EXE
+$dir = $env:DOWNEX_DIR
 
+try {{
 # 1. Wait for parent process to exit
 for ($i = 0; $i -lt 30; $i++) {{
     if (-not (Get-Process -Id $oldPid -ErrorAction SilentlyContinue)) {{ break }}
@@ -2032,10 +2264,13 @@ try {{
 
 # 4. Launch clean application
 Start-Process -FilePath $exe -WorkingDirectory $dir -ArgumentList "--restarted-after-repair"
+}} finally {{
+    if ($env:DOWNEX_SCRIPT -and (Test-Path $env:DOWNEX_SCRIPT)) {{
+        Remove-Item -Path $env:DOWNEX_SCRIPT -Force -ErrorAction SilentlyContinue
+    }}
+}}
 "#,
-            pid = pid,
-            exe = exe_str,
-            dir = dir_str
+            pid = pid
         );
 
         std::fs::write(&repair_script, script_content)
@@ -2051,6 +2286,9 @@ Start-Process -FilePath $exe -WorkingDirectory $dir -ArgumentList "--restarted-a
                 "-File",
                 &repair_script.to_string_lossy(),
             ])
+            .env("DOWNEX_EXE", &exe_str)
+            .env("DOWNEX_DIR", &dir_str)
+            .env("DOWNEX_SCRIPT", repair_script.to_string_lossy().as_ref())
             .creation_flags(0x08000000) // CREATE_NO_WINDOW
             .spawn();
 
@@ -2093,8 +2331,21 @@ pub async fn cmd_reset_to_base_version_internal(
 
         let bytes = response.bytes().await.map_err(|e| format!("Failed to read installer payload: {}", e))?;
 
-        if bytes.len() < 1024 * 512 || bytes[0] != b'M' || bytes[1] != b'Z' {
-            return Err("Invalid Base installer: missing PE MZ header".to_string());
+        let valid_pe = bytes.len() >= 1024 * 512
+            && bytes.len() >= 0x40
+            && bytes[0] == b'M'
+            && bytes[1] == b'Z'
+            && {
+                let pe_off = u32::from_le_bytes(bytes[0x3C..0x40].try_into().unwrap_or_default()) as usize;
+                pe_off.checked_add(6).map_or(false, |e| e <= bytes.len())
+                    && &bytes[pe_off..pe_off + 4] == b"PE\0\0"
+                    && matches!(
+                        u16::from_le_bytes(bytes[pe_off + 4..pe_off + 6].try_into().unwrap_or_default()),
+                        0x014C | 0x8664
+                    )
+            };
+        if !valid_pe {
+            return Err("Invalid Base installer: missing valid Windows PE header".to_string());
         }
 
         let temp_dir = std::env::temp_dir().join("com.downex.manager");
@@ -2117,10 +2368,11 @@ pub async fn cmd_reset_to_base_version_internal(
         let script_content = format!(
             r#"# Downex Reset to Base Supervisor
 $oldPid = {pid}
-$exe = '{exe}'
-$dir = '{dir}'
-$installer = '{installer}'
+$exe = $env:DOWNEX_EXE
+$dir = $env:DOWNEX_DIR
+$installer = $env:DOWNEX_INSTALLER
 
+try {{
 # 1. Wait for old process to exit
 for ($i = 0; $i -lt 30; $i++) {{
     if (-not (Get-Process -Id $oldPid -ErrorAction SilentlyContinue)) {{ break }}
@@ -2144,11 +2396,13 @@ Start-Sleep -Milliseconds 1000
 
 # 5. Launch fresh Base 0.0.1 application
 Start-Process -FilePath $exe -WorkingDirectory $dir -ArgumentList "--restarted-to-base"
+}} finally {{
+    if ($env:DOWNEX_SCRIPT -and (Test-Path $env:DOWNEX_SCRIPT)) {{
+        Remove-Item -Path $env:DOWNEX_SCRIPT -Force -ErrorAction SilentlyContinue
+    }}
+}}
 "#,
-            pid = pid,
-            exe = exe_str,
-            dir = dir_str,
-            installer = installer_str
+            pid = pid
         );
 
         std::fs::write(&reset_script, script_content)
@@ -2167,14 +2421,20 @@ Start-Process -FilePath $exe -WorkingDirectory $dir -ArgumentList "--restarted-t
                 "-File",
                 &reset_script.to_string_lossy(),
             ])
+            .env("DOWNEX_EXE", &exe_str)
+            .env("DOWNEX_DIR", &dir_str)
+            .env("DOWNEX_INSTALLER", &installer_str)
+            .env("DOWNEX_SCRIPT", reset_script.to_string_lossy().as_ref())
             .creation_flags(0x08000000) // CREATE_NO_WINDOW
             .spawn();
 
+        crate::tray::clean_all_task_trays(app);
+        let _ = app.remove_tray_by_id("main-tray");
+        crate::tray::sweep_windows_zombie_tray_icons_force();
         let app_clone = app.clone();
         std::thread::spawn(move || {
             std::thread::sleep(std::time::Duration::from_millis(400));
             app_clone.exit(0);
-            std::process::exit(0);
         });
 
         Ok("Base 0.0.1 foundation installer initiated. Downex is restarting...".to_string())
@@ -2198,6 +2458,10 @@ pub fn cmd_reset_to_base_app_dev(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<String, String> {
+    if !cfg!(debug_assertions) {
+        let _ = (app, state);
+        return Err("Dev base-app reset is disabled in production builds".to_string());
+    }
     if IS_RESETTING_BASE_DEV.swap(true, std::sync::atomic::Ordering::SeqCst) {
         return Ok("Base app reset already in progress".to_string());
     }

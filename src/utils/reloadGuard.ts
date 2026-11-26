@@ -21,18 +21,29 @@
 export function isProductionEnvironment(): boolean {
   if (typeof window === 'undefined') return false;
 
-  // Explicit testing override for automated test suites
-  if (typeof (window as any).__DOWNEX_FORCE_PRODUCTION__ === 'boolean') {
-    return (window as any).__DOWNEX_FORCE_PRODUCTION__;
-  }
-  if (typeof (window as any).__DOWNEX_FORCE_DEV__ === 'boolean') {
-    return !(window as any).__DOWNEX_FORCE_DEV__;
+  if (import.meta.env.DEV) {
+    // Explicit testing override for automated test suites
+    if (typeof (window as any).__DOWNEX_FORCE_PRODUCTION__ === 'boolean') {
+      return (window as any).__DOWNEX_FORCE_PRODUCTION__;
+    }
+    if (typeof (window as any).__DOWNEX_FORCE_DEV__ === 'boolean') {
+      return !(window as any).__DOWNEX_FORCE_DEV__;
+    }
   }
 
   // Compile-time production bundle flag takes strict precedence over host/port heuristics
   if (import.meta.env.PROD) {
     return true;
   }
+
+  // Packaged desktop / Tauri asset protocols are always production unless explicitly overridden in dev
+  try {
+    const protocol = window.location?.protocol || '';
+    const hostname = window.location?.hostname || '';
+    if (protocol === 'tauri:' || protocol === 'file:' || hostname === 'tauri.localhost') {
+      return true;
+    }
+  } catch {}
 
   // If running on Vite dev server port (1420, 5173, 3000), consider development mode
   try {
@@ -55,10 +66,42 @@ export function isDevEnvironment(): boolean {
   return !isProductionEnvironment();
 }
 
+export const ENV_MODE_CHANGED_EVENT = 'downex-env-mode-changed';
+
+export function installDevEnvOverrideWatcher(): void {
+  if (typeof window === 'undefined' || !import.meta.env.DEV || import.meta.env.PROD) return;
+  const win = window as any;
+  if (win.__DOWNEX_ENV_WATCHER_INSTALLED__) return;
+  win.__DOWNEX_ENV_WATCHER_INSTALLED__ = true;
+
+  for (const key of ['__DOWNEX_FORCE_PRODUCTION__', '__DOWNEX_FORCE_DEV__'] as const) {
+    try {
+      const desc = Object.getOwnPropertyDescriptor(win, key);
+      if (desc && desc.configurable === false) continue;
+      let currentVal: unknown = desc && 'value' in desc ? desc.value : win[key];
+      Object.defineProperty(win, key, {
+        configurable: true,
+        enumerable: true,
+        get() {
+          return currentVal;
+        },
+        set(next: unknown) {
+          if (currentVal !== next) {
+            currentVal = next;
+            window.dispatchEvent(new CustomEvent(ENV_MODE_CHANGED_EVENT));
+          } else {
+            currentVal = next;
+          }
+        },
+      });
+    } catch {}
+  }
+}
+
 export function isReloadLockActive(): boolean {
   if (typeof window === 'undefined') return false;
 
-  if (typeof (window as any).__DOWNEX_LOCK_REFRESH__ === 'boolean') {
+  if (import.meta.env.DEV && typeof (window as any).__DOWNEX_LOCK_REFRESH__ === 'boolean') {
     return (window as any).__DOWNEX_LOCK_REFRESH__;
   }
 
@@ -225,10 +268,12 @@ export function setupReloadGuard(options?: ReloadGuardOptions): () => void {
   window.addEventListener('contextmenu', handleContextMenu, { capture: true, passive: false });
   document.addEventListener('contextmenu', handleContextMenu, { capture: true, passive: false });
 
-  // Expose status helpers globally for tests & diagnostic verification
-  (window as any).__DOWNEX_IS_PRODUCTION__ = isProductionEnvironment;
-  (window as any).__DOWNEX_IS_DEV__ = isDevEnvironment;
-  (window as any).__DOWNEX_IS_RELOAD_LOCK_ACTIVE__ = isReloadLockActive;
+  if (import.meta.env.DEV && !import.meta.env.PROD) {
+    installDevEnvOverrideWatcher();
+    (window as any).__DOWNEX_IS_PRODUCTION__ = isProductionEnvironment;
+    (window as any).__DOWNEX_IS_DEV__ = isDevEnvironment;
+    (window as any).__DOWNEX_IS_RELOAD_LOCK_ACTIVE__ = isReloadLockActive;
+  }
 
   return () => {
     window.removeEventListener('keydown', handleKeyEvent, { capture: true });

@@ -93,6 +93,9 @@ interface HardwareBanState {
   liftBanLive: () => Promise<void>;
 }
 
+let initBanInFlight: Promise<void> | null = null;
+let liveBanEpoch = 0;
+
 export const useHardwareBanStore = create<HardwareBanState>((set, get) => {
   let initialIsBanned = false;
   let initialReason: string | undefined = undefined;
@@ -113,32 +116,45 @@ export const useHardwareBanStore = create<HardwareBanState>((set, get) => {
     setReinstating: (val: boolean) => set({ isReinstating: val }),
 
     initBanStatus: async () => {
-      try {
-        const hwid = await getSiliconHardwareId();
-        const isBanned = await checkIsHardwareBanned();
-        let reason: string | undefined = undefined;
+      if (initBanInFlight) return initBanInFlight;
+      const capturedEpoch = liveBanEpoch;
+      initBanInFlight = (async () => {
         try {
-          reason = localStorage.getItem('downex_hardware_ban_reason') || undefined;
-        } catch {}
+          const hwid = await getSiliconHardwareId();
+          const isBanned = await checkIsHardwareBanned();
+          if (capturedEpoch !== liveBanEpoch) {
+            // Live SSE ban/unban directive superseded boot check; preserve HWID without overwriting live ban state
+            set({ hwid, isInitialized: true });
+            return;
+          }
+          let reason: string | undefined = undefined;
+          try {
+            reason = localStorage.getItem('downex_hardware_ban_reason') || undefined;
+          } catch {}
 
-        if (isBanned) {
-          capturePreBanUiSnapshot();
-        } else {
-          restorePreBanUiSnapshot();
+          if (isBanned) {
+            capturePreBanUiSnapshot();
+          } else {
+            restorePreBanUiSnapshot();
+          }
+
+          set({
+            hwid,
+            isBanned,
+            banReason: isBanned ? reason : undefined,
+            isInitialized: true,
+          });
+        } catch (err) {
+          console.warn('[HardwareBanStore] Init failed:', err);
+        } finally {
+          initBanInFlight = null;
         }
-
-        set({
-          hwid,
-          isBanned,
-          banReason: reason,
-          isInitialized: true,
-        });
-      } catch (err) {
-        console.warn('[HardwareBanStore] Init failed:', err);
-      }
+      })();
+      return initBanInFlight;
     },
 
     setBannedLive: (isBanned: boolean, reason?: string) => {
+      liveBanEpoch += 1;
       try {
         localStorage.setItem('downex_is_hardware_banned', String(isBanned));
         if (reason && isBanned) {
@@ -154,6 +170,14 @@ export const useHardwareBanStore = create<HardwareBanState>((set, get) => {
         }
       } catch {}
 
+      if (isBanned) {
+        useDownloadStore.setState({
+          isNewModalOpen: false,
+          completeModalPayload: null,
+          isQueueGuideOpen: false,
+        });
+      }
+
       set({
         isBanned,
         banReason: isBanned ? (reason || get().banReason) : undefined,
@@ -161,10 +185,18 @@ export const useHardwareBanStore = create<HardwareBanState>((set, get) => {
     },
 
     enforceBanLive: async (reason?: string) => {
+      liveBanEpoch += 1;
       const banReason = reason || 'You have been banned from ADMIN';
 
       // Preserve exact user UI/menu/layout settings before compacting into banned view
       capturePreBanUiSnapshot();
+
+      // Dismiss any open workspace modals so HardwareBannedView is never obscured
+      useDownloadStore.setState({
+        isNewModalOpen: false,
+        completeModalPayload: null,
+        isQueueGuideOpen: false,
+      });
 
       // 1. Immediately update reactive Zustand state synchronously
       set({
@@ -182,6 +214,7 @@ export const useHardwareBanStore = create<HardwareBanState>((set, get) => {
     },
 
     liftBanLive: async () => {
+      liveBanEpoch += 1;
       // 1. Restore exact pre-ban UI/menu/sidebar settings
       restorePreBanUiSnapshot();
 
@@ -206,6 +239,6 @@ export const useHardwareBanStore = create<HardwareBanState>((set, get) => {
   };
 });
 
-if (typeof window !== 'undefined') {
+if (typeof window !== 'undefined' && import.meta.env.DEV) {
   (window as any).__DOWNEX_BAN_STORE__ = useHardwareBanStore;
 }

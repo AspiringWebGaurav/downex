@@ -28,7 +28,7 @@ import {
   PinOff
 } from 'lucide-react';
 import { useDownloadStore } from '../stores/downloadStore';
-import { openFile, openFileFolder, showDownloadCompleteDialog, isTauri, injectMockDownloadItem, toggleTaskShutdown, openExternalUrl } from '../services/tauriService';
+import { openFileWith, openFileFolder, showDownloadCompleteDialog, isTauri, injectMockDownloadItem, toggleTaskShutdown, openExternalUrl } from '../services/tauriService';
 import { DeleteConfirmModal } from './DeleteConfirmModal';
 import { BatchDeleteConfirmModal } from './BatchDeleteConfirmModal';
 import { BatchPauseConfirmModal } from './BatchPauseConfirmModal';
@@ -87,11 +87,24 @@ export const DownloadTable: React.FC = () => {
   const [retryingFolderItem, setRetryingFolderItem] = useState<DownloadItem | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [pauseHintTaskId, setPauseHintTaskId] = useState<string | null>(null);
+  const pauseHintTimerRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (pauseHintTimerRef.current !== null) {
+        window.clearTimeout(pauseHintTimerRef.current);
+      }
+    };
+  }, []);
 
   const handleAttemptDeleteWhileDownloading = (taskId: string) => {
     setPauseHintTaskId(taskId);
-    setTimeout(() => {
+    if (pauseHintTimerRef.current !== null) {
+      window.clearTimeout(pauseHintTimerRef.current);
+    }
+    pauseHintTimerRef.current = window.setTimeout(() => {
       setPauseHintTaskId((current) => (current === taskId ? null : current));
+      pauseHintTimerRef.current = null;
     }, 2800);
   };
 
@@ -140,6 +153,28 @@ export const DownloadTable: React.FC = () => {
   const persistentBytesRef = useRef<Record<string, number>>({});
   const persistentPercentRef = useRef<Record<string, number>>({});
   const persistentBarWidthRef = useRef<Record<string, number>>({});
+
+  const itemIdsKey = items.map((i) => i.id).join(',');
+
+  // Prune per-item visual smoothing caches when download ID set changes so refs stay bounded
+  useEffect(() => {
+    const activeIds = new Set(itemIdsKey ? itemIdsKey.split(',') : []);
+    for (const cache of [
+      persistentSpeedRef.current,
+      smoothedSpeedRef.current,
+      persistentEtaRef.current,
+      smoothedEtaRef.current,
+      activeStartRef.current,
+      activeDurationRef.current,
+      persistentBytesRef.current,
+      persistentPercentRef.current,
+      persistentBarWidthRef.current,
+    ]) {
+      for (const k of Object.keys(cache)) {
+        if (!activeIds.has(k)) delete cache[k];
+      }
+    }
+  }, [itemIdsKey]);
 
   const toggleDetails = (id: string) => {
     setExpandedItemIds((prev) => ({ ...prev, [id]: !prev[id] }));
@@ -223,7 +258,7 @@ export const DownloadTable: React.FC = () => {
   const pausedCount = displayItems.filter((i) => i.status === 'paused').length;
   const queuedCount = displayItems.filter((i) => i.status === 'queued').length;
   const errorCount = displayItems.filter((i) => i.status === 'failed' || i.status === 'error').length;
-  const canQueueAny = items.some((i) => i.status !== 'completed' && i.status !== 'queued');
+  const canQueueAny = displayItems.some((i) => i.status !== 'completed' && i.status !== 'queued');
   const canUnqueueAny = isQueuesView ? displayItems.length > 0 : queuedCount > 0;
 
   const scrollToCard = (index: number) => {
@@ -1245,6 +1280,7 @@ export const DownloadTable: React.FC = () => {
                     </button>
                     <span
                       className="inline-flex cursor-not-allowed"
+                      title="Cannot delete while downloading. Pause the download first to delete."
                       onClick={() => handleAttemptDeleteWhileDownloading(item.id)}
                     >
                       <button
@@ -1252,10 +1288,7 @@ export const DownloadTable: React.FC = () => {
                         disabled={true}
                         aria-disabled="true"
                         data-testid={`delete-btn-${item.id}`}
-                        onClick={() => handleAttemptDeleteWhileDownloading(item.id)}
-                        onMouseDown={() => handleAttemptDeleteWhileDownloading(item.id)}
-                        onPointerDown={() => handleAttemptDeleteWhileDownloading(item.id)}
-                        className="h-6 px-2 border border-zinc-200 dark:border-zinc-800 bg-zinc-100/50 dark:bg-zinc-900/50 text-zinc-400 dark:text-zinc-600 font-mono-tabular text-[10.5px] uppercase tracking-wider cursor-not-allowed flex items-center gap-1 opacity-50"
+                        className="pointer-events-none h-6 px-2 border border-zinc-200 dark:border-zinc-800 bg-zinc-100/50 dark:bg-zinc-900/50 text-zinc-400 dark:text-zinc-600 font-mono-tabular text-[10.5px] uppercase tracking-wider flex items-center gap-1 opacity-50"
                         title="Cannot delete while downloading. Pause the download first to delete."
                       >
                         <Trash2 className="w-2.5 h-2.5" />
@@ -1605,7 +1638,7 @@ export const DownloadTable: React.FC = () => {
                 {item.status === 'completed' && (
                   <div className="flex items-center gap-1.5">
                     <button
-                      onClick={() => openFile(item.destination_path)}
+                      onClick={() => openFileWith(item.destination_path)}
                       className="h-6 px-2.5 border border-emerald-500/40 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 font-mono-tabular text-[10px] uppercase tracking-wider cursor-pointer flex items-center gap-1"
                       title="Open with default program"
                     >
@@ -1952,15 +1985,16 @@ export const DownloadTable: React.FC = () => {
           setBatchPauseCustomItems(null);
         }}
         onConfirm={() => {
+          const targetIds = (batchPauseCustomItems || displayItems).map((i) => i.id);
           if (batchPauseAction === 'pause') {
-            pauseAllDownloads();
+            pauseAllDownloads(targetIds);
           } else if (batchPauseAction === 'resume') {
-            resumeAllDownloads();
+            resumeAllDownloads(targetIds);
           } else if (batchPauseAction === 'queue') {
             if (batchPauseCustomItems && batchPauseCustomItems.length === 1) {
               queueDownload(batchPauseCustomItems[0].id);
             } else {
-              queueAllDownloads();
+              queueAllDownloads(targetIds);
             }
           } else if (batchPauseAction === 'start_queue') {
             startQueue();
@@ -1973,7 +2007,11 @@ export const DownloadTable: React.FC = () => {
       {/* Destination Folder Change & Retry Modal */}
       <FolderChangeModal
         isOpen={retryingFolderItem !== null}
-        initialPath={retryingFolderItem?.destination_path || ''}
+        initialPath={(() => {
+          const full = retryingFolderItem?.destination_path || '';
+          const idx = Math.max(full.lastIndexOf('\\'), full.lastIndexOf('/'));
+          return idx > 0 ? full.slice(0, idx) : full;
+        })()}
         onClose={() => setRetryingFolderItem(null)}
         onSelect={async (newFolder) => {
           if (retryingFolderItem) {

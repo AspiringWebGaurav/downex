@@ -17,6 +17,7 @@ use tokio_util::sync::CancellationToken;
 
 const MIN_SPLIT_THRESHOLD_BYTES: u64 = 2 * 1024 * 1024; // 2 MB minimum to split a chunk
 const MAX_TOTAL_SEGMENTS: usize = 256; // Dynamic work-stealing segment lifecycle capacity
+pub const UNKNOWN_RANGE_END: u64 = u64::MAX; // Sentinel for streams without Content-Length
 
 #[derive(Debug, Clone)]
 pub struct ActiveSegment {
@@ -31,7 +32,7 @@ impl ActiveSegment {
     pub fn expected_bytes(&self) -> u64 {
         let start = self.range_start;
         let end = self.range_end.load(Ordering::SeqCst);
-        if end >= start {
+        if end != UNKNOWN_RANGE_END && end >= start {
             end - start + 1
         } else {
             0
@@ -77,7 +78,7 @@ impl DownloadEnginePool {
         for s in segments {
             let d = s.downloaded.load(Ordering::SeqCst);
             let expected = s.expected_bytes();
-            total_downloaded += d.min(expected);
+            total_downloaded += if expected > 0 { d.min(expected) } else { d };
 
             if expected == 0 || d < expected {
                 all_segments_done = false;
@@ -168,31 +169,42 @@ impl DownloadEnginePool {
             }
             segments = Arc::new(RwLock::new(list));
         } else if let (Some(size), true) = (total_bytes, supports_ranges) {
-            // Partition segments in strict [start, end] non-overlapping byte intervals
-            let conn_count = max_connections.clamp(1, 32) as u64;
-            let chunk_size = size / conn_count;
-            let mut list = Vec::new();
-
-            for i in 0..conn_count {
-                let start = i * chunk_size;
-                let end = if i == conn_count - 1 {
-                    size - 1
-                } else {
-                    (i + 1) * chunk_size - 1
-                };
-
-                list.push(ActiveSegment {
-                    index: i as u32,
-                    range_start: start,
-                    range_end: Arc::new(AtomicU64::new(end)),
+            if size == 0 {
+                let list = vec![ActiveSegment {
+                    index: 0,
+                    range_start: 0,
+                    range_end: Arc::new(AtomicU64::new(UNKNOWN_RANGE_END)),
                     downloaded: Arc::new(AtomicU64::new(0)),
                     is_active: Arc::new(AtomicBool::new(false)),
-                });
+                }];
+                segments = Arc::new(RwLock::new(list));
+            } else {
+                // Partition segments in strict [start, end] non-overlapping byte intervals
+                let conn_count = (max_connections.clamp(1, 32) as u64).min(size).max(1);
+                let chunk_size = (size / conn_count).max(1);
+                let mut list = Vec::new();
+
+                for i in 0..conn_count {
+                    let start = i * chunk_size;
+                    let end = if i == conn_count - 1 {
+                        size - 1
+                    } else {
+                        ((i + 1) * chunk_size).saturating_sub(1)
+                    };
+
+                    list.push(ActiveSegment {
+                        index: i as u32,
+                        range_start: start,
+                        range_end: Arc::new(AtomicU64::new(end)),
+                        downloaded: Arc::new(AtomicU64::new(0)),
+                        is_active: Arc::new(AtomicBool::new(false)),
+                    });
+                }
+                segments = Arc::new(RwLock::new(list));
             }
-            segments = Arc::new(RwLock::new(list));
         } else {
             // Single-stream fallback
-            let initial_end = total_bytes.map(|b| if b > 0 { b - 1 } else { 0 }).unwrap_or(0);
+            let initial_end = total_bytes.map(|b| if b > 0 { b - 1 } else { UNKNOWN_RANGE_END }).unwrap_or(UNKNOWN_RANGE_END);
             let list = vec![ActiveSegment {
                 index: 0,
                 range_start: 0,
@@ -210,6 +222,8 @@ impl DownloadEnginePool {
         // or all segments are complete. Automatically aborts all connections without delay.
         let completion_token = CancellationToken::new();
         let fallback_single_stream = Arc::new(AtomicBool::new(false));
+        let fatal_error_msg: Arc<parking_lot::Mutex<Option<String>>> = Arc::new(parking_lot::Mutex::new(None));
+        let stream_completed_unknown = Arc::new(AtomicBool::new(false));
 
         // Telemetry & Completion Coordinator Loop
         let p_task_id = task_id.clone();
@@ -243,8 +257,58 @@ impl DownloadEnginePool {
                     _ = p_cancel.cancelled() => break,
                     _ = p_complete.cancelled() => break,
                     _ = tokio::time::sleep(Duration::from_millis(150)) => {
-                        let segs = p_segments.read().await;
-                        let (current_total, is_all_complete) = Self::evaluate_progress(&segs, p_total_bytes);
+                        let should_checkpoint = last_checkpoint_time.elapsed() >= Duration::from_secs(2);
+                        if should_checkpoint {
+                            last_checkpoint_time = Instant::now();
+                        }
+
+                        let (current_total, is_all_complete, snapshots, db_records) = {
+                            let segs = p_segments.read().await;
+                            let (curr_total, is_done) = Self::evaluate_progress(&segs, p_total_bytes);
+
+                            let mut snaps = Vec::with_capacity(segs.len());
+                            for s in segs.iter() {
+                                let d = s.downloaded.load(Ordering::SeqCst);
+                                let end = s.range_end.load(Ordering::SeqCst);
+                                let seg_expected = if end != UNKNOWN_RANGE_END && end >= s.range_start {
+                                    end - s.range_start + 1
+                                } else {
+                                    0
+                                };
+                                snaps.push(SegmentSnapshot {
+                                    index: s.index,
+                                    start: s.range_start,
+                                    end,
+                                    downloaded: if seg_expected > 0 { d.min(seg_expected) } else { d },
+                                    speed_bytes_sec: 0,
+                                    is_active: s.is_active.load(Ordering::SeqCst),
+                                });
+                            }
+
+                            let recs = if should_checkpoint {
+                                let mut r = Vec::with_capacity(segs.len());
+                                for s in segs.iter() {
+                                    r.push(SegmentRecord {
+                                        id: None,
+                                        download_id: p_task_id.clone(),
+                                        segment_index: s.index,
+                                        range_start: s.range_start,
+                                        range_end: s.range_end.load(Ordering::SeqCst),
+                                        downloaded: s.downloaded.load(Ordering::SeqCst),
+                                        status: if s.is_active.load(Ordering::SeqCst) {
+                                            "downloading".to_string()
+                                        } else {
+                                            "idle".to_string()
+                                        },
+                                    });
+                                }
+                                Some(r)
+                            } else {
+                                None
+                            };
+
+                            (curr_total, is_done, snaps, recs)
+                        }; // Read lock dropped cleanly BEFORE DB I/O or channel send!
 
                         // Monotonic high-water mark: reported progress must never flicker backwards
                         let mut cur_max = p_max_downloaded.load(Ordering::SeqCst);
@@ -262,40 +326,7 @@ impl DownloadEnginePool {
                             break;
                         }
 
-                        let mut snapshots = Vec::new();
-                        for s in segs.iter() {
-                            let d = s.downloaded.load(Ordering::SeqCst);
-                            let end = s.range_end.load(Ordering::SeqCst);
-                            snapshots.push(SegmentSnapshot {
-                                index: s.index,
-                                start: s.range_start,
-                                end,
-                                downloaded: d.min(if end >= s.range_start { end - s.range_start + 1 } else { d }),
-                                speed_bytes_sec: 0,
-                                is_active: s.is_active.load(Ordering::SeqCst),
-                            });
-                        }
-
-                        // Periodic 2-second SQLite checkpoint
-                        let should_checkpoint = last_checkpoint_time.elapsed() >= Duration::from_secs(2);
-                        if should_checkpoint {
-                            last_checkpoint_time = Instant::now();
-                            let mut records = Vec::new();
-                            for s in segs.iter() {
-                                records.push(SegmentRecord {
-                                    id: None,
-                                    download_id: p_task_id.clone(),
-                                    segment_index: s.index,
-                                    range_start: s.range_start,
-                                    range_end: s.range_end.load(Ordering::SeqCst),
-                                    downloaded: s.downloaded.load(Ordering::SeqCst),
-                                    status: if s.is_active.load(Ordering::SeqCst) {
-                                        "downloading".to_string()
-                                    } else {
-                                        "idle".to_string()
-                                    },
-                                });
-                            }
+                        if let Some(records) = db_records {
                             let _ = p_db.save_segments(&p_task_id, &records);
                         }
 
@@ -401,6 +432,18 @@ impl DownloadEnginePool {
         } else {
             1
         };
+
+        // Pre-claim initial segments atomically before spawning staggered workers so worker 0
+        // cannot steal a staggered worker's own initial segment during startup delay.
+        if worker_count > 0 {
+            let segs = segments.read().await;
+            for idx in 0..worker_count {
+                if let Some(s) = segs.get(idx) {
+                    s.is_active.store(true, Ordering::SeqCst);
+                }
+            }
+        }
+
         let mut worker_handles = Vec::new();
 
         for idx in 0..worker_count {
@@ -423,11 +466,17 @@ impl DownloadEnginePool {
             let w_limiter = limiter.clone();
             let w_total_bytes = total_bytes;
             let w_db = self.db.clone();
+            let w_fatal_err = fatal_error_msg.clone();
+            let w_unknown_eof = stream_completed_unknown.clone();
 
             let handle = tauri::async_runtime::spawn(async move {
-                // Stagger initial connections (20ms per worker) to prevent network socket flood
+                // Stagger initial connections (20ms per worker), waking immediately if paused or deleted
                 if idx > 0 {
-                    tokio::time::sleep(Duration::from_millis((idx as u64) * 20)).await;
+                    tokio::select! {
+                        _ = w_cancel.cancelled() => return,
+                        _ = w_complete.cancelled() => return,
+                        _ = tokio::time::sleep(Duration::from_millis((idx as u64) * 20)) => {}
+                    }
                 }
                 Self::worker_loop(
                     initial_seg_idx,
@@ -444,6 +493,8 @@ impl DownloadEnginePool {
                     w_total_bytes,
                     w_cancel,
                     w_complete,
+                    w_fatal_err,
+                    w_unknown_eof,
                 )
                 .await
             });
@@ -475,31 +526,55 @@ impl DownloadEnginePool {
         completion_token.cancel();
         telemetry_handle.abort();
 
-        // Flush all in-memory buffers and OS page cache to physical disk
-        let _ = writer.sync();
+        if cancel_token.is_cancelled() {
+            // Skip slow FlushFileBuffers & SQLite writes if task record was already deleted (stop & delete)
+            let existing_record = self.db.get_download(&task_id).ok().flatten();
+            let task_exists = existing_record.is_some();
+            if task_exists {
+                let w_sync = writer.clone();
+                let _ = tauri::async_runtime::spawn_blocking(move || w_sync.sync()).await;
+                self.persist_segments_to_db(&task_id, &segments).await;
+            }
+
+            // Close OS file handles BEFORE firing completion signals or emitting final status
+            drop(writer);
+
+            if let Some(rec) = existing_record {
+                let (raw_downloaded, _) = {
+                    let segs = segments.read().await;
+                    Self::evaluate_progress(&segs, total_bytes)
+                };
+                let downloaded_bytes = max_downloaded.load(Ordering::SeqCst).max(raw_downloaded);
+                // Preserve 'queued' or completed/error state if transitioned externally
+                let st = rec.status;
+                if st != "queued" && st != "completed" && st != "error" && st != "failed" {
+                    let _ = self.db.update_download_status(&task_id, "paused", 0, None);
+                }
+                let reported_status = if st == "queued" {
+                    "queued".to_string()
+                } else {
+                    "paused".to_string()
+                };
+                let _ = progress_tx.send(DownloadProgressEvent {
+                    task_id: task_id.clone(),
+                    status: reported_status,
+                    downloaded_bytes: total_bytes.map(|t| downloaded_bytes.min(t)).unwrap_or(downloaded_bytes),
+                    total_bytes,
+                    speed_bytes_sec: 0,
+                    eta_seconds: None,
+                    segments: Vec::new(),
+                    supports_ranges: None,
+                }).await;
+            }
+            return Ok(());
+        }
+
+        // Flush all in-memory buffers and OS page cache to physical disk off the async runtime
+        let w_sync = writer.clone();
+        let _ = tauri::async_runtime::spawn_blocking(move || w_sync.sync()).await;
 
         // Persist final segment state to SQLite
         self.persist_segments_to_db(&task_id, &segments).await;
-
-        if cancel_token.is_cancelled() {
-            let (raw_downloaded, _) = {
-                let segs = segments.read().await;
-                Self::evaluate_progress(&segs, total_bytes)
-            };
-            let downloaded_bytes = max_downloaded.load(Ordering::SeqCst).max(raw_downloaded);
-            let _ = self.db.update_download_status(&task_id, "paused", 0, None);
-            let _ = progress_tx.send(DownloadProgressEvent {
-                task_id: task_id.clone(),
-                status: "paused".to_string(),
-                downloaded_bytes: total_bytes.map(|t| downloaded_bytes.min(t)).unwrap_or(downloaded_bytes),
-                total_bytes,
-                speed_bytes_sec: 0,
-                eta_seconds: None,
-                segments: Vec::new(),
-                supports_ranges: None,
-            }).await;
-            return Ok(());
-        }
 
         // Complete Verification Phase (REA / IDM Specification)
         let (raw_verified, is_done) = {
@@ -508,18 +583,33 @@ impl DownloadEnginePool {
         };
         let verified_downloaded = max_downloaded.load(Ordering::SeqCst).max(raw_verified);
 
-        if !is_done && total_bytes.is_some() {
-            let expected = total_bytes.unwrap();
-            let remaining = expected.saturating_sub(verified_downloaded);
-            if remaining > 4096 {
+        let fatal_opt = { fatal_error_msg.lock().take() };
+        if let Some(fatal_msg) = fatal_opt {
+            let _ = self.db.update_download_status(&task_id, "failed", 0, Some(&fatal_msg));
+            let _ = progress_tx.send(DownloadProgressEvent {
+                task_id: task_id.clone(),
+                status: "failed".to_string(),
+                downloaded_bytes: total_bytes.map(|t| verified_downloaded.min(t)).unwrap_or(verified_downloaded),
+                total_bytes,
+                speed_bytes_sec: 0,
+                eta_seconds: None,
+                segments: Vec::new(),
+                supports_ranges: None,
+            }).await;
+            return Err(fatal_msg.into());
+        }
+
+        if let Some(expected) = total_bytes {
+            if expected > 0 && !is_done && verified_downloaded < expected {
+                let err_msg = "Download interrupted before receiving all expected bytes";
                 eprintln!(
-                    "[Downex Completion] Incomplete download detected: {} / {} bytes. Preserving '{}' and marking paused for resume.",
+                    "[Downex Completion] Incomplete download detected: {} / {} bytes. Preserving '{}' and marking failed.",
                     verified_downloaded, expected, staging_path_buf.display()
                 );
-                let _ = self.db.update_download_status(&task_id, "paused", 0, None);
+                let _ = self.db.update_download_status(&task_id, "failed", 0, Some(err_msg));
                 let _ = progress_tx.send(DownloadProgressEvent {
                     task_id: task_id.clone(),
-                    status: "paused".to_string(),
+                    status: "failed".to_string(),
                     downloaded_bytes: verified_downloaded,
                     total_bytes,
                     speed_bytes_sec: 0,
@@ -527,8 +617,26 @@ impl DownloadEnginePool {
                     segments: Vec::new(),
                     supports_ranges: None,
                 }).await;
-                return Err("Download interrupted before receiving all expected bytes".into());
+                return Err(err_msg.into());
             }
+        } else if verified_downloaded == 0 || !stream_completed_unknown.load(Ordering::SeqCst) {
+            let err_msg = if verified_downloaded == 0 {
+                "Download ended without receiving any bytes"
+            } else {
+                "Stream closed prematurely before end of file"
+            };
+            let _ = self.db.update_download_status(&task_id, "failed", 0, Some(err_msg));
+            let _ = progress_tx.send(DownloadProgressEvent {
+                task_id: task_id.clone(),
+                status: "failed".to_string(),
+                downloaded_bytes: verified_downloaded,
+                total_bytes: None,
+                speed_bytes_sec: 0,
+                eta_seconds: None,
+                segments: Vec::new(),
+                supports_ranges: None,
+            }).await;
+            return Err(err_msg.into());
         }
 
         // Physical File Length & OS Media Sync Enforcement
@@ -597,6 +705,7 @@ impl DownloadEnginePool {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn worker_loop(
         mut segment_idx: u32,
         task_id: String,
@@ -612,11 +721,16 @@ impl DownloadEnginePool {
         total_bytes: Option<u64>,
         cancel_token: CancellationToken,
         completion_token: CancellationToken,
+        fatal_error_msg: Arc<parking_lot::Mutex<Option<String>>>,
+        stream_completed_unknown: Arc<AtomicBool>,
     ) {
+        let mut preclaimed = segment_idx != u32::MAX;
+
         // Unassigned worker entry: immediately seek work or steal from active segment
         if segment_idx == u32::MAX {
             if let Some(next_idx) = Self::find_next_work(&segments, supports_ranges, &fallback_single_stream).await {
                 segment_idx = next_idx;
+                preclaimed = true;
             } else {
                 let mut found = None;
                 for _ in 0..5 {
@@ -633,11 +747,24 @@ impl DownloadEnginePool {
                 }
                 if let Some(next_idx) = found {
                     segment_idx = next_idx;
+                    preclaimed = true;
                 } else {
                     return;
                 }
             }
         }
+
+        let record_fatal = |msg: String| {
+            let mut guard = fatal_error_msg.lock();
+            if guard.is_none() {
+                *guard = Some(msg.clone());
+            }
+            let _ = db.update_download_status(&task_id, "failed", 0, Some(&msg));
+            completion_token.cancel();
+        };
+
+        let mut consecutive_failures: u32 = 0;
+        const MAX_WORKER_FAILURES: u32 = 12;
 
         loop {
             if cancel_token.is_cancelled() || completion_token.is_cancelled() {
@@ -660,8 +787,8 @@ impl DownloadEnginePool {
             };
 
             let end = end_atomic.load(Ordering::SeqCst);
-            let downloaded_so_far = downloaded_atomic.load(Ordering::SeqCst);
-            let expected_segment_bytes = if end >= start { end - start + 1 } else { 0 };
+            let mut downloaded_so_far = downloaded_atomic.load(Ordering::SeqCst);
+            let expected_segment_bytes = if end != UNKNOWN_RANGE_END && end >= start { end - start + 1 } else { 0 };
 
             // Check if this segment has already received its full byte allocation
             if expected_segment_bytes > 0 && downloaded_so_far >= expected_segment_bytes {
@@ -670,6 +797,7 @@ impl DownloadEnginePool {
                 // Look for another incomplete segment or steal work
                 if let Some(next_idx) = Self::find_next_work(&segments, supports_ranges, &fallback_single_stream).await {
                     segment_idx = next_idx;
+                    preclaimed = true;
                     continue;
                 }
 
@@ -699,6 +827,7 @@ impl DownloadEnginePool {
 
                 if let Some(next_idx) = found {
                     segment_idx = next_idx;
+                    preclaimed = true;
                     continue;
                 }
                 break;
@@ -710,7 +839,26 @@ impl DownloadEnginePool {
                 break;
             }
 
-            is_active_atomic.store(true, Ordering::SeqCst);
+            if preclaimed {
+                preclaimed = false;
+            } else if is_active_atomic
+                .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+                .is_err()
+            {
+                if let Some(next_idx) = Self::find_next_work(&segments, supports_ranges, &fallback_single_stream).await {
+                    segment_idx = next_idx;
+                    preclaimed = true;
+                    continue;
+                }
+                break;
+            }
+
+            let sending_range = supports_ranges && end != UNKNOWN_RANGE_END && !fallback_single_stream.load(Ordering::SeqCst);
+            if !sending_range && downloaded_so_far > 0 {
+                // Reconnecting an un-ranged stream always restarts from byte 0; reset progress to avoid offset corruption.
+                downloaded_atomic.store(0, Ordering::SeqCst);
+                downloaded_so_far = 0;
+            }
             let current_offset = start + downloaded_so_far;
 
             // Build HTTP Request
@@ -732,7 +880,7 @@ impl DownloadEnginePool {
                 req = req.headers(header_map);
             }
 
-            if supports_ranges && end > 0 && !fallback_single_stream.load(Ordering::SeqCst) {
+            if sending_range {
                 req = req.header(RANGE, format!("bytes={}-{}", current_offset, end));
             }
 
@@ -748,8 +896,13 @@ impl DownloadEnginePool {
                 send_res = req.send() => match send_res {
                     Ok(r) => r,
                     Err(e) => {
-                        eprintln!("[Downex Worker {}] Connect error: {}", segment_idx, e);
+                        consecutive_failures += 1;
+                        eprintln!("[Downex Worker {}] Connect error ({}/{}): {}", segment_idx, consecutive_failures, MAX_WORKER_FAILURES, e);
                         is_active_atomic.store(false, Ordering::SeqCst);
+                        if consecutive_failures >= MAX_WORKER_FAILURES {
+                            record_fatal(format!("Connection failed after retries: {}", e));
+                            return;
+                        }
                         tokio::select! {
                             _ = cancel_token.cancelled() => break,
                             _ = completion_token.cancelled() => break,
@@ -768,7 +921,7 @@ impl DownloadEnginePool {
                 let _ = db.update_download_supports_ranges(&task_id, false);
                 if segment_idx == 0 {
                     eprintln!("[Downex Worker 0] Server returned HTTP 200 OK (Range ignored). Switching to single-stream mode.");
-                    let total_end = total_bytes.map(|b| if b > 0 { b - 1 } else { 0 }).unwrap_or(0);
+                    let total_end = total_bytes.map(|b| if b > 0 { b - 1 } else { UNKNOWN_RANGE_END }).unwrap_or(UNKNOWN_RANGE_END);
                     // Reset worker 0 state cleanly to byte 0
                     downloaded_atomic.store(0, Ordering::SeqCst);
                     {
@@ -780,24 +933,76 @@ impl DownloadEnginePool {
                         }
                     }
                 } else {
-                    // Non-zero worker received HTTP 200 OK: Server does not support ranges!
-                    eprintln!("[Downex Worker {}] Server returned HTTP 200 OK to non-zero worker. Aborting worker.", segment_idx);
-                    is_active_atomic.store(false, Ordering::SeqCst);
-                    return;
+                    let seg0_taken_over = {
+                        let mut segs = segments.write().await;
+                        let seg0_active = segs
+                            .iter()
+                            .any(|s| s.index == 0 && s.is_active.load(Ordering::SeqCst));
+                        if !seg0_active {
+                            is_active_atomic.store(false, Ordering::SeqCst);
+                            let total_end = total_bytes
+                                .map(|b| if b > 0 { b - 1 } else { UNKNOWN_RANGE_END })
+                                .unwrap_or(UNKNOWN_RANGE_END);
+                            segs.retain(|s| s.index == 0);
+                            if let Some(s) = segs.first_mut() {
+                                s.range_start = 0;
+                                s.range_end.store(total_end, Ordering::SeqCst);
+                                s.downloaded.store(0, Ordering::SeqCst);
+                                s.is_active.store(true, Ordering::SeqCst);
+                            }
+                            true
+                        } else {
+                            false
+                        }
+                    };
+                    if seg0_taken_over {
+                        eprintln!(
+                            "[Downex Worker {}] Server returned HTTP 200 OK while Worker 0 was idle. Taking over as single-stream Worker 0.",
+                            segment_idx
+                        );
+                        segment_idx = 0;
+                        preclaimed = true;
+                        continue;
+                    } else {
+                        // Non-zero worker received HTTP 200 OK while Worker 0 is active: abort duplicate stream.
+                        eprintln!("[Downex Worker {}] Server returned HTTP 200 OK to non-zero worker. Aborting worker.", segment_idx);
+                        is_active_atomic.store(false, Ordering::SeqCst);
+                        return;
+                    }
                 }
             } else if status == reqwest::StatusCode::RANGE_NOT_SATISFIABLE {
-                // HTTP 416: Requested range is at or past segment end. Mark this segment complete!
-                let expected = if end >= start { end - start + 1 } else { 0 };
-                downloaded_atomic.store(expected, Ordering::SeqCst);
-                is_active_atomic.store(false, Ordering::SeqCst);
-                if let Some(next_idx) = Self::find_next_work(&segments, supports_ranges, &fallback_single_stream).await {
-                    segment_idx = next_idx;
-                    continue;
+                let expected = if end != UNKNOWN_RANGE_END && end >= start { end - start + 1 } else { 0 };
+                let current_d = downloaded_atomic.load(Ordering::SeqCst);
+                if expected > 0 && current_d >= expected {
+                    is_active_atomic.store(false, Ordering::SeqCst);
+                    if let Some(next_idx) = Self::find_next_work(&segments, supports_ranges, &fallback_single_stream).await {
+                        segment_idx = next_idx;
+                        preclaimed = true;
+                        continue;
+                    }
+                    break;
                 }
-                break;
-            } else if status == reqwest::StatusCode::TOO_MANY_REQUESTS || status == reqwest::StatusCode::SERVICE_UNAVAILABLE {
-                eprintln!("[Downex Worker {}] Server rate limit / throttle (HTTP {}). Backing off for 2s...", segment_idx, status);
+                consecutive_failures += 1;
+                eprintln!("[Downex Worker {}] Unexpected HTTP 416 at offset {} ({}/{})", segment_idx, start + current_d, consecutive_failures, MAX_WORKER_FAILURES);
                 is_active_atomic.store(false, Ordering::SeqCst);
+                if consecutive_failures >= MAX_WORKER_FAILURES {
+                    record_fatal("Server rejected byte range (HTTP 416)".to_string());
+                    return;
+                }
+                tokio::select! {
+                    _ = cancel_token.cancelled() => break,
+                    _ = completion_token.cancelled() => break,
+                    _ = tokio::time::sleep(Duration::from_millis(500)) => {}
+                }
+                continue;
+            } else if status == reqwest::StatusCode::TOO_MANY_REQUESTS || status == reqwest::StatusCode::SERVICE_UNAVAILABLE {
+                consecutive_failures += 1;
+                eprintln!("[Downex Worker {}] Server rate limit / throttle (HTTP {}, {}/{}). Backing off for 2s...", segment_idx, status, consecutive_failures, MAX_WORKER_FAILURES);
+                is_active_atomic.store(false, Ordering::SeqCst);
+                if consecutive_failures >= MAX_WORKER_FAILURES {
+                    record_fatal(format!("Server throttled requests (HTTP {})", status.as_u16()));
+                    return;
+                }
                 tokio::select! {
                     _ = cancel_token.cancelled() => break,
                     _ = completion_token.cancelled() => break,
@@ -811,13 +1016,17 @@ impl DownloadEnginePool {
             {
                 let err_msg = format!("Server returned HTTP {} ({})", status.as_u16(), status.canonical_reason().unwrap_or("Error"));
                 eprintln!("[Downex Worker {}] Fatal HTTP error: {}", segment_idx, err_msg);
-                let _ = db.update_download_status(&task_id, "error", 0, Some(&err_msg));
                 is_active_atomic.store(false, Ordering::SeqCst);
-                completion_token.cancel();
+                record_fatal(err_msg);
                 return;
             } else if !status.is_success() && status != reqwest::StatusCode::PARTIAL_CONTENT {
-                eprintln!("[Downex Worker {}] Server HTTP {}: retrying in 1s...", segment_idx, status);
+                consecutive_failures += 1;
+                eprintln!("[Downex Worker {}] Server HTTP {} ({}/{}): retrying in 1s...", segment_idx, status, consecutive_failures, MAX_WORKER_FAILURES);
                 is_active_atomic.store(false, Ordering::SeqCst);
+                if consecutive_failures >= MAX_WORKER_FAILURES {
+                    record_fatal(format!("Server returned HTTP {}", status.as_u16()));
+                    return;
+                }
                 tokio::select! {
                     _ = cancel_token.cancelled() => break,
                     _ = completion_token.cancelled() => break,
@@ -832,6 +1041,9 @@ impl DownloadEnginePool {
                 start
             };
             let mut stream = res.bytes_stream();
+            let mut stream_clean_eof = false;
+            let mut stream_bytes_written: u64 = 0;
+            let mut stream_io_error: Option<String> = None;
 
             loop {
                 let chunk_res = tokio::select! {
@@ -846,7 +1058,10 @@ impl DownloadEnginePool {
                     opt = tokio::time::timeout(Duration::from_millis(4000), stream.next()) => {
                         match opt {
                             Ok(Some(item)) => item,
-                            Ok(None) => break, // Server closed stream (clean EOF)
+                            Ok(None) => {
+                                stream_clean_eof = true;
+                                break; // Server closed stream (clean EOF)
+                            }
                             Err(_timeout) => {
                                 // Socket stalled for 4s with no incoming bytes (straggler / dead TCP route)
                                 eprintln!("[Downex Worker {}] Straggler detected (4s socket stall). Recycling connection...", segment_idx);
@@ -865,7 +1080,11 @@ impl DownloadEnginePool {
                     Ok(chunk) => {
                         let current_d = downloaded_atomic.load(Ordering::SeqCst);
                         let target_end = end_atomic.load(Ordering::SeqCst);
-                        let expected = if target_end >= effective_start { target_end - effective_start + 1 } else { 0 };
+                        let expected = if target_end != UNKNOWN_RANGE_END && target_end >= effective_start {
+                            target_end - effective_start + 1
+                        } else {
+                            0
+                        };
 
                         if expected > 0 && current_d >= expected {
                             // Target segment byte boundary reached! Terminate connection stream.
@@ -884,10 +1103,16 @@ impl DownloadEnginePool {
                             let write_offset = effective_start + current_d;
                             if let Err(e) = writer.write_at(write_offset, &chunk[..write_len as usize]) {
                                 eprintln!("[Downex Writer] Positional write error at {}: {}", write_offset, e);
+                                stream_io_error = Some(format!("Disk write error: {}", e));
                                 break;
                             }
                             downloaded_atomic.fetch_add(write_len, Ordering::SeqCst);
-                            limiter.throttle(write_len as usize).await;
+                            stream_bytes_written += write_len;
+                            consecutive_failures = 0;
+                            if !limiter.throttle_cancellable(write_len as usize, &cancel_token, &completion_token).await {
+                                is_active_atomic.store(false, Ordering::SeqCst);
+                                return;
+                            }
                         }
 
                         // Check if boundary was reached with this chunk
@@ -898,6 +1123,7 @@ impl DownloadEnginePool {
                     }
                     Err(e) => {
                         eprintln!("[Downex Stream {}] Read error: {}", segment_idx, e);
+                        stream_io_error = Some(format!("Stream read error: {}", e));
                         break;
                     }
                 }
@@ -905,19 +1131,44 @@ impl DownloadEnginePool {
 
             is_active_atomic.store(false, Ordering::SeqCst);
 
-            // Check if global download completed with this stream's bytes
+            // Check if global download completed with this stream's bytes or clean EOF on unknown-size stream
             {
                 let segs = segments.read().await;
                 let (curr_total, is_done) = Self::evaluate_progress(&segs, total_bytes);
-                if is_done || (total_bytes.is_none() && curr_total > 0 && fallback_single_stream.load(Ordering::SeqCst)) {
+                if is_done || (stream_clean_eof && stream_io_error.is_none() && total_bytes.is_none() && curr_total > 0) {
+                    if stream_clean_eof && total_bytes.is_none() {
+                        stream_completed_unknown.store(true, Ordering::SeqCst);
+                    }
                     completion_token.cancel();
                     break;
+                }
+            }
+
+            // Track consecutive zero-progress or I/O failures so disk-full/broken streams never spin infinitely
+            if stream_io_error.is_some() || (stream_bytes_written == 0 && !stream_clean_eof) {
+                consecutive_failures += 1;
+                if consecutive_failures >= MAX_WORKER_FAILURES {
+                    record_fatal(stream_io_error.unwrap_or_else(|| "Download stalled without progress after retries".to_string()));
+                    return;
+                }
+                tokio::select! {
+                    _ = cancel_token.cancelled() => break,
+                    _ = completion_token.cancelled() => break,
+                    _ = tokio::time::sleep(Duration::from_millis(500)) => {}
+                }
+            } else if stream_clean_eof && stream_bytes_written == 0 {
+                // Clean 0-byte EOF mid-segment (e.g., server closed early) counts toward retries
+                consecutive_failures += 1;
+                if consecutive_failures >= MAX_WORKER_FAILURES {
+                    record_fatal("Server closed connection repeatedly without delivering requested byte range".to_string());
+                    return;
                 }
             }
 
             // Find next work: either incomplete idle segment or split active segment
             if let Some(next_idx) = Self::find_next_work(&segments, supports_ranges, &fallback_single_stream).await {
                 segment_idx = next_idx;
+                preclaimed = true;
                 continue;
             }
 
@@ -925,8 +1176,11 @@ impl DownloadEnginePool {
             {
                 let current_d = downloaded_atomic.load(Ordering::SeqCst);
                 let current_end = end_atomic.load(Ordering::SeqCst);
-                let exp = if current_end >= start { current_end - start + 1 } else { 0 };
-                if exp > 0 && current_d < exp {
+                let exp = if current_end != UNKNOWN_RANGE_END && current_end >= start { current_end - start + 1 } else { 0 };
+                let unknown_incomplete = total_bytes.is_none()
+                    && !stream_clean_eof
+                    && !stream_completed_unknown.load(Ordering::SeqCst);
+                if (exp > 0 && current_d < exp) || unknown_incomplete {
                     // Reconnect this same segment from current offset with fresh TCP connection
                     continue;
                 }
@@ -949,6 +1203,7 @@ impl DownloadEnginePool {
 
             if let Some(next_idx) = found {
                 segment_idx = next_idx;
+                preclaimed = true;
                 continue;
             }
 

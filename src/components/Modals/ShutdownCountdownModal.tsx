@@ -21,20 +21,23 @@ export const ShutdownCountdownModal: React.FC = () => {
       setCountdownData(null);
     });
 
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && countdownData) {
-        handleCancel();
-      }
-    };
-
-    window.addEventListener('keydown', handleKeyDown);
-
     return () => {
       unlistenCountdown();
       unlistenCancelled();
-      window.removeEventListener('keydown', handleKeyDown);
     };
-  }, [countdownData]);
+  }, []);
+
+  const hasCountdown = Boolean(countdownData);
+  useEffect(() => {
+    if (!hasCountdown) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        handleCancel();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [hasCountdown]);
 
   const handleCancel = async () => {
     await cancelShutdownCountdown();

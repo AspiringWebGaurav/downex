@@ -23,14 +23,18 @@ export const BatchDeleteConfirmModal: React.FC<BatchDeleteConfirmModalProps> = (
   onClose,
   onConfirm,
 }) => {
-  // Always disabled (safe mode) by default on every open — zero stale persistence
-  const [deleteFromDisk, setDeleteFromDisk] = useState<boolean>(false);
+  const completedCount = items.filter((i) => i.status === 'completed').length;
+  const incompleteCount = items.length - completedCount;
+  const hasOnlyIncomplete = items.length > 0 && completedCount === 0;
+
+  // Safe mode protects completed files by default; incomplete-only batches default to cleaning partial staging files
+  const [deleteFromDisk, setDeleteFromDisk] = useState<boolean>(hasOnlyIncomplete);
 
   useEffect(() => {
     if (isOpen) {
-      setDeleteFromDisk(false);
+      setDeleteFromDisk(items.length > 0 && items.every((i) => i.status !== 'completed'));
     }
-  }, [isOpen]);
+  }, [isOpen, items]);
 
   // Handle ESC key to dismiss modal
   useEffect(() => {
@@ -226,14 +230,18 @@ export const BatchDeleteConfirmModal: React.FC<BatchDeleteConfirmModalProps> = (
               <div className="px-2 py-1 bg-rose-500/10 dark:bg-rose-950/40 border border-rose-500/30 flex items-center gap-1.5 text-rose-800 dark:text-rose-300">
                 <AlertTriangle className="w-3 h-3 text-rose-600 dark:text-rose-400 shrink-0" />
                 <span className="text-[10px] leading-tight font-mono-tabular font-medium">
-                  Permanent wipe: All {items.length} downloaded/partial files on your computer will be deleted.
+                  Permanent wipe: All {items.length} downloaded/partial files on your computer will be deleted cleanly.
                 </span>
               </div>
             ) : (
               <div className="px-2 py-1 bg-emerald-500/[0.08] dark:bg-emerald-950/30 border border-emerald-500/25 flex items-center gap-1.5 text-emerald-800 dark:text-emerald-300">
                 <ShieldCheck className="w-3 h-3 text-emerald-600 dark:text-emerald-400 shrink-0" />
                 <span className="text-[10px] leading-tight font-mono-tabular font-medium">
-                  Safe mode: Files stay safely on your computer. Only task records are removed from Downex.
+                  {incompleteCount > 0 && completedCount > 0
+                    ? `Safe mode keeps ${completedCount} completed file(s) on disk. ${incompleteCount} incomplete .downex staging file(s) will still be cleaned.`
+                    : incompleteCount > 0
+                    ? 'Orphan guard: Incomplete unconfirmed .downex staging files will be cleaned up automatically on removal.'
+                    : 'Safe mode: Files stay safely on your computer. Only task records are removed from Downex.'}
                 </span>
               </div>
             )}

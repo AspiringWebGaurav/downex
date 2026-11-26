@@ -85,10 +85,11 @@ export async function probeUrlDetailed(
       },
     };
   }
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
   try {
-    const timeoutPromise = new Promise<never>((_, reject) =>
-      setTimeout(() => reject(new Error('Probe timed out')), 5000)
-    );
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      timeoutId = setTimeout(() => reject(new Error('Probe timed out')), 5000);
+    });
     const invokePromise = invoke<ProbeResult>('cmd_probe_url', { url, headers });
     const result = await Promise.race([invokePromise, timeoutPromise]);
     if (result && !result.total_bytes && extractedSize) {
@@ -110,6 +111,8 @@ export async function probeUrlDetailed(
       };
     }
     return { success: false, error: String(e || 'Server connection failed') };
+  } finally {
+    if (timeoutId !== undefined) clearTimeout(timeoutId);
   }
 }
 
@@ -497,23 +500,39 @@ export async function fetchUpdateManifest(url: string): Promise<string> {
         return JSON.stringify(manifestObj);
       }
       return JSON.stringify({ no_release: true });
-    } catch {}
+    } catch (checkErr) {
+      if (isTauri) {
+        throw nativeErr instanceof Error ? nativeErr : new Error(String(checkErr || nativeErr));
+      }
+    }
 
-    // Fallback for browser preview / mock mode: try Vite proxy first
+    // Fallback for browser preview / mock mode: try Vite proxy first (with timeout)
     try {
       const fetchUrl = url.startsWith('https://gphost.eu.cc')
         ? url.replace('https://gphost.eu.cc', '')
         : url;
-      const res = await fetch(fetchUrl);
-      if (res.ok) return await res.text();
-      if (res.status === 404 || res.status === 204) return JSON.stringify({ no_release: true });
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 8000);
+      try {
+        const res = await fetch(fetchUrl, { signal: controller.signal });
+        if (res.ok) return await res.text();
+        if (res.status === 404 || res.status === 204) return JSON.stringify({ no_release: true });
+      } finally {
+        clearTimeout(timeoutId);
+      }
     } catch {}
 
-    // Secondary fallback: direct URL
+    // Secondary fallback: direct URL (with timeout)
     try {
-      const res = await fetch(url);
-      if (res.ok) return await res.text();
-      if (res.status === 404 || res.status === 204) return JSON.stringify({ no_release: true });
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 8000);
+      try {
+        const res = await fetch(url, { signal: controller.signal });
+        if (res.ok) return await res.text();
+        if (res.status === 404 || res.status === 204) return JSON.stringify({ no_release: true });
+      } finally {
+        clearTimeout(timeoutId);
+      }
     } catch {}
 
     return JSON.stringify({ no_release: true });
@@ -676,14 +695,25 @@ export function onOtaDownloadProgress(
   callback: (progress: { downloaded: number; total: number; percentage: number }) => void
 ): () => void {
   if (!isTauri) return () => {};
+  let isCancelled = false;
   let unlistenFn: (() => void) | undefined;
   listen<{ downloaded: number; total: number; percentage: number }>('ota-download-progress', (e) => {
-    callback(e.payload);
+    if (!isCancelled) {
+      callback(e.payload);
+    }
   }).then((un) => {
-    unlistenFn = un;
-  });
+    if (isCancelled) {
+      un();
+    } else {
+      unlistenFn = un;
+    }
+  }).catch(() => {});
   return () => {
-    if (unlistenFn) unlistenFn();
+    isCancelled = true;
+    if (unlistenFn) {
+      unlistenFn();
+      unlistenFn = undefined;
+    }
   };
 }
 
@@ -1150,6 +1180,7 @@ export interface DownloadInfoModalPayload {
   referer?: string;
   user_agent?: string;
   standalone_modal?: boolean;
+  destination_folder?: string;
 }
 
 export async function restoreManagerWindow(): Promise<void> {
@@ -1335,8 +1366,27 @@ export async function openFileFolder(path: string): Promise<void> {
 }
 
 export async function showDownloadCompleteDialog(payload?: DownloadCompletePayload): Promise<void> {
+  if (typeof window !== 'undefined' && payload) {
+    try {
+      const json = JSON.stringify(payload);
+      localStorage.setItem('downex_last_complete_payload', json);
+      sessionStorage.setItem('downex_last_complete_payload', json);
+    } catch {}
+    const evt = new CustomEvent('downex-open-complete-modal', {
+      detail: payload,
+      cancelable: true,
+    });
+    const notCanceled = window.dispatchEvent(evt);
+    if (!notCanceled) {
+      return;
+    }
+  }
   if (isTauri) {
     await invoke('cmd_show_download_complete', { payload: payload || null });
+    return;
+  }
+  if (typeof window !== 'undefined') {
+    window.open('/?window=download_complete', 'downex_download_complete', 'width=560,height=340');
   }
 }
 
@@ -1563,6 +1613,16 @@ export function getDownexWebBaseUrl(): string {
 }
 
 export async function openExternalUrl(url: string): Promise<void> {
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
+      console.warn('[Downex Security] Blocked non-HTTP external URL:', url);
+      return;
+    }
+  } catch {
+    console.warn('[Downex Security] Blocked malformed external URL:', url);
+    return;
+  }
   if (!isTauri) {
     window.open(url, '_blank', 'noopener,noreferrer');
     return;
@@ -1642,10 +1702,16 @@ export interface ShutdownCountdownPayload {
 
 export async function toggleTaskShutdown(taskId: string): Promise<boolean> {
   if (!isTauri) {
-    const raw = sessionStorage.getItem('downex_mock_shutdown_tasks') || '{}';
-    const map = JSON.parse(raw);
+    let map: Record<string, boolean> = {};
+    try {
+      const raw = sessionStorage.getItem('downex_mock_shutdown_tasks') || '{}';
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === 'object') map = parsed;
+    } catch {}
     map[taskId] = !map[taskId];
-    sessionStorage.setItem('downex_mock_shutdown_tasks', JSON.stringify(map));
+    try {
+      sessionStorage.setItem('downex_mock_shutdown_tasks', JSON.stringify(map));
+    } catch {}
     return Boolean(map[taskId]);
   }
   return await invoke<boolean>('cmd_toggle_task_shutdown', { taskId });
@@ -1653,9 +1719,13 @@ export async function toggleTaskShutdown(taskId: string): Promise<boolean> {
 
 export async function getTaskShutdownStatus(taskId: string): Promise<boolean> {
   if (!isTauri) {
-    const raw = sessionStorage.getItem('downex_mock_shutdown_tasks') || '{}';
-    const map = JSON.parse(raw);
-    return Boolean(map[taskId]);
+    try {
+      const raw = sessionStorage.getItem('downex_mock_shutdown_tasks') || '{}';
+      const parsed = JSON.parse(raw);
+      return Boolean(parsed && typeof parsed === 'object' && parsed[taskId]);
+    } catch {
+      return false;
+    }
   }
   return await invoke<boolean>('cmd_get_task_shutdown_status', { taskId });
 }

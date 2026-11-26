@@ -14,12 +14,15 @@ import {
   queueDownload,
   onRefreshDownloads,
   DownloadInfoModalPayload,
+  DownloadCompletePayload,
   getLifetimeDownloadedBytes,
   setLifetimeDownloadedBytes,
   notifyDownloadsCompletedNative,
   setDownloadSpeedLimit,
   getRuntimeSessionState,
   setRuntimeSessionTab,
+  getSavedCustomSpeedLimit,
+  saveCustomSpeedLimit,
 } from '../services/tauriService';
 
 export const SESSION_VIEW_STORAGE_KEY = 'downex_session_selected_view';
@@ -39,6 +42,14 @@ export const VALID_VIEWS = new Set([
 
 // Track explicit tab switches in the current mount so async runtime boot check never overrides user clicks.
 let hasExplicitTabChangeInMount = false;
+const taskDownloadedCache = new Map<string, number>();
+const pendingOptimisticMutatedIds = new Set<string>();
+let isLoadItemsInFlight = false;
+let loadItemsPromise: Promise<void> | null = null;
+let dirtyReloadRequested = false;
+let lastPersistedTab: string | null = null;
+let savedCustomLimitLoaded = false;
+let savedCustomLimitInFlight: Promise<number | null> | null = null;
 
 export function purgeLegacyHardTabPersistence(): void {
   try {
@@ -66,6 +77,8 @@ export function getInitialSelectedView(): string {
 
 export function persistSessionSelectedView(view: string): void {
   if (!VALID_VIEWS.has(view)) return;
+  if (lastPersistedTab === view) return;
+  lastPersistedTab = view;
   try {
     if (typeof window !== 'undefined' && window.sessionStorage) {
       window.sessionStorage.setItem(SESSION_VIEW_STORAGE_KEY, view);
@@ -113,16 +126,22 @@ interface DownloadStore {
   setSpeedLimit: (id: string, limitMbps: number | null) => Promise<void>;
   removeDownload: (id: string, deleteFile?: boolean) => Promise<void>;
   removeAllDownloads: (ids: string[], deleteFile?: boolean) => Promise<void>;
-  pauseAllDownloads: () => Promise<void>;
-  resumeAllDownloads: () => Promise<void>;
-  queueAllDownloads: () => Promise<void>;
+  pauseAllDownloads: (targetIds?: string[]) => Promise<void>;
+  resumeAllDownloads: (targetIds?: string[]) => Promise<void>;
+  queueAllDownloads: (targetIds?: string[]) => Promise<void>;
   unqueueAllDownloads: () => Promise<void>;
+  savedCustomSpeedLimit: number | null;
+  loadSavedCustomSpeedLimit: () => Promise<number | null>;
+  commitSavedCustomSpeedLimit: (limitMbps: number | null) => Promise<void>;
   setSelectedView: (view: string) => void;
   reconcileRuntimeSessionView: () => Promise<void>;
   settingsSubView: 'settings';
   openSettingsSubView: (subView?: 'settings') => void;
   setSearchQuery: (query: string) => void;
   setNewModalOpen: (open: boolean) => void;
+  completeModalPayload: DownloadCompletePayload | null;
+  openCompleteModal: (payload: DownloadCompletePayload) => void;
+  closeCompleteModal: () => void;
   isQueueGuideOpen: boolean;
   setQueueGuideOpen: (open: boolean) => void;
   initListener: () => () => void;
@@ -133,6 +152,7 @@ export const useDownloadStore = create<DownloadStore>((set, get) => ({
   selectedView: getInitialSelectedView(),
   searchQuery: '',
   isNewModalOpen: false,
+  completeModalPayload: null,
   isQueueGuideOpen: false,
   setQueueGuideOpen: (open: boolean) => set({ isQueueGuideOpen: open }),
   isStandaloneModal: false,
@@ -142,7 +162,8 @@ export const useDownloadStore = create<DownloadStore>((set, get) => ({
   peakSpeed: (() => {
     try {
       const v = localStorage.getItem('downex_peak_speed');
-      return v ? Number(v) : 0;
+      const parsed = v ? Number(v) : 0;
+      return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
     } catch {
       return 0;
     }
@@ -154,6 +175,29 @@ export const useDownloadStore = create<DownloadStore>((set, get) => ({
   isQueueRunning: false,
   activeQueueTaskId: null,
   setActiveQueueTaskId: (id: string | null) => set({ activeQueueTaskId: id }),
+  savedCustomSpeedLimit: null,
+  loadSavedCustomSpeedLimit: async () => {
+    if (savedCustomLimitLoaded) return get().savedCustomSpeedLimit;
+    if (savedCustomLimitInFlight) return savedCustomLimitInFlight;
+    savedCustomLimitInFlight = getSavedCustomSpeedLimit()
+      .then((val) => {
+        const normalized = val && val > 0 ? val : null;
+        savedCustomLimitLoaded = true;
+        set({ savedCustomSpeedLimit: normalized });
+        return normalized;
+      })
+      .catch(() => null)
+      .finally(() => {
+        savedCustomLimitInFlight = null;
+      });
+    return savedCustomLimitInFlight;
+  },
+  commitSavedCustomSpeedLimit: async (limitMbps: number | null) => {
+    const normalized = limitMbps && limitMbps > 0 ? limitMbps : null;
+    await saveCustomSpeedLimit(normalized);
+    savedCustomLimitLoaded = true;
+    set({ savedCustomSpeedLimit: normalized });
+  },
   showTelemetryOnHome: (() => {
     try {
       return localStorage.getItem('downex_show_telemetry_on_home') === 'true';
@@ -171,54 +215,94 @@ export const useDownloadStore = create<DownloadStore>((set, get) => ({
   },
 
   loadItems: async () => {
-    try {
-      const [dbItems, queueRunning] = await Promise.all([
-        getDownloads(),
-        isQueueRunning(),
-      ]);
-      set((state) => {
-        const merged = dbItems.map((dbItem) => {
-          const existing = state.items.find((i) => i.id === dbItem.id);
-          // If the user recently paused or queued, retain that state even if the DB read hasn't settled yet
-          const isUserPaused = existing?.status === 'paused';
-          // Database status is absolute authority for terminal/settled states
-          const isTerminalState = dbItem.status === 'completed' || dbItem.status === 'paused' || dbItem.status === 'failed' || isUserPaused;
-          const isDownloading = !isTerminalState && !isUserPaused && (dbItem.status === 'downloading' || existing?.status === 'downloading');
-          const speed = isDownloading
-            ? Math.max(existing?.speed_bytes_sec || 0, dbItem.speed_bytes_sec || 0)
-            : 0;
-
-          let eta = isDownloading ? existing?.eta_seconds : null;
-          if (!eta && isDownloading && speed > 0 && dbItem.total_bytes && dbItem.total_bytes > dbItem.downloaded_bytes) {
-            eta = Math.max(1, Math.round((dbItem.total_bytes - dbItem.downloaded_bytes) / speed));
-          }
-
-          return {
-            ...dbItem,
-            status: isTerminalState ? (isUserPaused ? 'paused' : dbItem.status) : (isDownloading ? 'downloading' : dbItem.status),
-            // Preserve live in-memory segments and active download metrics only while downloading
-            segments: isDownloading && existing?.segments && existing.segments.length > 0 ? existing.segments : dbItem.segments,
-            speed_bytes_sec: speed,
-            eta_seconds: eta,
-          };
-        });
-        let currentActiveQueueId = get().activeQueueTaskId;
-        if (queueRunning && !currentActiveQueueId) {
-          const dlItem = merged.find((i) => i.status === 'downloading');
-          currentActiveQueueId = dlItem ? dlItem.id : null;
-        } else if (!queueRunning) {
-          currentActiveQueueId = null;
-        }
-        return { items: merged, isQueueRunning: queueRunning, activeQueueTaskId: currentActiveQueueId };
-      });
-      // Ensure lifetime stats baseline is synchronized with loaded items
-      const itemsSum = get().items.reduce((acc, i) => acc + (i.downloaded_bytes || 0), 0);
-      if (itemsSum > get().lifetimeDownloadedBytes) {
-        set({ lifetimeDownloadedBytes: itemsSum });
-      }
-    } catch (e) {
-      console.warn('Failed to load downloads:', e);
+    if (isLoadItemsInFlight && loadItemsPromise) {
+      dirtyReloadRequested = true;
+      return loadItemsPromise;
     }
+    isLoadItemsInFlight = true;
+    loadItemsPromise = (async () => {
+      try {
+        do {
+          dirtyReloadRequested = false;
+          const [dbItems, queueRunning] = await Promise.all([
+            getDownloads(),
+            isQueueRunning(),
+          ]);
+          for (const dbItem of dbItems) {
+            // Seed baseline downloaded bytes for resumed/existing items so live progress doesn't double-count
+            if (
+              (dbItem.status === 'downloading' ||
+                dbItem.status === 'probing' ||
+                dbItem.status === 'paused' ||
+                dbItem.status === 'queued') &&
+              !taskDownloadedCache.has(dbItem.id)
+            ) {
+              taskDownloadedCache.set(dbItem.id, dbItem.downloaded_bytes || 0);
+            }
+          }
+          set((state) => {
+            const merged = dbItems.map((dbItem) => {
+              const existing = state.items.find((i) => i.id === dbItem.id);
+              // Preserve in-flight optimistic UI mutations briefly until backend command settles
+              const isOptimisticPending = pendingOptimisticMutatedIds.has(dbItem.id);
+              const effectiveStatus = isOptimisticPending && existing ? existing.status : dbItem.status;
+              const isTerminalState =
+                effectiveStatus === 'completed' ||
+                effectiveStatus === 'paused' ||
+                effectiveStatus === 'failed' ||
+                effectiveStatus === 'error' ||
+                effectiveStatus === 'cancelled';
+              const isDownloading =
+                !isTerminalState &&
+                (effectiveStatus === 'downloading' ||
+                  effectiveStatus === 'probing' ||
+                  (!isOptimisticPending && dbItem.status === 'downloading'));
+              const speed = isDownloading
+                ? Math.max(existing?.speed_bytes_sec || 0, dbItem.speed_bytes_sec || 0)
+                : 0;
+              const liveDownloaded = isDownloading
+                ? Math.max(existing?.downloaded_bytes || 0, dbItem.downloaded_bytes || 0)
+                : dbItem.downloaded_bytes;
+
+              let eta = isDownloading ? existing?.eta_seconds : null;
+              if (!eta && isDownloading && speed > 0 && dbItem.total_bytes && dbItem.total_bytes > liveDownloaded) {
+                eta = Math.max(1, Math.round((dbItem.total_bytes - liveDownloaded) / speed));
+              }
+
+              return {
+                ...dbItem,
+                status: effectiveStatus,
+                downloaded_bytes: liveDownloaded,
+                // Preserve live in-memory segments and active download metrics only while downloading
+                segments: isDownloading && existing?.segments && existing.segments.length > 0 ? existing.segments : dbItem.segments,
+                speed_bytes_sec: speed,
+                eta_seconds: eta,
+              };
+            });
+            let currentActiveQueueId = get().activeQueueTaskId;
+            if (queueRunning && !currentActiveQueueId) {
+              const dlItem = merged.find((i) => i.status === 'downloading');
+              currentActiveQueueId = dlItem ? dlItem.id : null;
+            } else if (!queueRunning) {
+              currentActiveQueueId = null;
+            }
+            return { items: merged, isQueueRunning: queueRunning, activeQueueTaskId: currentActiveQueueId };
+          });
+          // Ensure lifetime stats baseline is synchronized with loaded items
+          const itemsSum = get().items.reduce((acc, i) => acc + (i.downloaded_bytes || 0), 0);
+          if (itemsSum > get().lifetimeDownloadedBytes) {
+            set({ lifetimeDownloadedBytes: itemsSum });
+          }
+        } while (dirtyReloadRequested);
+      } catch (e) {
+        console.warn('Failed to load downloads:', e);
+      } finally {
+        dirtyReloadRequested = false;
+        isLoadItemsInFlight = false;
+        loadItemsPromise = null;
+      }
+    })();
+    return loadItemsPromise;
   },
 
   initLifetimeStats: async () => {
@@ -309,6 +393,9 @@ export const useDownloadStore = create<DownloadStore>((set, get) => ({
     const item = get().items.find((i) => i.id === id);
     if (!item) return;
 
+    const prevStatus = item.status;
+    pendingOptimisticMutatedIds.add(id);
+
     if (item.status === 'downloading' || item.status === 'probing') {
       // 0ms instant optimistic UI update so button immediately flips to RESUME and enables DELETE
       set((state) => ({
@@ -318,6 +405,11 @@ export const useDownloadStore = create<DownloadStore>((set, get) => ({
         await pauseDownload(id);
       } catch (e) {
         console.warn('Failed to pause download backend:', e);
+        set((state) => ({
+          items: state.items.map((i) => (i.id === id ? { ...i, status: prevStatus } : i)),
+        }));
+      } finally {
+        pendingOptimisticMutatedIds.delete(id);
       }
     } else {
       // 0ms instant optimistic UI update for resuming
@@ -328,6 +420,11 @@ export const useDownloadStore = create<DownloadStore>((set, get) => ({
         await resumeDownload(id);
       } catch (e) {
         console.warn('Failed to resume download:', e);
+        set((state) => ({
+          items: state.items.map((i) => (i.id === id ? { ...i, status: prevStatus } : i)),
+        }));
+      } finally {
+        pendingOptimisticMutatedIds.delete(id);
       }
     }
   },
@@ -340,6 +437,7 @@ export const useDownloadStore = create<DownloadStore>((set, get) => ({
     const item = get().items.find((i) => i.id === id);
     if (!item) return;
 
+    taskDownloadedCache.delete(id);
     set((state) => ({
       items: state.items.map((i) =>
         i.id === id
@@ -385,17 +483,8 @@ export const useDownloadStore = create<DownloadStore>((set, get) => ({
   },
 
   setSpeedLimit: async (id: string, limitMbps: number | null) => {
-    // Layer 3: Optimistic state update & LocalStorage persistence
-    try {
-      const raw = localStorage.getItem('downex_task_speed_limits');
-      const map: Record<string, number> = raw ? JSON.parse(raw) : {};
-      if (limitMbps && limitMbps > 0) {
-        map[id] = limitMbps;
-      } else {
-        delete map[id];
-      }
-      localStorage.setItem('downex_task_speed_limits', JSON.stringify(map));
-    } catch {}
+    const previousLimit = get().items.find((i) => i.id === id)?.speed_limit_mbps ?? null;
+    const previousSpeed = get().items.find((i) => i.id === id)?.speed_bytes_sec ?? 0;
 
     set((state) => ({
       items: state.items.map((i) => {
@@ -419,38 +508,59 @@ export const useDownloadStore = create<DownloadStore>((set, get) => ({
       await setDownloadSpeedLimit(id, limitMbps);
     } catch (e) {
       console.error('Failed to set speed limit in backend:', e);
+      set((state) => ({
+        items: state.items.map((i) =>
+          i.id === id ? { ...i, speed_limit_mbps: previousLimit, speed_bytes_sec: previousSpeed } : i
+        ),
+      }));
     }
   },
 
   removeDownload: async (id: string, deleteFile = false) => {
     // Instant optimistic removal from UI state - 0ms UI lag
+    taskDownloadedCache.delete(id);
+    pendingOptimisticMutatedIds.add(id);
     set((state) => ({ items: state.items.filter((i) => i.id !== id) }));
     try {
       await cancelDownload(id, deleteFile);
     } catch (e) {
       console.error('Failed to cancel download in backend:', e);
+    } finally {
+      pendingOptimisticMutatedIds.delete(id);
     }
   },
 
   removeAllDownloads: async (ids: string[], deleteFile = false) => {
     if (ids.length === 0) return;
     const targetSet = new Set(ids);
+    for (const id of ids) {
+      taskDownloadedCache.delete(id);
+      pendingOptimisticMutatedIds.add(id);
+    }
     set((state) => ({ items: state.items.filter((i) => !targetSet.has(i.id)) }));
     try {
       await Promise.allSettled(ids.map((id) => cancelDownload(id, deleteFile)));
     } catch (e) {
       console.error('Failed to cancel downloads in backend:', e);
+    } finally {
+      for (const id of ids) {
+        pendingOptimisticMutatedIds.delete(id);
+      }
     }
   },
 
-  pauseAllDownloads: async () => {
+  pauseAllDownloads: async (targetIds?: string[]) => {
+    const idFilter = targetIds ? new Set(targetIds) : null;
     const downloading = get().items.filter(
-      (i) => i.status === 'downloading' || i.status === 'probing'
+      (i) =>
+        (!idFilter || idFilter.has(i.id)) &&
+        (i.status === 'downloading' || i.status === 'probing')
     );
     if (downloading.length === 0) return;
+    const targetSet = new Set(downloading.map((i) => i.id));
     set((state) => ({
       items: state.items.map((i) =>
-        i.status === 'downloading' || i.status === 'probing'
+        targetSet.has(i.id)
           ? { ...i, status: 'paused', speed_bytes_sec: 0 }
           : i
       ),
@@ -458,14 +568,18 @@ export const useDownloadStore = create<DownloadStore>((set, get) => ({
     await Promise.allSettled(downloading.map((i) => pauseDownload(i.id)));
   },
 
-  resumeAllDownloads: async () => {
+  resumeAllDownloads: async (targetIds?: string[]) => {
+    const idFilter = targetIds ? new Set(targetIds) : null;
     const paused = get().items.filter(
-      (i) => i.status === 'paused' || i.status === 'failed' || i.status === 'error'
+      (i) =>
+        (!idFilter || idFilter.has(i.id)) &&
+        (i.status === 'paused' || i.status === 'failed' || i.status === 'error')
     );
     if (paused.length === 0) return;
+    const targetSet = new Set(paused.map((i) => i.id));
     set((state) => ({
       items: state.items.map((i) =>
-        i.status === 'paused' || i.status === 'failed' || i.status === 'error'
+        targetSet.has(i.id)
           ? { ...i, status: 'downloading', error_message: null }
           : i
       ),
@@ -473,14 +587,19 @@ export const useDownloadStore = create<DownloadStore>((set, get) => ({
     await Promise.allSettled(paused.map((i) => resumeDownload(i.id)));
   },
 
-  queueAllDownloads: async () => {
+  queueAllDownloads: async (targetIds?: string[]) => {
+    const idFilter = targetIds ? new Set(targetIds) : null;
     const unqueued = get().items.filter(
-      (i) => i.status !== 'completed' && i.status !== 'queued'
+      (i) =>
+        (!idFilter || idFilter.has(i.id)) &&
+        i.status !== 'completed' &&
+        i.status !== 'queued'
     );
     if (unqueued.length === 0) return;
+    const targetSet = new Set(unqueued.map((i) => i.id));
     set((state) => ({
       items: state.items.map((i) =>
-        i.status !== 'completed' && i.status !== 'queued'
+        targetSet.has(i.id)
           ? { ...i, status: 'queued', speed_bytes_sec: 0 }
           : i
       ),
@@ -575,17 +694,23 @@ export const useDownloadStore = create<DownloadStore>((set, get) => ({
       initialModalData: data,
       isStandaloneModal: !!data.standalone_modal,
     }),
+  openCompleteModal: (payload: DownloadCompletePayload) =>
+    set({ completeModalPayload: payload }),
+  closeCompleteModal: () =>
+    set({ completeModalPayload: null }),
 
   initListener: () => {
     // 0. Initialize persistent lifetime counter from SQLite DB
     get().initLifetimeStats().catch(() => {});
 
-    // In-memory delta tracker per task ID for zero-overhead, byte-accurate accumulation
-    const taskDownloadedCache = new Map<string, number>();
     let isLifetimeDirty = false;
+    let completionSyncTimer: ReturnType<typeof setTimeout> | null = null;
 
     // 1. High-frequency push event listener from Tauri Rust backend
     const unlistenProgress = onDownloadProgress((event: DownloadProgressEvent) => {
+      let needsLoadItems = false;
+      let finishedTaskId: string | null = null;
+
       set((state) => {
         let currentTotalSpeed = 0;
         let taskFinished = false;
@@ -608,7 +733,12 @@ export const useDownloadStore = create<DownloadStore>((set, get) => ({
           if (item.id === event.task_id) {
             itemFound = true;
             const isCompleted = event.status === 'completed';
-            const isTerminal = isCompleted || event.status === 'failed' || event.status === 'error' || event.status === 'paused';
+            const isTerminal =
+              isCompleted ||
+              event.status === 'failed' ||
+              event.status === 'error' ||
+              event.status === 'paused' ||
+              event.status === 'cancelled';
             if (item.status !== event.status && isTerminal) {
               taskFinished = true;
             }
@@ -627,8 +757,6 @@ export const useDownloadStore = create<DownloadStore>((set, get) => ({
               currentTotalSpeed += effectiveSpeed;
             }
 
-            // Forward monotonic persistence:
-            // Downloaded bytes must never decrement during active downloading or completed state
             const incomingBytes = event.downloaded_bytes || 0;
             const existingBytes = item.downloaded_bytes || 0;
             const isRestart = item.status !== 'downloading' && event.status === 'downloading' && incomingBytes === 0;
@@ -657,53 +785,72 @@ export const useDownloadStore = create<DownloadStore>((set, get) => ({
           return item;
         });
 
-        // If the task was added externally (e.g. extension), fetch it into store
         if (!itemFound) {
-          get().loadItems();
+          needsLoadItems = true;
         }
 
         if (taskFinished) {
-          if (get().isQueueRunning && event?.task_id && get().activeQueueTaskId === event.task_id) {
-            const nextQueued = get().items.find((i) => i.status === 'queued' && i.id !== event.task_id);
-            set({ activeQueueTaskId: nextQueued ? nextQueued.id : null });
+          finishedTaskId = event?.task_id || null;
+          if (
+            event.status === 'completed' ||
+            event.status === 'failed' ||
+            event.status === 'error' ||
+            event.status === 'cancelled'
+          ) {
+            taskDownloadedCache.delete(event.task_id);
           }
-          setTimeout(() => {
-            get().loadItems();
-            const stillActive = get().items.some(
-              (i) => i.status === 'downloading' || i.status === 'probing'
-            );
-            const hasQueuedInRunningQueue = get().isQueueRunning && get().items.some((i) => i.status === 'queued');
-            if (!stillActive && !hasQueuedInRunningQueue) {
-              notifyDownloadsCompletedNative().catch(() => {});
-              import('./appVersionStore').then(({ useAppVersionStore }) => {
-                useAppVersionStore.getState().onDownloadsCompleted();
-              });
-            }
-          }, 300);
+        }
+
+        let nextActiveQueueTaskId = state.activeQueueTaskId;
+        if (taskFinished && state.isQueueRunning && finishedTaskId && state.activeQueueTaskId === finishedTaskId) {
+          const nextQueued = updated.find((i) => i.status === 'queued' && i.id !== finishedTaskId);
+          nextActiveQueueTaskId = nextQueued ? nextQueued.id : null;
         }
 
         const newHistory = [...state.speedHistory.slice(1), currentTotalSpeed];
-        const newPeak = Math.max(state.peakSpeed, currentTotalSpeed);
-        if (newPeak > state.peakSpeed) {
+        const currentPeak = Number.isFinite(state.peakSpeed) ? state.peakSpeed : 0;
+        const newPeak = Math.max(currentPeak, currentTotalSpeed);
+        if (newPeak > currentPeak) {
           try {
             localStorage.setItem('downex_peak_speed', String(newPeak));
           } catch {}
         }
-        return { 
-          items: updated, 
-          totalSpeed: currentTotalSpeed, 
+        return {
+          items: updated,
+          activeQueueTaskId: nextActiveQueueTaskId,
+          totalSpeed: currentTotalSpeed,
           speedHistory: newHistory,
           peakSpeed: newPeak,
           lifetimeDownloadedBytes: newLifetime,
           sessionDownloadedBytes: newSession,
         };
       });
+
+      if (needsLoadItems) {
+        get().loadItems();
+      }
+      if (finishedTaskId) {
+        if (completionSyncTimer) clearTimeout(completionSyncTimer);
+        completionSyncTimer = setTimeout(async () => {
+          completionSyncTimer = null;
+          await get().loadItems();
+          const stillActive = get().items.some(
+            (i) => i.status === 'downloading' || i.status === 'probing'
+          );
+          const hasQueuedInRunningQueue = get().isQueueRunning && get().items.some((i) => i.status === 'queued');
+          if (!stillActive && !hasQueuedInRunningQueue) {
+            notifyDownloadsCompletedNative().catch(() => {});
+            import('./appVersionStore').then(({ useAppVersionStore }) => {
+              useAppVersionStore.getState().onDownloadsCompleted();
+            });
+          }
+        }, 300);
+      }
     });
 
     // 2. Refresh listener triggered when downloads are started from dialog/tray
     const unlistenRefresh = onRefreshDownloads(() => {
       get().loadItems();
-      get().setSelectedView('all');
     });
 
     // 3. Periodic debounced synchronization: Flush accumulated bytes to SQLite every 10s ONLY if dirty
@@ -741,10 +888,15 @@ export const useDownloadStore = create<DownloadStore>((set, get) => ({
       if (typeof window !== 'undefined') {
         window.removeEventListener('beforeunload', handleBeforeUnload);
       }
+      if (completionSyncTimer) {
+        clearTimeout(completionSyncTimer);
+        completionSyncTimer = null;
+      }
       unlistenProgress();
       unlistenRefresh();
       clearInterval(intervalId);
       clearInterval(syncIntervalId);
+      taskDownloadedCache.clear();
     };
   },
 }));
@@ -756,6 +908,7 @@ useDownloadStore.subscribe((state, prevState) => {
   }
 });
 
-if (typeof window !== 'undefined' && (import.meta as any).env?.DEV) {
+if (typeof window !== 'undefined' && import.meta.env.DEV) {
+  (window as any).__DOWNEX_DOWNLOAD_STORE__ = useDownloadStore;
   (window as any).useDownloadStore = useDownloadStore;
 }

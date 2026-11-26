@@ -31,3 +31,28 @@ export function compareSemver(v1: string, v2: string): number {
   }
   return 0;
 }
+
+/**
+ * Strict single-digit decimal rollover sequence:
+ * 0.0.1 -> ... -> 0.0.9 -> 0.1.0 ... -> 0.9.9 -> 1.0.0
+ */
+export function getNextSingleDigitVersion(version?: string | null): string {
+  const parts = cleanVersion(version)
+    .split('.')
+    .map((p) => parseInt(p, 10) || 0);
+  let major = parts[0] ?? 0;
+  let minor = parts[1] ?? 0;
+  let patch = parts[2] ?? 0;
+  if (patch >= 9) {
+    patch = 0;
+    if (minor >= 9) {
+      minor = 0;
+      major += 1;
+    } else {
+      minor += 1;
+    }
+  } else {
+    patch += 1;
+  }
+  return `${major}.${minor}.${patch}`;
+}

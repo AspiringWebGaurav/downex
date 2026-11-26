@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { X, Minus } from 'lucide-react';
-import { minimizeToBackground } from '../services/tauriService';
+import { getCloseToTray, isTauri, minimizeToBackground, onUiOpened, quitApp } from '../services/tauriService';
 import { useDownloadStore } from '../stores/downloadStore';
 import { useHardwareBanStore } from '../stores/hardwareBanStore';
 import {
@@ -29,6 +29,10 @@ function formatCountdown(expiresAt: number | null, now: number): string {
 export const DownexWindowHeader: React.FC = () => {
   const [isCloseHovered, setIsCloseHovered] = useState(false);
   const [isMinimizeHovered, setIsMinimizeHovered] = useState(false);
+  const [closeToTray, setCloseToTray] = useState<boolean>(true);
+  const closeToTrayRef = useRef<boolean>(true);
+  const suppressHoverUntilRef = useRef<number>(Date.now() + 350);
+  const hasRealPointerMoveRef = useRef<boolean>(false);
   const [isMarqueeHovered, setIsMarqueeHovered] = useState(false);
   const [nowTick, setNowTick] = useState<number>(() => Date.now());
   const [playback, setPlayback] = useState<{
@@ -171,25 +175,98 @@ export const DownexWindowHeader: React.FC = () => {
   }, [showTitlebarMarquee, currentNotice, cycleKey, isMarqueeHovered, handleMarqueeCycleEnd]);
 
   useEffect(() => {
-    const clearHover = () => {
+    suppressHoverUntilRef.current = Date.now() + 350;
+    hasRealPointerMoveRef.current = false;
+
+    const resetAndSuppressHover = () => {
+      suppressHoverUntilRef.current = Date.now() + 350;
+      hasRealPointerMoveRef.current = false;
       setIsCloseHovered(false);
       setIsMinimizeHovered(false);
     };
 
-    window.addEventListener('blur', clearHover);
-    window.addEventListener('focus', clearHover);
-    document.addEventListener('visibilitychange', clearHover);
-    window.addEventListener('mouseleave', clearHover);
+    const clearHoverOnly = () => {
+      hasRealPointerMoveRef.current = false;
+      setIsCloseHovered(false);
+      setIsMinimizeHovered(false);
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        resetAndSuppressHover();
+      } else {
+        clearHoverOnly();
+      }
+    };
+
+    const handlePointerMove = () => {
+      if (Date.now() >= suppressHoverUntilRef.current) {
+        hasRealPointerMoveRef.current = true;
+      }
+    };
+
+    const unlistenUiOpened = onUiOpened(() => {
+      resetAndSuppressHover();
+      getCloseToTray()
+        .then((val) => {
+          closeToTrayRef.current = val;
+          setCloseToTray(val);
+        })
+        .catch(() => {});
+    });
+
+    getCloseToTray()
+      .then((val) => {
+        closeToTrayRef.current = val;
+        setCloseToTray(val);
+      })
+      .catch(() => {});
+
+    let unlistenClosePref: (() => void) | null = null;
+    let isCancelled = false;
+    if (isTauri) {
+      import('@tauri-apps/api/event')
+        .then(({ listen }) =>
+          listen<{ enabled?: boolean }>('close-to-tray-changed', (ev) => {
+            if (typeof ev.payload?.enabled === 'boolean') {
+              closeToTrayRef.current = ev.payload.enabled;
+              setCloseToTray(ev.payload.enabled);
+            }
+          })
+        )
+        .then((unsub) => {
+          if (isCancelled) {
+            unsub();
+          } else {
+            unlistenClosePref = unsub;
+          }
+        })
+        .catch(() => {});
+    }
+
+    window.addEventListener('blur', clearHoverOnly);
+    window.addEventListener('focus', resetAndSuppressHover);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('mouseleave', clearHoverOnly);
+    window.addEventListener('pointermove', handlePointerMove, { passive: true, capture: true });
 
     return () => {
-      window.removeEventListener('blur', clearHover);
-      window.removeEventListener('focus', clearHover);
-      document.removeEventListener('visibilitychange', clearHover);
-      window.removeEventListener('mouseleave', clearHover);
+      isCancelled = true;
+      unlistenUiOpened();
+      if (unlistenClosePref) unlistenClosePref();
+      window.removeEventListener('blur', clearHoverOnly);
+      window.removeEventListener('focus', resetAndSuppressHover);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('mouseleave', clearHoverOnly);
+      window.removeEventListener('pointermove', handlePointerMove, { capture: true });
     };
   }, []);
 
+  const canActivateWindowControlHover = () =>
+    hasRealPointerMoveRef.current && Date.now() >= suppressHoverUntilRef.current;
+
   const handleMinimizeToTray = async () => {
+    hasRealPointerMoveRef.current = false;
     setIsMinimizeHovered(false);
     if (document.activeElement instanceof HTMLElement) {
       document.activeElement.blur();
@@ -209,11 +286,17 @@ export const DownexWindowHeader: React.FC = () => {
   };
 
   const handleClose = async () => {
+    hasRealPointerMoveRef.current = false;
     setIsCloseHovered(false);
     if (document.activeElement instanceof HTMLElement) {
       document.activeElement.blur();
     }
     try {
+      const shouldHideToTray = await getCloseToTray().catch(() => closeToTrayRef.current);
+      if (!shouldHideToTray && isTauri) {
+        await quitApp();
+        return;
+      }
       await minimizeToBackground();
     } catch (err) {
       console.error('Failed to minimize to background:', err);
@@ -261,13 +344,13 @@ export const DownexWindowHeader: React.FC = () => {
               title={displayText}
               onMouseEnter={() => setIsMarqueeHovered(true)}
               onMouseLeave={() => setIsMarqueeHovered(false)}
-              className={`downex-marquee-group relative h-[24px] w-full max-w-[480px] rounded-full border backdrop-blur-md overflow-hidden flex items-center transition-all duration-300 ${
+              className={`downex-marquee-group relative h-[20px] w-full max-w-[430px] px-1 rounded-full border backdrop-blur-md overflow-hidden flex items-center transition-all duration-300 ${
                 noticePulse
-                  ? 'ring-2 ring-emerald-500/50 dark:ring-emerald-400/50'
+                  ? 'ring-2 ring-emerald-500/45 dark:ring-emerald-400/45'
                   : ''
               } ${appearance.glassClass}`}
             >
-              <div className="downex-marquee-track relative w-full h-full overflow-hidden">
+              <div className="downex-marquee-track relative w-full h-full flex items-center overflow-hidden">
                 <div
                   key={`${currentNotice.id}-${cycleKey}`}
                   onAnimationEnd={() => handleMarqueeCycleEnd(cycleKey)}
@@ -275,23 +358,20 @@ export const DownexWindowHeader: React.FC = () => {
                     animationDuration: `${durationSec}s`,
                     animationIterationCount: 1,
                   }}
-                  className={`absolute inset-y-0 flex items-center whitespace-nowrap gap-1.5 text-[11.5px] leading-none font-semibold ${
+                  className={`absolute inset-y-0 flex items-center whitespace-nowrap gap-1.5 font-mono-tabular text-[10px] leading-none font-medium tracking-[-0.01em] ${
                     currentNotice.direction === 'rtl'
                       ? 'downex-marquee-item-rtl'
                       : 'downex-marquee-item-ltr'
                   }`}
                 >
                   <span
-                    className={`w-1.5 h-1.5 rounded-full shrink-0 ${appearance.dotClass} ${appearance.dotRingClass}`}
-                  />
-                  <span
-                    className={`px-1.5 py-[2px] rounded-full border text-[9.5px] font-bold uppercase tracking-wider leading-none ${appearance.badgeClass}`}
+                    className={`inline-flex items-center justify-center h-[13px] px-1.5 rounded-full border text-[8.5px] font-bold uppercase tracking-[0.06em] leading-none shrink-0 ${appearance.badgeClass}`}
                   >
                     {appearance.label}
                   </span>
-                  <span className="leading-none">{displayText}</span>
+                  <span className="inline-flex items-center h-[13px] leading-none">{displayText}</span>
                   {countdownText && countdownText !== 'expired' && (
-                    <span className="font-mono-tabular text-[10.5px] font-semibold leading-none opacity-85">
+                    <span className="inline-flex items-center h-[13px] font-mono-tabular text-[9.5px] font-semibold leading-none opacity-80">
                       ({countdownText})
                     </span>
                   )}
@@ -308,7 +388,12 @@ export const DownexWindowHeader: React.FC = () => {
           <button
             type="button"
             onClick={handleMinimizeToTray}
-            onMouseEnter={() => setIsMinimizeHovered(true)}
+            onMouseEnter={() => {
+              if (canActivateWindowControlHover()) setIsMinimizeHovered(true);
+            }}
+            onMouseMove={() => {
+              if (canActivateWindowControlHover() && !isMinimizeHovered) setIsMinimizeHovered(true);
+            }}
             onMouseLeave={() => setIsMinimizeHovered(false)}
             title="Minimise to System Tray (Active downloads running in background)"
             aria-label="Minimise to System Tray"
@@ -324,10 +409,15 @@ export const DownexWindowHeader: React.FC = () => {
         <button
           type="button"
           onClick={handleClose}
-          onMouseEnter={() => setIsCloseHovered(true)}
+          onMouseEnter={() => {
+            if (canActivateWindowControlHover()) setIsCloseHovered(true);
+          }}
+          onMouseMove={() => {
+            if (canActivateWindowControlHover() && !isCloseHovered) setIsCloseHovered(true);
+          }}
           onMouseLeave={() => setIsCloseHovered(false)}
-          title="Close to System Tray"
-          aria-label="Close to System Tray"
+          title={closeToTray ? 'Close to System Tray' : 'Exit Downex'}
+          aria-label={closeToTray ? 'Close to System Tray' : 'Exit Downex'}
           className={`group relative w-8 h-6 flex items-center justify-center rounded-[2px] transition-colors duration-100 cursor-pointer focus:outline-none ${
             isCloseHovered
               ? 'bg-[#e81123] text-white'

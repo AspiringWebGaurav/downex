@@ -50,14 +50,14 @@ fn map_download_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<DownloadRecord>
         url: row.get(1)?,
         filename: row.get(2)?,
         destination_path: row.get(3)?,
-        total_bytes: total_bytes.map(|v| v as u64),
-        downloaded_bytes: downloaded_bytes as u64,
+        total_bytes: total_bytes.map(|v| v.max(0) as u64),
+        downloaded_bytes: downloaded_bytes.max(0) as u64,
         status: row.get(6)?,
         etag: row.get(7)?,
         last_modified: row.get(8)?,
         headers_json: row.get(9)?,
         queue_id: row.get(10)?,
-        speed_bytes_sec: speed as u64,
+        speed_bytes_sec: speed.max(0) as u64,
         error_message: row.get(12)?,
         checksum: row.get(13)?,
         media_type: row.get(14)?,
@@ -112,7 +112,8 @@ impl DatabaseManager {
 
         // Performance pragmas for high-throughput concurrent I/O
         conn.execute_batch(
-            "PRAGMA journal_mode = WAL;
+            "PRAGMA busy_timeout = 5000;
+             PRAGMA journal_mode = WAL;
              PRAGMA synchronous = NORMAL;
              PRAGMA foreign_keys = ON;
              PRAGMA temp_store = MEMORY;",
@@ -260,6 +261,30 @@ pub fn update_download_status(&self, id: &str, status: &str, speed: u64, error: 
         Ok(())
     }
 
+    pub fn get_download_stats(&self) -> Result<(usize, usize, usize, u64)> {
+        let conn = self.conn.lock();
+        let mut stmt = conn.prepare(
+            "SELECT
+                COALESCE(SUM(CASE WHEN status IN ('downloading', 'probing') THEN 1 ELSE 0 END), 0),
+                COALESCE(SUM(CASE WHEN status IN ('paused', 'queued', 'failed', 'error') THEN 1 ELSE 0 END), 0),
+                COUNT(*),
+                COALESCE(SUM(CASE WHEN status = 'downloading' AND speed_bytes_sec > 0 THEN speed_bytes_sec ELSE 0 END), 0)
+             FROM downloads",
+        )?;
+        stmt.query_row([], |row| {
+            let active: i64 = row.get(0)?;
+            let paused: i64 = row.get(1)?;
+            let total: i64 = row.get(2)?;
+            let speed: i64 = row.get(3)?;
+            Ok((
+                active.max(0) as usize,
+                paused.max(0) as usize,
+                total.max(0) as usize,
+                speed.max(0) as u64,
+            ))
+        })
+    }
+
     pub fn get_all_downloads(&self) -> Result<Vec<DownloadRecord>> {
         let conn = self.conn.lock();
         let sql = format!("SELECT {} FROM downloads ORDER BY created_at DESC", DOWNLOAD_SELECT_COLUMNS);
@@ -362,6 +387,7 @@ pub fn update_download_status(&self, id: &str, status: &str, speed: u64, error: 
         tx.execute("DELETE FROM segments WHERE download_id = ?1", params![download_id])?;
 
         for seg in segments {
+            let db_end: i64 = if seg.range_end == u64::MAX { -1 } else { seg.range_end as i64 };
             tx.execute(
                 "INSERT INTO segments (download_id, segment_index, range_start, range_end, downloaded, status)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
@@ -369,7 +395,7 @@ pub fn update_download_status(&self, id: &str, status: &str, speed: u64, error: 
                     seg.download_id,
                     seg.segment_index,
                     seg.range_start as i64,
-                    seg.range_end as i64,
+                    db_end,
                     seg.downloaded as i64,
                     seg.status,
                 ],
@@ -394,9 +420,9 @@ pub fn update_download_status(&self, id: &str, status: &str, speed: u64, error: 
                 id: Some(row.get(0)?),
                 download_id: row.get(1)?,
                 segment_index: row.get(2)?,
-                range_start: start as u64,
-                range_end: end as u64,
-                downloaded: downloaded as u64,
+                range_start: start.max(0) as u64,
+                range_end: if end < 0 { u64::MAX } else { end as u64 },
+                downloaded: downloaded.max(0) as u64,
                 status: row.get(6)?,
             })
         })?;

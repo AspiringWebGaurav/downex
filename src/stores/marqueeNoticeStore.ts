@@ -138,44 +138,44 @@ export function resolveDesktopNoticeAppearance(notice: MarqueeNotice): {
     zinc: {
       dot: 'bg-zinc-600 dark:bg-zinc-300',
       dotRing: 'ring-2 ring-zinc-500/20',
-      badge: 'bg-zinc-900/10 text-zinc-800 border-zinc-300/80 dark:bg-zinc-400/20 dark:text-zinc-200 dark:border-zinc-500/40',
-      glass: 'bg-zinc-100/95 dark:bg-zinc-900/90 border-zinc-300/90 dark:border-zinc-600/80 text-zinc-950 dark:text-white shadow-[0_1px_2px_rgba(0,0,0,0.05)] dark:shadow-[0_1px_3px_rgba(0,0,0,0.35)]',
+      badge: 'bg-zinc-900/10 text-zinc-800 border-zinc-300/75 dark:bg-zinc-400/15 dark:text-zinc-200 dark:border-zinc-500/35',
+      glass: 'bg-zinc-100/85 dark:bg-zinc-900/85 border-zinc-300/75 dark:border-zinc-700/80 text-zinc-900 dark:text-zinc-100 shadow-2xs',
     },
     emerald: {
       dot: 'bg-emerald-500',
       dotRing: 'ring-2 ring-emerald-500/25',
-      badge: 'bg-emerald-500/15 text-emerald-800 border-emerald-500/30 dark:bg-emerald-400/20 dark:text-emerald-200 dark:border-emerald-400/35',
-      glass: 'bg-emerald-50/95 dark:bg-emerald-950/60 border-emerald-300/90 dark:border-emerald-600/60 text-zinc-950 dark:text-white shadow-[0_1px_2px_rgba(16,185,129,0.12)] dark:shadow-[0_1px_3px_rgba(0,0,0,0.35)]',
+      badge: 'bg-emerald-500/12 text-emerald-800 border-emerald-500/25 dark:bg-emerald-400/15 dark:text-emerald-200 dark:border-emerald-400/30',
+      glass: 'bg-emerald-50/80 dark:bg-emerald-950/45 border-emerald-300/70 dark:border-emerald-700/60 text-zinc-900 dark:text-zinc-100 shadow-2xs',
     },
     rose: {
       dot: 'bg-rose-500',
       dotRing: 'ring-2 ring-rose-500/25',
-      badge: 'bg-rose-500/15 text-rose-700 border-rose-500/30 dark:bg-rose-400/20 dark:text-rose-200 dark:border-rose-400/35',
-      glass: 'bg-rose-50/95 dark:bg-rose-950/60 border-rose-300/90 dark:border-rose-600/60 text-zinc-950 dark:text-white shadow-[0_1px_2px_rgba(244,63,94,0.12)] dark:shadow-[0_1px_3px_rgba(0,0,0,0.35)]',
+      badge: 'bg-rose-500/12 text-rose-700 border-rose-500/25 dark:bg-rose-400/15 dark:text-rose-200 dark:border-rose-400/30',
+      glass: 'bg-rose-50/80 dark:bg-rose-950/45 border-rose-300/70 dark:border-rose-700/60 text-zinc-900 dark:text-zinc-100 shadow-2xs',
     },
     amber: {
       dot: 'bg-amber-500',
       dotRing: 'ring-2 ring-amber-500/25',
-      badge: 'bg-amber-500/15 text-amber-800 border-amber-500/35 dark:bg-amber-400/20 dark:text-amber-200 dark:border-amber-400/35',
-      glass: 'bg-amber-50/95 dark:bg-amber-950/60 border-amber-300/90 dark:border-amber-600/60 text-zinc-950 dark:text-white shadow-[0_1px_2px_rgba(245,158,11,0.12)] dark:shadow-[0_1px_3px_rgba(0,0,0,0.35)]',
+      badge: 'bg-amber-500/12 text-amber-800 border-amber-500/30 dark:bg-amber-400/15 dark:text-amber-200 dark:border-amber-400/30',
+      glass: 'bg-amber-50/80 dark:bg-amber-950/45 border-amber-300/70 dark:border-amber-700/60 text-zinc-900 dark:text-zinc-100 shadow-2xs',
     },
     sky: {
       dot: 'bg-sky-500',
       dotRing: 'ring-2 ring-sky-500/25',
-      badge: 'bg-sky-500/15 text-sky-800 border-sky-500/30 dark:bg-sky-400/20 dark:text-sky-200 dark:border-sky-400/35',
-      glass: 'bg-sky-50/95 dark:bg-sky-950/60 border-sky-300/90 dark:border-sky-600/60 text-zinc-950 dark:text-white shadow-[0_1px_2px_rgba(14,165,233,0.12)] dark:shadow-[0_1px_3px_rgba(0,0,0,0.35)]',
+      badge: 'bg-sky-500/12 text-sky-800 border-sky-500/25 dark:bg-sky-400/15 dark:text-sky-200 dark:border-sky-400/30',
+      glass: 'bg-sky-50/80 dark:bg-sky-950/45 border-sky-300/70 dark:border-sky-700/60 text-zinc-900 dark:text-zinc-100 shadow-2xs',
     },
     violet: {
       dot: 'bg-violet-500',
       dotRing: 'ring-2 ring-violet-500/25',
-      badge: 'bg-violet-500/15 text-violet-800 border-violet-500/30 dark:bg-violet-400/20 dark:text-violet-200 dark:border-violet-400/35',
-      glass: 'bg-violet-50/95 dark:bg-violet-950/60 border-violet-300/90 dark:border-violet-600/60 text-zinc-950 dark:text-white shadow-[0_1px_2px_rgba(139,92,246,0.14)] dark:shadow-[0_1px_3px_rgba(0,0,0,0.35)]',
+      badge: 'bg-violet-500/12 text-violet-800 border-violet-500/25 dark:bg-violet-400/15 dark:text-violet-200 dark:border-violet-400/30',
+      glass: 'bg-violet-50/80 dark:bg-violet-950/45 border-violet-300/70 dark:border-violet-700/60 text-zinc-900 dark:text-zinc-100 shadow-2xs',
     },
     indigo: {
       dot: 'bg-indigo-500',
       dotRing: 'ring-2 ring-indigo-500/25',
-      badge: 'bg-indigo-500/15 text-indigo-800 border-indigo-500/30 dark:bg-indigo-400/20 dark:text-indigo-200 dark:border-indigo-400/35',
-      glass: 'bg-indigo-50/95 dark:bg-indigo-950/60 border-indigo-300/90 dark:border-indigo-600/60 text-zinc-950 dark:text-white shadow-[0_1px_2px_rgba(99,102,241,0.14)] dark:shadow-[0_1px_3px_rgba(0,0,0,0.35)]',
+      badge: 'bg-indigo-500/12 text-indigo-800 border-indigo-500/25 dark:bg-indigo-400/15 dark:text-indigo-200 dark:border-indigo-400/30',
+      glass: 'bg-indigo-50/80 dark:bg-indigo-950/45 border-indigo-300/70 dark:border-indigo-700/60 text-zinc-900 dark:text-zinc-100 shadow-2xs',
     },
   };
 
@@ -267,6 +267,17 @@ export const useMarqueeNoticeStore = create<MarqueeNoticeState>((set, get) => ({
     const hasChanges = clean.length > 0 && nextSig !== prevSig;
 
     set({ notices: clean });
+
+    if (clean.length === 0) {
+      if (pulseTimer) {
+        clearTimeout(pulseTimer);
+        pulseTimer = null;
+      }
+      if (get().noticePulse) {
+        set({ noticePulse: false });
+      }
+      return;
+    }
 
     if (isLivePush && hasChanges) {
       if (pulseTimer) clearTimeout(pulseTimer);

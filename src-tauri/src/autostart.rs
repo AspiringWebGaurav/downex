@@ -106,13 +106,19 @@ mod tests {
     #[test]
     #[cfg(target_os = "windows")]
     fn test_autostart_registry_cycle() {
+        // Backup any existing user HKCU\...\Run\Downex value so tests never destroy user config
+        let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+        let prev_val: Option<String> = hkcu
+            .open_subkey_with_flags(RUN_SUBKEY, KEY_READ)
+            .ok()
+            .and_then(|k| k.get_value::<String, _>(VALUE_NAME).ok());
+
         // 1. Enable autostart
         let res = set_autostart_registered(true);
         assert!(res.is_ok(), "Failed to register autostart: {:?}", res);
         assert!(is_autostart_registered(), "Autostart should be registered");
 
         // 2. Verify registry value directly via winreg
-        let hkcu = RegKey::predef(HKEY_CURRENT_USER);
         let run_key = hkcu.open_subkey_with_flags(RUN_SUBKEY, KEY_READ).expect("Must open Run key");
         let val: String = run_key.get_value(VALUE_NAME).expect("Must get Downex value");
         assert!(val.ends_with("--autostart"), "Value must end with --autostart flag: {}", val);
@@ -126,10 +132,23 @@ mod tests {
         // 4. Verify value is removed from registry
         let check_val = run_key.get_value::<String, _>(VALUE_NAME);
         assert!(check_val.is_err(), "Downex value must be deleted from Run key");
+
+        // Restore original value if one existed
+        if let Some(orig) = prev_val {
+            if let Ok((rk, _)) = hkcu.create_subkey_with_flags(RUN_SUBKEY, KEY_SET_VALUE | KEY_READ) {
+                let _ = rk.set_value(VALUE_NAME, &orig);
+            }
+        }
     }
 
     #[test]
     fn test_sync_autostart_on_boot() {
+        let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+        let prev_val: Option<String> = hkcu
+            .open_subkey_with_flags(RUN_SUBKEY, KEY_READ)
+            .ok()
+            .and_then(|k| k.get_value::<String, _>(VALUE_NAME).ok());
+
         let temp_dir = std::env::temp_dir().join(format!("downex_test_db_{}", uuid::Uuid::new_v4()));
         let _ = std::fs::create_dir_all(&temp_dir);
         let db_path = temp_dir.join("test.db");
@@ -146,8 +165,13 @@ mod tests {
         let s2 = db.get_setting("autostart_enabled").unwrap();
         assert_eq!(s2, Some("false".to_string()));
 
-        // Clean up
+        // Clean up / restore
         let _ = set_autostart_registered(false);
+        if let Some(orig) = prev_val {
+            if let Ok((rk, _)) = hkcu.create_subkey_with_flags(RUN_SUBKEY, KEY_SET_VALUE | KEY_READ) {
+                let _ = rk.set_value(VALUE_NAME, &orig);
+            }
+        }
         let _ = std::fs::remove_dir_all(&temp_dir);
     }
 }

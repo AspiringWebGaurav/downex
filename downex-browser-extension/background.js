@@ -15,6 +15,8 @@
 const DOWNEX_BRIDGE_URL = 'http://127.0.0.1:18888';
 let cachedAuthToken = null;
 let isDesktopRunning = false;
+let hasCompletedHealthCheck = false;
+let activeHealthCheckPromise = null;
 
 // Sets to track fallback URLs/IDs and prevent infinite re-interception loops
 const bypassedUrls = new Set();
@@ -35,6 +37,33 @@ function addBypass(id, url) {
     bypassedUrls.add(url);
     setTimeout(() => bypassedUrls.delete(url), 60000);
   }
+}
+
+async function saveSessionToken(token) {
+  cachedAuthToken = token || null;
+  try {
+    if (chrome.storage?.session) {
+      if (token) {
+        await chrome.storage.session.set({ bridgeAuthToken: token });
+      } else {
+        await chrome.storage.session.remove(['bridgeAuthToken']);
+      }
+    }
+  } catch (_) {}
+}
+
+async function loadSessionToken() {
+  if (cachedAuthToken) return cachedAuthToken;
+  try {
+    if (chrome.storage?.session) {
+      const res = await chrome.storage.session.get(['bridgeAuthToken']);
+      if (res?.bridgeAuthToken) {
+        cachedAuthToken = res.bridgeAuthToken;
+        return cachedAuthToken;
+      }
+    }
+  } catch (_) {}
+  return null;
 }
 
 // Enable browser native download UI (bubble and shelf) when Downex Desktop is not running
@@ -67,27 +96,29 @@ function disableBrowserDownloadUI() {
 
 // Updates desktop running state and synchronizes to local storage for content scripts
 function setDesktopRunning(running) {
-  if (isDesktopRunning === running) return;
+  const changed = isDesktopRunning !== running;
   isDesktopRunning = running;
-  try {
-    chrome.storage?.local?.set({ isDownexRunning: running }).catch(() => {});
-  } catch (_) {}
+  if (changed) {
+    try {
+      chrome.storage?.local?.set({ isDownexRunning: running }).catch(() => {});
+    } catch (_) {}
+  }
 
   if (running) {
     disableBrowserDownloadUI();
   } else {
-    cachedAuthToken = null;
+    void saveSessionToken(null);
     enableBrowserDownloadUI();
   }
 }
 
-// Query local Downex Desktop bridge to verify whether app is running
-async function checkDesktopHealth() {
+// Fetch bridge auth token using POST /api/handshake so Chromium always includes Origin: chrome-extension://<id>
+async function fetchHandshakeToken() {
   try {
     const ctrl = new AbortController();
-    const tid = setTimeout(() => ctrl.abort(), 1000);
-    const r = await fetch(`${DOWNEX_BRIDGE_URL}/api/ping`, {
-      method: 'GET',
+    const tid = setTimeout(() => ctrl.abort(), 1200);
+    const r = await fetch(`${DOWNEX_BRIDGE_URL}/api/handshake`, {
+      method: 'POST',
       cache: 'no-store',
       signal: ctrl.signal,
     });
@@ -95,31 +126,77 @@ async function checkDesktopHealth() {
     if (r.ok) {
       const data = await r.json().catch(() => ({}));
       const token = data.token || data.data?.token;
-      if (token) cachedAuthToken = token;
-      setDesktopRunning(true);
-      return true;
+      if (token) {
+        await saveSessionToken(token);
+        return token;
+      }
     }
   } catch (_) {}
-
-  cachedAuthToken = null;
-  setDesktopRunning(false);
-  return false;
+  return null;
 }
 
+// Query local Downex Desktop bridge to verify whether app is running
+async function checkDesktopHealth() {
+  if (activeHealthCheckPromise) return activeHealthCheckPromise;
+
+  activeHealthCheckPromise = (async () => {
+    try {
+      const ctrl = new AbortController();
+      const tid = setTimeout(() => ctrl.abort(), 1000);
+      const r = await fetch(`${DOWNEX_BRIDGE_URL}/api/ping`, {
+        method: 'GET',
+        cache: 'no-store',
+        signal: ctrl.signal,
+      });
+      clearTimeout(tid);
+      if (r.ok) {
+        const data = await r.json().catch(() => ({}));
+        let token = data.token || data.data?.token;
+        if (token) {
+          await saveSessionToken(token);
+        } else if (!cachedAuthToken) {
+          await fetchHandshakeToken();
+        }
+        setDesktopRunning(true);
+        hasCompletedHealthCheck = true;
+        return true;
+      }
+    } catch (_) {}
+
+    setDesktopRunning(false);
+    hasCompletedHealthCheck = true;
+    return false;
+  })().finally(() => {
+    activeHealthCheckPromise = null;
+  });
+
+  return activeHealthCheckPromise;
+}
+
+// Hydrate cached state immediately on service-worker wake-up before initial ping finishes
+try {
+  chrome.storage?.local?.get(['isDownexRunning'], (res) => {
+    if (!hasCompletedHealthCheck && typeof res?.isDownexRunning === 'boolean') {
+      isDesktopRunning = res.isDownexRunning;
+    }
+  });
+} catch (_) {}
+void loadSessionToken();
+
 // Perform initial health check immediately
-checkDesktopHealth();
-chrome.runtime.onStartup.addListener(checkDesktopHealth);
-chrome.runtime.onInstalled.addListener(checkDesktopHealth);
+const initialHealthCheckPromise = checkDesktopHealth();
+chrome.runtime.onStartup.addListener(() => { void checkDesktopHealth(); });
+chrome.runtime.onInstalled.addListener(() => { void checkDesktopHealth(); });
 
 // Periodic keep-alive ping when service worker is active
-setInterval(checkDesktopHealth, 4000);
+setInterval(() => { void checkDesktopHealth(); }, 4000);
 
 // Use alarms for periodic check across service worker sleep cycles
 try {
   chrome.alarms?.create('desktop-health-check', { periodInMinutes: 0.5 });
   chrome.alarms?.onAlarm.addListener((alarm) => {
     if (alarm.name === 'desktop-health-check') {
-      checkDesktopHealth();
+      void checkDesktopHealth();
     }
   });
 } catch (_) {}
@@ -127,20 +204,32 @@ try {
 // Proactively check health when tabs navigate, activate, or window gains focus
 try {
   chrome.tabs?.onActivated.addListener(() => {
-    checkDesktopHealth();
+    void checkDesktopHealth();
   });
   chrome.tabs?.onUpdated.addListener((tabId, changeInfo) => {
     if (changeInfo.status === 'loading') {
-      checkDesktopHealth();
+      void checkDesktopHealth();
     }
   });
   chrome.windows?.onFocusChanged?.addListener(() => {
-    checkDesktopHealth();
+    void checkDesktopHealth();
   });
 } catch (_) {}
 
-async function getBridgeToken() {
-  if (cachedAuthToken) return cachedAuthToken;
+async function getBridgeToken(forceRefresh = false) {
+  if (!forceRefresh) {
+    const existing = await loadSessionToken();
+    if (existing) return existing;
+  } else {
+    await saveSessionToken(null);
+  }
+
+  const handshakeToken = await fetchHandshakeToken();
+  if (handshakeToken) {
+    setDesktopRunning(true);
+    return handshakeToken;
+  }
+
   try {
     const ctrl = new AbortController();
     const tid = setTimeout(() => ctrl.abort(), 1200);
@@ -151,16 +240,16 @@ async function getBridgeToken() {
     });
     clearTimeout(tid);
     if (r.ok) {
-      const data = await r.json();
+      const data = await r.json().catch(() => ({}));
       const token = data.token || data.data?.token;
       if (token) {
-        cachedAuthToken = token;
+        await saveSessionToken(token);
         setDesktopRunning(true);
         return token;
       }
     }
   } catch (_) {}
-  cachedAuthToken = null;
+
   setDesktopRunning(false);
   return null;
 }
@@ -210,12 +299,16 @@ async function fallbackToBrowserDownload(url, filename, tabId) {
 // Send download payload to Downex Desktop bridge
 async function sendToDownex(payload) {
   try {
-    const token = await getBridgeToken();
-    const headers = { 'Content-Type': 'application/json' };
-    if (token) {
-      headers['Authorization'] = `Bearer ${token}`;
-      headers['X-Downex-Token'] = token;
+    const token = await getBridgeToken(false);
+    if (!token) {
+      return false;
     }
+
+    const headers = {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${token}`,
+      'X-Downex-Token': token,
+    };
 
     const bodyData = {
       url: payload.url,
@@ -238,8 +331,7 @@ async function sendToDownex(payload) {
     clearTimeout(tid);
 
     if (resp.status === 401) {
-      cachedAuthToken = null;
-      const freshToken = await getBridgeToken();
+      const freshToken = await getBridgeToken(true);
       if (freshToken) {
         headers['Authorization'] = `Bearer ${freshToken}`;
         headers['X-Downex-Token'] = freshToken;
@@ -261,7 +353,6 @@ async function sendToDownex(payload) {
     }
     return false;
   } catch (err) {
-    cachedAuthToken = null;
     setDesktopRunning(false);
     return false;
   }
@@ -272,7 +363,7 @@ chrome.action.onClicked.addListener(async () => {
   const isHealthy = await checkDesktopHealth();
   if (isHealthy) {
     try {
-      const token = await getBridgeToken();
+      const token = await getBridgeToken(false);
       const headers = {};
       if (token) headers['Authorization'] = `Bearer ${token}`;
       await fetch(`${DOWNEX_BRIDGE_URL}/api/ping`, { method: 'GET', headers });
@@ -297,8 +388,9 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   const targetUrl = info.linkUrl || info.srcUrl;
   if (!targetUrl) return;
 
-  // If Downex Desktop is not running, fall back directly to browser download
-  if (!isDesktopRunning) {
+  // Ensure live health state even if service worker just woke from sleep
+  const healthy = await checkDesktopHealth();
+  if (!healthy) {
     await fallbackToBrowserDownload(targetUrl, undefined, tab?.id);
     return;
   }
@@ -329,10 +421,12 @@ chrome.downloads.onCreated.addListener((downloadItem) => {
   const url = downloadItem.url;
   if (!url.startsWith('http://') && !url.startsWith('https://')) return;
 
-  // If bypassed or Downex Desktop is not running:
+  // If bypassed or Downex Desktop is known not to be running:
   // DO NOT pause, DO NOT suppress browser download UI!
   if (isBypassed(downloadItem.id, url) || !isDesktopRunning) {
-    enableBrowserDownloadUI();
+    if (hasCompletedHealthCheck && !isDesktopRunning) {
+      enableBrowserDownloadUI();
+    }
     return;
   }
 
@@ -350,22 +444,26 @@ chrome.downloads.onCreated.addListener((downloadItem) => {
 const handledDownloadIds = new Set();
 const recentUrls = new Map();
 
+function finishWithBrowserDownload(downloadItem, suggest) {
+  enableBrowserDownloadUI();
+  try {
+    if (downloadItem.filename) {
+      suggest({ filename: downloadItem.filename });
+    } else {
+      suggest();
+    }
+  } catch (_) {}
+}
+
 chrome.downloads.onDeterminingFilename.addListener((downloadItem, suggest) => {
   if (!downloadItem || !downloadItem.url) return;
 
   const url = downloadItem.url;
   if (!url.startsWith('http://') && !url.startsWith('https://')) return;
 
-  // If this download was triggered as a browser fallback, or if Downex is not running:
-  if (isBypassed(downloadItem.id, url) || !isDesktopRunning) {
-    enableBrowserDownloadUI();
-    try {
-      if (downloadItem.filename) {
-        suggest({ filename: downloadItem.filename });
-      } else {
-        suggest();
-      }
-    } catch (_) {}
+  // If this download was explicitly bypassed, or we have already verified Downex is offline:
+  if (isBypassed(downloadItem.id, url) || (hasCompletedHealthCheck && !isDesktopRunning)) {
+    finishWithBrowserDownload(downloadItem, suggest);
     return;
   }
 
@@ -395,6 +493,20 @@ chrome.downloads.onDeterminingFilename.addListener((downloadItem, suggest) => {
   }
 
   (async () => {
+    // If the service worker just woke up, verify desktop health before deciding
+    if (!hasCompletedHealthCheck || !isDesktopRunning) {
+      const alive = await (hasCompletedHealthCheck ? checkDesktopHealth() : initialHealthCheckPromise);
+      if (!alive) {
+        addBypass(downloadItem.id, url);
+        recentUrls.delete(url);
+        try {
+          await chrome.downloads.resume(downloadItem.id);
+        } catch (_) {}
+        finishWithBrowserDownload(downloadItem, suggest);
+        return;
+      }
+    }
+
     let cookiesStr = '';
     try {
       const cookies = await chrome.cookies.getAll({ url });
@@ -420,17 +532,10 @@ chrome.downloads.onDeterminingFilename.addListener((downloadItem, suggest) => {
       addBypass(downloadItem.id, url);
       recentUrls.delete(url);
       setDesktopRunning(false);
-      enableBrowserDownloadUI();
       try {
         await chrome.downloads.resume(downloadItem.id);
       } catch (_) {}
-      try {
-        if (downloadItem.filename) {
-          suggest({ filename: downloadItem.filename });
-        } else {
-          suggest();
-        }
-      } catch (_) {}
+      finishWithBrowserDownload(downloadItem, suggest);
     }
   })();
 
@@ -448,8 +553,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if (message.type === 'INTERCEPT_LINK_CLICK' && message.url) {
     (async () => {
-      // If we already know Downex Desktop is not running, immediately fall back to browser download
-      if (!isDesktopRunning) {
+      // Verify live health state if service worker just woke up or status was stale
+      const healthy = hasCompletedHealthCheck && isDesktopRunning
+        ? true
+        : await checkDesktopHealth();
+
+      if (!healthy) {
         const handled = await fallbackToBrowserDownload(message.url, message.filename, sender.tab?.id);
         sendResponse({ success: false, handledByBrowser: handled });
         return;

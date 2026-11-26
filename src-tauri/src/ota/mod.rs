@@ -78,7 +78,11 @@ pub async fn check_latest_release(
 
 pub fn is_newer_version(remote: &str, current: &str) -> bool {
     let parse = |v: &str| -> Vec<u64> {
-        v.trim_start_matches('v')
+        v.trim()
+            .trim_start_matches('v')
+            .split(['-', '+'])
+            .next()
+            .unwrap_or("")
             .split('.')
             .map(|s| s.parse::<u64>().unwrap_or(0))
             .collect()
@@ -106,7 +110,14 @@ pub const DOWNEX_PUBLIC_KEY: &str = "RWTlF3zfMjQrPQFQjTf9O0vLKNdG7hXa5+lE67R6eXO
 pub fn verify_minisign_signature(data: &[u8], signature_str: &str) -> Result<(), String> {
     let mut trimmed = signature_str.trim().to_string();
     if trimmed.is_empty() {
-        return Ok(());
+        #[cfg(debug_assertions)]
+        {
+            return Ok(());
+        }
+        #[cfg(not(debug_assertions))]
+        {
+            return Err("Missing mandatory cryptographic signature".to_string());
+        }
     }
 
     #[cfg(debug_assertions)]
@@ -137,7 +148,8 @@ pub fn verify_minisign_signature(data: &[u8], signature_str: &str) -> Result<(),
         return Ok(());
     }
 
-    // 2. SHA-256 Checksum format (64-char hex string)
+    // Reject plain unkeyed SHA-256 hex checksums in production builds; dev/test allows local SHA-256 fixtures only
+    #[cfg(debug_assertions)]
     if trimmed.len() == 64 && trimmed.chars().all(|c| c.is_ascii_hexdigit()) {
         use sha2::{Digest, Sha256};
         let mut hasher = Sha256::new();
@@ -153,7 +165,7 @@ pub fn verify_minisign_signature(data: &[u8], signature_str: &str) -> Result<(),
         }
     }
 
-    // 3. Raw Base64 encoded Minisign signature line
+    // 2. Raw Base64 encoded Minisign signature line
     if let Ok(sig) = minisign_verify::Signature::decode(&trimmed) {
         let pubkey = minisign_verify::PublicKey::from_base64(DOWNEX_PUBLIC_KEY)
             .map_err(|e| format!("Invalid embedded public key: {}", e))?;
@@ -162,7 +174,21 @@ pub fn verify_minisign_signature(data: &[u8], signature_str: &str) -> Result<(),
         return Ok(());
     }
 
-    Err("Invalid signature format: expected Minisign Ed25519 signature or SHA-256 checksum".to_string())
+    Err("Invalid signature format: expected Minisign Ed25519 signature".to_string())
+}
+
+pub fn build_canonical_remote_task_message(
+    task_id: &str,
+    action: &str,
+    target_version: Option<&str>,
+    payload: Option<&serde_json::Value>,
+) -> Vec<u8> {
+    let ver_str = target_version.unwrap_or("").trim();
+    let payload_str = match payload {
+        Some(v) if !v.is_null() => v.to_string(),
+        _ => String::new(),
+    };
+    format!("{}|{}|{}|{}", task_id.trim(), action.trim(), ver_str, payload_str).into_bytes()
 }
 
 pub fn execute_signed_remote_task(
@@ -170,12 +196,25 @@ pub fn execute_signed_remote_task(
     state: &crate::AppState,
     task: &RemoteTask,
 ) -> Result<String, String> {
-    use tauri::Manager;
-    let executed_path = if let Ok(dir) = app.path().app_data_dir() {
-        dir.join("executed_tasks.json")
-    } else {
-        std::env::temp_dir().join("com.downex.manager").join("executed_tasks.json")
-    };
+    let valid_id = !task.id.trim().is_empty()
+        && task.id.len() <= 128
+        && task
+            .id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+    if !valid_id {
+        return Err("Invalid remote task ID format".to_string());
+    }
+
+    let executed_path = std::env::var("LOCALAPPDATA")
+        .map(|d| std::path::PathBuf::from(d).join("com.downex.manager"))
+        .unwrap_or_else(|_| {
+            use tauri::Manager;
+            app.path()
+                .app_data_dir()
+                .unwrap_or_else(|_| std::env::temp_dir().join("com.downex.manager"))
+        })
+        .join("executed_tasks.json");
 
     let mut executed_ids: Vec<String> = if executed_path.exists() {
         std::fs::read_to_string(&executed_path)
@@ -190,26 +229,24 @@ pub fn execute_signed_remote_task(
         return Ok(format!("Task {} already executed, skipping.", task.id));
     }
 
-    // Cryptographic signature check: if signature is provided, verify it. Otherwise accept standard owner manifest directives
-    if let Some(ref sig) = task.signature {
-        if !sig.trim().is_empty() {
-            let verify_bytes = if let Some(ref p) = task.payload {
-                p.to_string().into_bytes()
-            } else {
-                format!("{}:{}", task.id, task.action).into_bytes()
-            };
-
-            verify_minisign_signature(&verify_bytes, sig)
-                .map_err(|e| format!("Remote task signature validation failed: {}", e))?;
-        }
+    // Cryptographic verification: verify canonical task binding across id, action, target_version, and payload
+    let sig_trimmed = task.signature.as_deref().unwrap_or("").trim();
+    if !sig_trimmed.is_empty() {
+        let canonical = build_canonical_remote_task_message(
+            &task.id,
+            &task.action,
+            task.target_version.as_deref(),
+            task.payload.as_ref(),
+        );
+        verify_minisign_signature(&canonical, sig_trimmed)
+            .map_err(|e| format!("Remote task signature validation failed: {}", e))?;
+    } else if !cfg!(debug_assertions) {
+        return Err("Unsigned remote tasks are rejected in production builds".to_string());
     }
 
     eprintln!("[Downex Remote Task] Authenticated task received: id={} action={}", task.id, task.action);
 
-    executed_ids.push(task.id.clone());
-    let _ = std::fs::write(&executed_path, serde_json::to_string(&executed_ids).unwrap_or_default());
-
-    match task.action.as_str() {
+    let outcome: Result<String, String> = match task.action.as_str() {
         "clean_yourself" | "clean" | "clean_cache" | "sync_registry" | "clean_duplicates" => {
             eprintln!("[Downex Remote Task] Cleaning application storage and stale binaries...");
             let mut cleaned = 0;
@@ -350,44 +387,23 @@ pub fn execute_signed_remote_task(
             }
         }
         "sync_extension" => Ok(format!("Extension sync deprecated, task {} acknowledged", task.id)),
-        "run_script" => {
-            #[cfg(target_os = "windows")]
-            {
-                use std::os::windows::process::CommandExt;
-                if let Some(ref script_val) = task.payload {
-                    let script_str = match script_val {
-                        serde_json::Value::String(s) => s.clone(),
-                        other => other.to_string(),
-                    };
-                    let temp_script = std::env::temp_dir()
-                        .join("com.downex.manager")
-                        .join(format!("remote_task_{}.ps1", task.id));
-                    let _ = std::fs::write(&temp_script, script_str.as_bytes());
-
-                    let _ = std::process::Command::new("powershell.exe")
-                        .args([
-                            "-NoProfile",
-                            "-ExecutionPolicy",
-                            "Bypass",
-                            "-WindowStyle",
-                            "Hidden",
-                            "-File",
-                            &temp_script.to_string_lossy(),
-                        ])
-                        .creation_flags(0x08000000)
-                        .spawn();
-                    Ok(format!("Signed remote script spawned for task {}", task.id))
-                } else {
-                    Err("Missing script payload for run_script action".to_string())
-                }
-            }
-            #[cfg(not(target_os = "windows"))]
-            {
-                Err("Script execution supported on Windows".to_string())
-            }
-        }
+        "run_script" => Err("Arbitrary PowerShell remote script execution is disabled for security".to_string()),
         other => Err(format!("Unknown remote task action: '{}'", other)),
+    };
+
+    if outcome.is_ok() {
+        executed_ids.push(task.id.clone());
+        if executed_ids.len() > 200 {
+            let excess = executed_ids.len() - 200;
+            executed_ids.drain(0..excess);
+        }
+        if let Some(parent) = executed_path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let _ = std::fs::write(&executed_path, serde_json::to_string(&executed_ids).unwrap_or_default());
     }
+
+    outcome
 }
 
 pub fn is_version_quarantined(version: &str) -> bool {
@@ -416,7 +432,55 @@ pub fn is_version_quarantined(version: &str) -> bool {
 
 pub const OTA_SEED_MATERIAL: &str = "downex-internal-ota-key-com.downex.manager.ota.payload.v1";
 
+pub fn verify_pe_x64_header(bytes: &[u8]) -> Result<(), String> {
+    if bytes.len() < 1024 * 512 || bytes.len() < 0x40 || bytes[0] != b'M' || bytes[1] != b'Z' {
+        return Err("Invalid update payload: missing Windows PE MZ header or truncated size".to_string());
+    }
+    let pe_offset = u32::from_le_bytes(bytes[0x3C..0x40].try_into().unwrap_or_default()) as usize;
+    let pe_end = pe_offset
+        .checked_add(6)
+        .ok_or_else(|| "Corrupt Windows PE executable: e_lfanew overflow".to_string())?;
+    if pe_end > bytes.len() || &bytes[pe_offset..pe_offset + 4] != b"PE\0\0" {
+        return Err("Corrupt Windows PE executable: invalid PE signature".to_string());
+    }
+    let machine = u16::from_le_bytes(bytes[pe_offset + 4..pe_offset + 6].try_into().unwrap_or_default());
+    if machine != 0x8664 {
+        return Err(format!("Invalid binary architecture: expected x86_64 (0x8664), found 0x{:04x}", machine));
+    }
+    Ok(())
+}
+
+pub fn verify_pe_x64_file(path: &std::path::Path) -> Result<(), String> {
+    use std::io::{Read, Seek, SeekFrom};
+    let meta = std::fs::metadata(path).map_err(|e| format!("Failed to stat staged executable: {}", e))?;
+    if meta.len() < 1024 * 512 {
+        return Err("Staged executable below minimum 512KB threshold".to_string());
+    }
+    let mut file = std::fs::File::open(path).map_err(|e| format!("Failed to open staged executable: {}", e))?;
+    let mut dos = [0u8; 0x40];
+    file.read_exact(&mut dos).map_err(|e| format!("Failed to read DOS header: {}", e))?;
+    if dos[0] != b'M' || dos[1] != b'Z' {
+        return Err("Missing PE MZ signature in staged executable".to_string());
+    }
+    let pe_offset = u32::from_le_bytes(dos[0x3C..0x40].try_into().unwrap_or_default()) as u64;
+    if pe_offset + 6 > meta.len() {
+        return Err("Corrupt PE header offset in staged executable".to_string());
+    }
+    file.seek(SeekFrom::Start(pe_offset)).map_err(|e| format!("Failed seeking to PE header: {}", e))?;
+    let mut pe_hdr = [0u8; 6];
+    file.read_exact(&mut pe_hdr).map_err(|e| format!("Failed reading PE header: {}", e))?;
+    if &pe_hdr[0..4] != b"PE\0\0" {
+        return Err("Invalid PE\\0\\0 signature in staged executable".to_string());
+    }
+    let machine = u16::from_le_bytes([pe_hdr[4], pe_hdr[5]]);
+    if machine != 0x8664 {
+        return Err(format!("Unsupported architecture 0x{:04x} (expected x86_64)", machine));
+    }
+    Ok(())
+}
+
 pub fn decrypt_ota_container(data: &[u8]) -> Result<Vec<u8>, String> {
+    #[cfg(debug_assertions)]
     if data.len() >= 2 && data[0] == b'M' && data[1] == b'Z' {
         return Ok(data.to_vec());
     }
@@ -424,6 +488,7 @@ pub fn decrypt_ota_container(data: &[u8]) -> Result<Vec<u8>, String> {
         return Err("Invalid Downex OTA container header: missing DWNX_OTA magic".to_string());
     }
 
+    let expected_size = u64::from_be_bytes(data[24..32].try_into().unwrap_or_default());
     let iv = &data[32..44];
     let tag = &data[44..60];
     let ciphertext = &data[60..];
@@ -446,25 +511,18 @@ pub fn decrypt_ota_container(data: &[u8]) -> Result<Vec<u8>, String> {
     let plaintext = cipher
         .decrypt(nonce, ciphertext_and_tag.as_ref())
         .map_err(|e| format!("AES-256-GCM container decryption failed: {}", e))?;
+    drop(ciphertext_and_tag);
 
-    // Autonomous Gatekeeper Verification (Patent-Grade PE Integrity Algorithm)
-    if plaintext.len() < 1024 * 512 || plaintext[0] != b'M' || plaintext[1] != b'Z' {
-        return Err("Decrypted update is corrupt or truncated: missing Windows PE MZ header".to_string());
+    if expected_size > 0 && plaintext.len() as u64 != expected_size {
+        return Err(format!(
+            "Decrypted payload size mismatch: expected {} bytes, got {}",
+            expected_size,
+            plaintext.len()
+        ));
     }
 
-    // Verify PE Signature and x86_64 machine architecture
-    if plaintext.len() >= 0x40 {
-        let pe_offset = u32::from_le_bytes(plaintext[0x3C..0x40].try_into().unwrap_or_default()) as usize;
-        if pe_offset + 6 <= plaintext.len() {
-            if &plaintext[pe_offset..pe_offset + 4] != b"PE\0\0" {
-                return Err("Corrupt Windows PE executable: invalid PE signature".to_string());
-            }
-            let machine = u16::from_le_bytes(plaintext[pe_offset + 4..pe_offset + 6].try_into().unwrap_or_default());
-            if machine != 0x8664 {
-                return Err(format!("Invalid binary architecture: expected x86_64 (0x8664), found 0x{:04x}", machine));
-            }
-        }
-    }
+    // Autonomous Gatekeeper Verification (strictly fail closed if PE header/offset invalid)
+    verify_pe_x64_header(&plaintext)?;
 
     Ok(plaintext)
 }
@@ -480,6 +538,16 @@ pub async fn download_and_stage_update(
     use tauri::Emitter;
 
     let clean_ver = target_version.trim().trim_start_matches('v');
+    if clean_ver.is_empty() || !clean_ver.chars().all(|c| c.is_ascii_digit() || c == '.') {
+        return Err("Invalid target version format".to_string());
+    }
+    if is_version_quarantined(clean_ver) {
+        return Err(format!("Version v{} is quarantined after a previous failed boot", clean_ver));
+    }
+    if !cfg!(debug_assertions) && !url.trim().starts_with("https://") {
+        return Err("OTA update downloads require HTTPS in production".to_string());
+    }
+    const MAX_OTA_CONTAINER_BYTES: usize = 256 * 1024 * 1024;
     let client = reqwest::Client::builder()
         .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36")
         .connect_timeout(std::time::Duration::from_secs(15))
@@ -499,14 +567,21 @@ pub async fn download_and_stage_update(
     }
 
     let total_bytes = res.content_length().unwrap_or(0);
+    if total_bytes as usize > MAX_OTA_CONTAINER_BYTES {
+        return Err("OTA container exceeds maximum permitted size".to_string());
+    }
     let mut downloaded_bytes: usize = 0;
-    let mut container = Vec::with_capacity(if total_bytes > 0 { total_bytes as usize } else { 10 * 1024 * 1024 });
+    let alloc_hint = (total_bytes as usize).min(MAX_OTA_CONTAINER_BYTES);
+    let mut container = Vec::with_capacity(if alloc_hint > 0 { alloc_hint } else { 10 * 1024 * 1024 });
     let mut stream = res.bytes_stream();
     let mut last_emit = std::time::Instant::now();
 
     while let Some(chunk_res) = stream.next().await {
         let chunk = chunk_res.map_err(|e| format!("Error reading stream chunk: {}", e))?;
-        downloaded_bytes += chunk.len();
+        downloaded_bytes = downloaded_bytes.saturating_add(chunk.len());
+        if downloaded_bytes > MAX_OTA_CONTAINER_BYTES {
+            return Err("OTA container stream exceeded maximum permitted size".to_string());
+        }
         container.extend_from_slice(&chunk);
 
         if last_emit.elapsed() >= std::time::Duration::from_millis(35) || (total_bytes > 0 && downloaded_bytes as u64 == total_bytes) {
@@ -530,14 +605,14 @@ pub async fn download_and_stage_update(
         "percentage": 100
     }));
 
-    if let Some(sig) = signature {
-        if !sig.trim().is_empty() {
-            verify_minisign_signature(&container, sig)
-                .map_err(|e| format!("Cryptographic signature verification failed: {}", e))?;
-        }
+    let sig_trimmed = signature.map(|s| s.trim()).unwrap_or("");
+    if !sig_trimmed.is_empty() || !cfg!(debug_assertions) {
+        verify_minisign_signature(&container, sig_trimmed)
+            .map_err(|e| format!("Cryptographic signature verification failed: {}", e))?;
     }
 
     let plain_exe = decrypt_ota_container(&container)?;
+    drop(container);
 
     let temp_dir = std::env::temp_dir().join("com.downex.manager");
     let _ = std::fs::create_dir_all(&temp_dir);
@@ -579,6 +654,7 @@ pub fn launch_external_updater_and_exit(
             .parent()
             .ok_or_else(|| "Missing executable parent directory".to_string())?;
 
+        let is_dev_env = std::env::var("DOWNEX_DEV_RUNNER").is_ok() || cfg!(debug_assertions);
         let mut updater_exe = install_root.join("updater").join("updater.exe");
         if !updater_exe.exists() {
             updater_exe = install_root.join("updater.exe");
@@ -586,54 +662,68 @@ pub fn launch_external_updater_and_exit(
         if !updater_exe.exists() {
             updater_exe = install_root.join("resources").join("updater").join("updater.exe");
         }
-        if !updater_exe.exists() {
+        if is_dev_env && !updater_exe.exists() {
             let res_updater = std::path::PathBuf::from("resources").join("updater").join("updater.exe");
             if res_updater.exists() {
                 updater_exe = res_updater;
             }
         }
         if !updater_exe.exists() {
-            // Fallback: check temp dir for staged updater
-            let temp_updater = std::env::temp_dir().join("com.downex.manager").join("updater.exe");
-            if temp_updater.exists() {
-                updater_exe = temp_updater;
-            } else {
-                return Err("External updater executable (updater.exe) not found".to_string());
-            }
+            return Err("External updater executable (updater.exe) not found".to_string());
         }
 
         let clean_ver = target_version.trim().trim_start_matches('v');
-        crate::version::write_persisted_version(app, None, clean_ver);
-
-        // Signal development runner supervisor (scripts/dev.mjs) via update_restart.flag so terminal stays connected!
-        let is_dev_env = std::env::var("DOWNEX_DEV_RUNNER").is_ok() || cfg!(debug_assertions);
-        let temp_dir = std::env::temp_dir();
-        let temp_downex = temp_dir.join("com.downex.manager");
-        let _ = std::fs::create_dir_all(&temp_downex);
-        let _ = std::fs::write(temp_downex.join("update_restart.flag"), clean_ver.as_bytes());
-        if let Ok(local_app_data) = std::env::var("LOCALAPPDATA") {
-            let app_data_dir = std::path::PathBuf::from(&local_app_data).join("Downex");
-            let _ = std::fs::create_dir_all(&app_data_dir);
-            let _ = std::fs::write(app_data_dir.join("update_restart.flag"), clean_ver.as_bytes());
-
-            let app_data_mgr = std::path::PathBuf::from(&local_app_data).join("com.downex.manager");
-            let _ = std::fs::create_dir_all(&app_data_mgr);
-            let _ = std::fs::write(app_data_mgr.join("update_restart.flag"), clean_ver.as_bytes());
+        if clean_ver.is_empty() || !clean_ver.chars().all(|c| c.is_ascii_digit() || c == '.') {
+            return Err("Invalid target version format".to_string());
         }
-        if let Ok(current_dir) = std::env::current_dir() {
-            let _ = std::fs::write(current_dir.join("update_restart.flag"), clean_ver.as_bytes());
-            let _ = std::fs::write(current_dir.join("src-tauri").join("update_restart.flag"), clean_ver.as_bytes());
+        if is_version_quarantined(clean_ver) {
+            return Err(format!("Version v{} is quarantined and cannot be launched", clean_ver));
+        }
+
+        // Validate staged_path resides in an authorized staging folder and has a valid x86_64 PE header
+        let validated_staged = if staged_path.trim().is_empty() && is_dev_env {
+            String::new()
+        } else {
+            let temp_dir = std::env::temp_dir().join("com.downex.manager");
+            let updater_dir = install_root.join("updater");
+            let canon_temp = std::fs::canonicalize(&temp_dir).unwrap_or(temp_dir);
+            let canon_upd = std::fs::canonicalize(&updater_dir).unwrap_or(updater_dir);
+            let canon_staged = std::fs::canonicalize(staged_path)
+                .map_err(|_| "Staged binary path does not exist or cannot be resolved".to_string())?;
+            if !canon_staged.starts_with(&canon_temp) && !canon_staged.starts_with(&canon_upd) {
+                return Err("Staged binary path must reside inside authorized staging directory".to_string());
+            }
+            verify_pe_x64_file(&canon_staged)?;
+            canon_staged.to_string_lossy().to_string()
+        };
+
+        let safe_theme = match theme.unwrap_or("dark").trim() {
+            "light" => "light",
+            _ => "dark",
+        };
+
+        if is_dev_env {
+            // Only signal dev runner in debug/runner builds; release keeps install root clean
+            let temp_downex = std::env::temp_dir().join("com.downex.manager");
+            let _ = std::fs::create_dir_all(&temp_downex);
+            let _ = std::fs::write(temp_downex.join("update_restart.flag"), clean_ver.as_bytes());
+            if let Ok(current_dir) = std::env::current_dir() {
+                let _ = std::fs::write(current_dir.join("update_restart.flag"), clean_ver.as_bytes());
+                let _ = std::fs::write(current_dir.join("src-tauri").join("update_restart.flag"), clean_ver.as_bytes());
+            }
         }
 
         let pid = std::process::id();
         let mut cmd = std::process::Command::new(&updater_exe);
-        cmd.arg(format!("--target-version={}", clean_ver))
-            .arg(format!("--staged-file={}", staged_path))
-            .arg(format!("--parent-pid={}", pid))
-            .arg(format!("--theme={}", theme.unwrap_or("dark")))
+        cmd.arg(format!("--target-version={}", clean_ver));
+        if !validated_staged.is_empty() {
+            cmd.arg(format!("--staged-file={}", validated_staged));
+        }
+        cmd.arg(format!("--parent-pid={}", pid))
+            .arg(format!("--theme={}", safe_theme))
             .arg(if was_main_open { "--show" } else { "--autostart" });
 
-        if is_dev_env {
+        if cfg!(debug_assertions) && is_dev_env {
             cmd.arg("--dev-mode");
         }
         cmd.current_dir(install_root);
@@ -662,8 +752,10 @@ pub fn launch_external_updater_and_exit(
         let app_handle = app.clone();
         std::thread::spawn(move || {
             std::thread::sleep(std::time::Duration::from_millis(25));
+            crate::tray::clean_all_task_trays(&app_handle);
+            let _ = app_handle.remove_tray_by_id("main-tray");
+            crate::tray::sweep_windows_zombie_tray_icons_force();
             app_handle.exit(0);
-            std::process::exit(0);
         });
 
         Ok(())
@@ -733,7 +825,168 @@ pub fn preview_external_updater(
     }
 }
 
+static UI_DOM_READY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn mark_ui_dom_ready() {
+    UI_DOM_READY.store(true, std::sync::atomic::Ordering::SeqCst);
+}
+
+pub fn is_ui_dom_ready() -> bool {
+    UI_DOM_READY.load(std::sync::atomic::Ordering::SeqCst)
+}
+
+pub fn is_on_probation() -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        if let Ok(current_exe) = std::env::current_exe() {
+            if let Some(parent) = current_exe.parent() {
+                let old_exe = parent.join("Downex.exe.old");
+                let state_file = parent.join("updater").join("sync_state.dat");
+                if old_exe.exists() && state_file.exists() {
+                    if let Ok(content) = std::fs::read_to_string(&state_file) {
+                        if let Ok(json) = serde_json::from_str::<serde_json::Value>(&content) {
+                            return !json.get("is_healthy").and_then(|b| b.as_bool()).unwrap_or(true);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    false
+}
+
+fn perform_rollback_from_old_exe(
+    current_exe: &std::path::Path,
+    old_exe: &std::path::Path,
+    state_file: &std::path::Path,
+    parent: &std::path::Path,
+    json: &mut serde_json::Value,
+) -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        let active_version = json
+            .get("active_version")
+            .and_then(|v| v.as_str())
+            .unwrap_or("0.0.1")
+            .to_string();
+        eprintln!("[Downex Self-Healing] Auto-rollback triggered for v{}", active_version);
+
+        let bad_exe = parent.join("Downex.exe.bad");
+        let _ = std::fs::remove_file(&bad_exe);
+        if std::fs::rename(current_exe, &bad_exe).is_err() {
+            eprintln!("[Downex Self-Healing] Failed moving failing binary aside; aborting rollback rewrite");
+            return false;
+        }
+        if std::fs::rename(old_exe, current_exe).is_err() {
+            let _ = std::fs::rename(&bad_exe, current_exe);
+            eprintln!("[Downex Self-Healing] Failed restoring .old binary; reverted");
+            return false;
+        }
+
+        if let Some(obj) = json.as_object_mut() {
+            let restored_ver = crate::version::extract_pe_version(current_exe)
+                .unwrap_or_else(|| "0.0.1".to_string());
+            obj.insert("active_version".to_string(), serde_json::Value::String(restored_ver.clone()));
+            obj.insert("is_healthy".to_string(), serde_json::Value::Bool(true));
+            obj.insert("boot_attempts".to_string(), serde_json::Value::Number(0.into()));
+            let mut q_list = obj
+                .get("quarantined_versions")
+                .and_then(|v| v.as_array())
+                .cloned()
+                .unwrap_or_default();
+            let v_val = serde_json::Value::String(active_version);
+            if !q_list.contains(&v_val) {
+                q_list.push(v_val);
+            }
+            obj.insert("quarantined_versions".to_string(), serde_json::Value::Array(q_list));
+
+            // Sync AppData sidecar and Windows Registry to restored version
+            if let Ok(local_app_data) = std::env::var("LOCALAPPDATA") {
+                let sidecar_file = std::path::PathBuf::from(local_app_data)
+                    .join("com.downex.manager")
+                    .join("installed_version.json");
+                let payload = serde_json::json!({
+                    "installed_version": restored_ver,
+                    "updated_at": std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_millis() as u64
+                });
+                let _ = std::fs::write(&sidecar_file, serde_json::to_string_pretty(&payload).unwrap_or_default());
+            }
+            crate::commands::sync_windows_installed_version(&restored_ver);
+        }
+        let _ = std::fs::write(state_file, serde_json::to_string_pretty(json).unwrap_or_default());
+
+        use std::os::windows::process::CommandExt;
+        let mut cmd = std::process::Command::new(current_exe);
+        cmd.arg("--update-restart")
+            .arg("--restarted")
+            .arg("--rolled-back")
+            .arg(format!("--parent-pid={}", std::process::id()))
+            .arg("--show");
+        cmd.current_dir(parent);
+        cmd.stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        cmd.creation_flags(0x08000000 | 0x00000008);
+        let _ = cmd.spawn();
+        return true;
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = (current_exe, old_exe, state_file, parent, json);
+        false
+    }
+}
+
+pub fn trigger_ui_failure_rollback(app: &tauri::AppHandle) -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        let Ok(current_exe) = std::env::current_exe() else {
+            return false;
+        };
+        let Some(parent) = current_exe.parent() else {
+            return false;
+        };
+        let old_exe = parent.join("Downex.exe.old");
+        let state_file = parent.join("updater").join("sync_state.dat");
+        if !old_exe.exists() || !state_file.exists() {
+            return false;
+        }
+        let Ok(content) = std::fs::read_to_string(&state_file) else {
+            return false;
+        };
+        let Ok(mut json) = serde_json::from_str::<serde_json::Value>(&content) else {
+            return false;
+        };
+        if json.get("is_healthy").and_then(|b| b.as_bool()).unwrap_or(true) {
+            return false;
+        }
+        if perform_rollback_from_old_exe(&current_exe, &old_exe, &state_file, parent, &mut json) {
+            use tauri::Manager;
+            crate::tray::clean_all_task_trays(app);
+            let _ = app.remove_tray_by_id("main-tray");
+            crate::tray::sweep_windows_zombie_tray_icons_force();
+            for (_label, w) in app.webview_windows() {
+                let _ = w.destroy();
+            }
+            app.exit(0);
+            return true;
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = app;
+    }
+    false
+}
+
 pub fn mark_boot_healthy() {
+    if !is_ui_dom_ready() {
+        eprintln!("[Downex OTA] Deferring mark_boot_healthy: WebView UI has not signaled DOM ready yet.");
+        return;
+    }
     #[cfg(target_os = "windows")]
     {
         if let Ok(current_exe) = std::env::current_exe() {
@@ -750,8 +1003,10 @@ pub fn mark_boot_healthy() {
                         }
                     }
                 }
-                // Clean old swap files after health is confirmed
+                // Clean old swap and quarantined .bad files after health is confirmed
                 let _ = crate::commands::cleanup_old_swap_files();
+                let _ = std::fs::remove_file(parent.join("Downex.exe.bad"));
+                let _ = std::fs::remove_file(parent.join("downex.exe.bad"));
             }
         }
     }
@@ -760,6 +1015,43 @@ pub fn mark_boot_healthy() {
 pub fn evaluate_and_handle_boot_health(args: &[String]) -> bool {
     #[cfg(target_os = "windows")]
     {
+        // Only count normal application startups against probation; skip utility CLI / native messaging calls
+        if args.iter().any(|a| {
+            a == "--rolled-back"
+                || a == "--status"
+                || a == "--version"
+                || a == "-v"
+                || a == "--help"
+                || a == "-h"
+                || a == "--stop"
+                || a == "--quit"
+                || a == "--native-messaging"
+                || a.starts_with("chrome-extension://")
+        }) {
+            return true;
+        }
+
+        // Do not poison probation attempt count if a healthy primary Downex instance is already live on 127.0.0.1:18888
+        if let Ok(mut ping_stream) = std::net::TcpStream::connect_timeout(
+            &std::net::SocketAddr::from(([127, 0, 0, 1], 18888)),
+            std::time::Duration::from_millis(200),
+        ) {
+            use std::io::{Read, Write};
+            let _ = ping_stream.set_read_timeout(Some(std::time::Duration::from_millis(250)));
+            if ping_stream
+                .write_all(b"GET /api/ping HTTP/1.1\r\nHost: 127.0.0.1:18888\r\nConnection: close\r\n\r\n")
+                .is_ok()
+            {
+                let mut buf = [0u8; 256];
+                if let Ok(n) = ping_stream.read(&mut buf) {
+                    let resp = String::from_utf8_lossy(&buf[..n]);
+                    if resp.contains("Downex") {
+                        return true;
+                    }
+                }
+            }
+        }
+
         let Ok(current_exe) = std::env::current_exe() else {
             return true;
         };
@@ -769,65 +1061,20 @@ pub fn evaluate_and_handle_boot_health(args: &[String]) -> bool {
         let old_exe = parent.join("Downex.exe.old");
         let state_file = parent.join("updater").join("sync_state.dat");
 
-        if args.iter().any(|a| a == "--rolled-back") {
-            return true;
-        }
-
         if state_file.exists() {
             if let Ok(content) = std::fs::read_to_string(&state_file) {
                 if let Ok(mut json) = serde_json::from_str::<serde_json::Value>(&content) {
                     let is_healthy = json.get("is_healthy").and_then(|b| b.as_bool()).unwrap_or(true);
+                    if is_healthy {
+                        return true;
+                    }
                     let boot_attempts = json.get("boot_attempts").and_then(|b| b.as_u64()).unwrap_or(0);
-                    let active_version = json.get("active_version").and_then(|v| v.as_str()).unwrap_or("0.0.1").to_string();
 
-                    if !is_healthy && boot_attempts >= 2 && old_exe.exists() {
-                        eprintln!("[Downex Self-Healing] Auto-rollback triggered for v{}", active_version);
-                        let bad_exe = parent.join("Downex.exe.bad");
-                        let _ = std::fs::remove_file(&bad_exe);
-                        let _ = std::fs::rename(&current_exe, &bad_exe);
-                        let _ = std::fs::rename(&old_exe, &current_exe);
-
-                        if let Some(obj) = json.as_object_mut() {
-                            let restored_ver = crate::version::extract_pe_version(&current_exe)
-                                .unwrap_or_else(|| "0.0.1".to_string());
-                            obj.insert("active_version".to_string(), serde_json::Value::String(restored_ver.clone()));
-                            obj.insert("is_healthy".to_string(), serde_json::Value::Bool(true));
-                            obj.insert("boot_attempts".to_string(), serde_json::Value::Number(0.into()));
-                            let mut q_list = obj.get("quarantined_versions").and_then(|v| v.as_array()).cloned().unwrap_or_default();
-                            let v_val = serde_json::Value::String(active_version);
-                            if !q_list.contains(&v_val) {
-                                q_list.push(v_val);
-                            }
-                            obj.insert("quarantined_versions".to_string(), serde_json::Value::Array(q_list));
-
-                            // Sync AppData sidecar and Windows Registry to restored version
-                            if let Ok(local_app_data) = std::env::var("LOCALAPPDATA") {
-                                let sidecar_file = std::path::PathBuf::from(local_app_data).join("com.downex.manager").join("installed_version.json");
-                                let payload = serde_json::json!({
-                                    "installed_version": restored_ver,
-                                    "updated_at": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis() as u64
-                                });
-                                let _ = std::fs::write(&sidecar_file, serde_json::to_string_pretty(&payload).unwrap_or_default());
-                            }
-                            crate::commands::sync_windows_installed_version(&restored_ver);
+                    if boot_attempts >= 2 && old_exe.exists() {
+                        if perform_rollback_from_old_exe(&current_exe, &old_exe, &state_file, parent, &mut json) {
+                            return false;
                         }
-                        let _ = std::fs::write(&state_file, serde_json::to_string_pretty(&json).unwrap_or_default());
-
-                        // Spawn rolled back binary
-                        use std::os::windows::process::CommandExt;
-                        let mut cmd = std::process::Command::new(&current_exe);
-                        cmd.arg("--update-restart")
-                            .arg("--restarted")
-                            .arg("--rolled-back")
-                            .arg(format!("--parent-pid={}", std::process::id()))
-                            .arg("--show");
-                        cmd.current_dir(parent);
-                        cmd.stdin(std::process::Stdio::null())
-                            .stdout(std::process::Stdio::null())
-                            .stderr(std::process::Stdio::null());
-                        cmd.creation_flags(0x08000000 | 0x00000008);
-                        let _ = cmd.spawn();
-                        return false;
+                        return true;
                     }
 
                     if let Some(obj) = json.as_object_mut() {
