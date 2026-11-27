@@ -11,7 +11,6 @@
 import { useHardwareBanStore } from '../stores/hardwareBanStore';
 import { useMarqueeNoticeStore, MarqueeNotice } from '../stores/marqueeNoticeStore';
 import { useAppVersionStore } from '../stores/appVersionStore';
-import { updateService } from './updateService';
 import { isTauri, getResolvedVersion } from './tauriService';
 import { APP_BASE_VERSION, cleanVersion } from '../utils/version';
 
@@ -75,20 +74,6 @@ interface DirectivePayload {
   timestamp?: number;
 }
 
-const ACTIVE_OTA_STATES = new Set([
-  'checking',
-  'available',
-  'downloading',
-  'verifying',
-  'patching',
-  'installing',
-  'restarting',
-  'waiting_timer',
-  'queued',
-  'ready',
-  'up-to-date',
-]);
-
 function buildNoticesSignature(list: unknown): string {
   if (!Array.isArray(list) || list.length === 0) return '';
   return list
@@ -104,89 +89,13 @@ function runAppVersionPacketSync(
   applyToSystem: () => Promise<void> | void,
   shouldRun?: () => boolean
 ): Promise<void> {
+  // Background SSE / attestation / marquee sync must apply quietly without hijacking
+  // the APP VERSION UI with fake Checking / Verifying / Patching animations.
   const execute = async () => {
     if (shouldRun && !shouldRun()) {
       return;
     }
-
-    const isOtaBusy = () => {
-      const st = updateService.getStatus();
-      return ACTIVE_OTA_STATES.has(st.state) && !st.isSilentSync;
-    };
-
-    if (isOtaBusy()) {
-      await applyToSystem();
-      return;
-    }
-
-    // 1. Checking incoming SSE / server payload
-    updateService.notify({
-      state: 'checking',
-      isManualCheck: false,
-      isSilentSync: true,
-      errorMessage: undefined,
-    });
-    await new Promise((resolve) => setTimeout(resolve, 220));
-    if (isOtaBusy()) { await applyToSystem(); return; }
-
-    // 2. Smooth 1% -> 100% download stage on APP VERSION row
-    const packetBytes = 65536;
-    const steps = 20;
-    for (let i = 1; i <= steps; i++) {
-      if (isOtaBusy()) { await applyToSystem(); return; }
-      const pct = Math.min(100, Math.round((i / steps) * 100));
-      updateService.notify({
-        state: 'downloading',
-        isManualCheck: false,
-        isSilentSync: true,
-        progress: {
-          percentage: pct,
-          downloadedBytes: Math.floor((pct / 100) * packetBytes),
-          totalBytes: packetBytes,
-        },
-        errorMessage: undefined,
-      });
-      await new Promise((resolve) => setTimeout(resolve, 28));
-    }
-
-    if (isOtaBusy()) { await applyToSystem(); return; }
-
-    // 3. Cryptographic / structural verification stage
-    updateService.notify({
-      state: 'verifying',
-      isManualCheck: false,
-      isSilentSync: true,
-      progress: {
-        percentage: 100,
-        downloadedBytes: packetBytes,
-        totalBytes: packetBytes,
-      },
-    });
-    await new Promise((resolve) => setTimeout(resolve, 280));
-    if (isOtaBusy()) { await applyToSystem(); return; }
-
-    // 4. Patching / applying verified state to the running system
-    updateService.notify({
-      state: 'patching',
-      isManualCheck: false,
-      isSilentSync: true,
-    });
-    await new Promise((resolve) => setTimeout(resolve, 240));
-
-    try {
-      await applyToSystem();
-    } finally {
-      if (!isOtaBusy()) {
-        // Return cleanly to idle APP VERSION (no false UP TO DATE badge on background sync)
-        updateService.notify({
-          state: 'idle',
-          isManualCheck: false,
-          isSilentSync: false,
-          progress: undefined,
-          errorMessage: undefined,
-        });
-      }
-    }
+    await applyToSystem();
   };
 
   syncQueuePromise = syncQueuePromise.then(execute, execute);

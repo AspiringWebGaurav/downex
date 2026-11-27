@@ -3,7 +3,6 @@ import {
   AppWindow,
   Check,
   Copy,
-  ExternalLink,
   FileBox,
   Folder,
   FolderOpen,
@@ -13,7 +12,6 @@ import {
 import {
   DownloadCompletePayload,
   getDefaultDownloadDir,
-  openFile,
   openFileFolder,
   openFileWith,
 } from '../services/tauriService';
@@ -80,17 +78,6 @@ export const DownloadCompleteModal: React.FC<DownloadCompleteModalProps> = ({
     } catch {}
     setCopiedField(field);
     setTimeout(() => setCopiedField(null), 1500);
-  };
-
-  const handleOpenFile = async () => {
-    if (displayPath) {
-      try {
-        await openFile(displayPath);
-      } catch (e) {
-        console.warn('Open file error:', e);
-      }
-      handleClose();
-    }
   };
 
   const handleOpenWith = async () => {
@@ -249,15 +236,6 @@ export const DownloadCompleteModal: React.FC<DownloadCompleteModalProps> = ({
               )}
               <span>{copiedField === 'path' ? 'Copied' : 'Copy'}</span>
             </button>
-            <button
-              type="button"
-              onClick={handleOpenFolder}
-              className="h-7.5 px-3 border border-zinc-300 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-800 font-mono-tabular text-[10px] uppercase tracking-wider shrink-0 cursor-pointer flex items-center gap-1"
-              title="Show in File Explorer"
-            >
-              <FolderOpen className="w-3.5 h-3.5 text-zinc-400" />
-              <span>Open Folder</span>
-            </button>
           </div>
         </div>
 
@@ -315,11 +293,13 @@ export const DownloadCompleteModal: React.FC<DownloadCompleteModalProps> = ({
 
           <button
             type="button"
-            onClick={handleOpenFile}
+            data-testid="complete-open-folder-btn"
+            onClick={handleOpenFolder}
             className="h-7.5 px-3.5 bg-black text-white border border-black hover:bg-zinc-800 dark:bg-white dark:text-zinc-950 dark:border-white dark:hover:bg-zinc-200 font-mono-tabular text-[11px] uppercase tracking-wider font-semibold flex items-center gap-1.5 cursor-pointer"
+            title="Open containing folder and highlight file"
           >
-            <ExternalLink className="w-3.5 h-3.5" />
-            <span>Open File</span>
+            <FolderOpen className="w-3.5 h-3.5" />
+            <span>Open Folder</span>
           </button>
         </div>
       </div>

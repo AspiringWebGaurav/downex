@@ -12,6 +12,9 @@ import {
   pauseQueue,
   isQueueRunning,
   queueDownload,
+  unqueueDownload,
+  SEQUENTIAL_QUEUE_ID,
+  isQueueItem,
   onRefreshDownloads,
   DownloadInfoModalPayload,
   DownloadCompletePayload,
@@ -23,6 +26,10 @@ import {
   setRuntimeSessionTab,
   getSavedCustomSpeedLimit,
   saveCustomSpeedLimit,
+  SystemProfileSnapshot,
+  DEFAULT_SYSTEM_PROFILE,
+  getSystemProfile,
+  onSystemProfileChanged,
 } from '../services/tauriService';
 
 export const SESSION_VIEW_STORAGE_KEY = 'downex_session_selected_view';
@@ -144,6 +151,8 @@ interface DownloadStore {
   closeCompleteModal: () => void;
   isQueueGuideOpen: boolean;
   setQueueGuideOpen: (open: boolean) => void;
+  systemProfile: SystemProfileSnapshot;
+  setSystemProfile: (profile: SystemProfileSnapshot) => void;
   initListener: () => () => void;
 }
 
@@ -172,6 +181,8 @@ export const useDownloadStore = create<DownloadStore>((set, get) => ({
   sessionDownloadedBytes: 0,
   telemetryEpoch: 0,
   triggerTelemetryRefresh: () => set((state) => ({ telemetryEpoch: state.telemetryEpoch + 1 })),
+  systemProfile: DEFAULT_SYSTEM_PROFILE,
+  setSystemProfile: (profile: SystemProfileSnapshot) => set({ systemProfile: profile }),
   isQueueRunning: false,
   activeQueueTaskId: null,
   setActiveQueueTaskId: (id: string | null) => set({ activeQueueTaskId: id }),
@@ -280,10 +291,12 @@ export const useDownloadStore = create<DownloadStore>((set, get) => ({
               };
             });
             let currentActiveQueueId = get().activeQueueTaskId;
-            if (queueRunning && !currentActiveQueueId) {
-              const dlItem = merged.find((i) => i.status === 'downloading');
+            if (queueRunning) {
+              const dlItem = merged
+                .filter((i) => isQueueItem(i) && (i.status === 'downloading' || i.status === 'probing'))
+                .sort((a, b) => a.created_at - b.created_at)[0];
               currentActiveQueueId = dlItem ? dlItem.id : null;
-            } else if (!queueRunning) {
+            } else {
               currentActiveQueueId = null;
             }
             return { items: merged, isQueueRunning: queueRunning, activeQueueTaskId: currentActiveQueueId };
@@ -329,10 +342,22 @@ export const useDownloadStore = create<DownloadStore>((set, get) => ({
 
   startQueue: async () => {
     try {
-      const queued = get().items.filter((i) => i.status === 'queued');
+      const queued = get()
+        .items.filter((i) => i.status === 'queued')
+        .sort((a, b) => a.created_at - b.created_at);
       const firstQueuedId = queued.length > 0 ? queued[0].id : null;
       await startQueue();
-      set({ isQueueRunning: true, activeQueueTaskId: firstQueuedId });
+      set((state) => ({
+        isQueueRunning: queued.length > 0,
+        activeQueueTaskId: firstQueuedId,
+        items: state.items.map((i) =>
+          i.id === firstQueuedId
+            ? { ...i, status: 'downloading', queue_id: SEQUENTIAL_QUEUE_ID }
+            : i.status === 'queued'
+            ? { ...i, queue_id: SEQUENTIAL_QUEUE_ID }
+            : i
+        ),
+      }));
       await get().loadItems();
     } catch (e) {
       console.warn('Failed to start queue:', e);
@@ -342,7 +367,15 @@ export const useDownloadStore = create<DownloadStore>((set, get) => ({
   pauseQueue: async () => {
     try {
       await pauseQueue();
-      set({ isQueueRunning: false, activeQueueTaskId: null });
+      set((state) => ({
+        isQueueRunning: false,
+        activeQueueTaskId: null,
+        items: state.items.map((i) =>
+          isQueueItem(i) && (i.status === 'downloading' || i.status === 'probing')
+            ? { ...i, status: 'queued', queue_id: SEQUENTIAL_QUEUE_ID, speed_bytes_sec: 0 }
+            : i
+        ),
+      }));
       await get().loadItems();
     } catch (e) {
       console.warn('Failed to pause queue:', e);
@@ -353,7 +386,9 @@ export const useDownloadStore = create<DownloadStore>((set, get) => ({
     try {
       set((state) => ({
         items: state.items.map((i) =>
-          i.id === id ? { ...i, status: 'queued', speed_bytes_sec: 0 } : i
+          i.id === id
+            ? { ...i, status: 'queued', queue_id: SEQUENTIAL_QUEUE_ID, speed_bytes_sec: 0 }
+            : i
         ),
       }));
       await queueDownload(id);
@@ -365,10 +400,17 @@ export const useDownloadStore = create<DownloadStore>((set, get) => ({
 
   unqueueDownload: async (id: string) => {
     try {
-      await pauseDownload(id);
       set((state) => ({
-        items: state.items.map((i) => (i.id === id ? { ...i, status: 'paused', speed_bytes_sec: 0 } : i)),
+        items: state.items.map((i) => {
+          if (i.id !== id) return i;
+          const nextStatus =
+            i.status === 'queued' || i.status === 'downloading' || i.status === 'probing'
+              ? 'paused'
+              : i.status;
+          return { ...i, queue_id: 'default', status: nextStatus, speed_bytes_sec: 0 };
+        }),
       }));
+      await unqueueDownload(id);
       await get().loadItems();
     } catch (e) {
       console.warn('Failed to unqueue download:', e);
@@ -592,15 +634,15 @@ export const useDownloadStore = create<DownloadStore>((set, get) => ({
     const unqueued = get().items.filter(
       (i) =>
         (!idFilter || idFilter.has(i.id)) &&
-        i.status !== 'completed' &&
-        i.status !== 'queued'
+        !isQueueItem(i) &&
+        i.status !== 'completed'
     );
     if (unqueued.length === 0) return;
     const targetSet = new Set(unqueued.map((i) => i.id));
     set((state) => ({
       items: state.items.map((i) =>
         targetSet.has(i.id)
-          ? { ...i, status: 'queued', speed_bytes_sec: 0 }
+          ? { ...i, status: 'queued', queue_id: SEQUENTIAL_QUEUE_ID, speed_bytes_sec: 0 }
           : i
       ),
     }));
@@ -608,16 +650,19 @@ export const useDownloadStore = create<DownloadStore>((set, get) => ({
   },
 
   unqueueAllDownloads: async () => {
-    const queueTargets = get().items.filter(
-      (i) => i.status === 'queued' || (i.status === 'downloading' && i.queue_id && i.queue_id !== '')
-    );
+    const queueTargets = get().items.filter((i) => isQueueItem(i));
     if (queueTargets.length === 0) return;
     set((state) => ({
-      items: state.items.map((i) =>
-        i.status === 'queued' || (i.status === 'downloading' && i.queue_id && i.queue_id !== '')
-          ? { ...i, status: 'paused', speed_bytes_sec: 0 }
-          : i
-      ),
+      isQueueRunning: false,
+      activeQueueTaskId: null,
+      items: state.items.map((i) => {
+        if (!isQueueItem(i)) return i;
+        const nextStatus =
+          i.status === 'queued' || i.status === 'downloading' || i.status === 'probing'
+            ? 'paused'
+            : i.status;
+        return { ...i, queue_id: 'default', status: nextStatus, speed_bytes_sec: 0 };
+      }),
     }));
     await Promise.allSettled(queueTargets.map((i) => get().unqueueDownload(i.id)));
   },
@@ -802,9 +847,20 @@ export const useDownloadStore = create<DownloadStore>((set, get) => ({
         }
 
         let nextActiveQueueTaskId = state.activeQueueTaskId;
-        if (taskFinished && state.isQueueRunning && finishedTaskId && state.activeQueueTaskId === finishedTaskId) {
-          const nextQueued = updated.find((i) => i.status === 'queued' && i.id !== finishedTaskId);
-          nextActiveQueueTaskId = nextQueued ? nextQueued.id : null;
+        let nextIsQueueRunning = state.isQueueRunning;
+        if (taskFinished && state.isQueueRunning && finishedTaskId) {
+          const nextQueued = updated
+            .filter((i) => isQueueItem(i) && i.status === 'queued' && i.id !== finishedTaskId)
+            .sort((a, b) => a.created_at - b.created_at)[0];
+          const anyOtherQueueActive = updated.some(
+            (i) => isQueueItem(i) && i.id !== finishedTaskId && (i.status === 'downloading' || i.status === 'probing')
+          );
+          if (nextQueued) {
+            nextActiveQueueTaskId = nextQueued.id;
+          } else if (!anyOtherQueueActive) {
+            nextActiveQueueTaskId = null;
+            nextIsQueueRunning = false;
+          }
         }
 
         const newHistory = [...state.speedHistory.slice(1), currentTotalSpeed];
@@ -817,6 +873,7 @@ export const useDownloadStore = create<DownloadStore>((set, get) => ({
         }
         return {
           items: updated,
+          isQueueRunning: nextIsQueueRunning,
           activeQueueTaskId: nextActiveQueueTaskId,
           totalSpeed: currentTotalSpeed,
           speedHistory: newHistory,
@@ -861,13 +918,39 @@ export const useDownloadStore = create<DownloadStore>((set, get) => ({
       }
     }, 10000);
 
-    // 4. Safety heartbeat polling: Sync with SQLite every 1000ms while any task is active
-    const intervalId = setInterval(() => {
-      const hasActive = get().items.some((i) => i.status === 'downloading' || i.status === 'probing');
-      if (hasActive) {
-        get().loadItems();
+    // 4. Dynamic adaptive heartbeat polling: Sync with SQLite at profile-appropriate interval while active
+    let isDisposed = false;
+    let pollTimerId: ReturnType<typeof setTimeout> | null = null;
+    const scheduleNextPoll = () => {
+      if (isDisposed) return;
+      if (pollTimerId) {
+        clearTimeout(pollTimerId);
       }
-    }, 1000);
+      const intervalMs = Math.max(500, get().systemProfile.ui_poll_interval_ms || 1000);
+      pollTimerId = setTimeout(() => {
+        if (isDisposed) return;
+        const hasActive = get().items.some((i) => i.status === 'downloading' || i.status === 'probing');
+        if (hasActive) {
+          get().loadItems();
+        }
+        scheduleNextPoll();
+      }, intervalMs);
+    };
+    scheduleNextPoll();
+
+    getSystemProfile()
+      .then((profile) => {
+        if (!isDisposed) {
+          set({ systemProfile: profile });
+          scheduleNextPoll();
+        }
+      })
+      .catch(() => {});
+
+    const unlistenProfile = onSystemProfileChanged((profile) => {
+      set({ systemProfile: profile });
+      scheduleNextPoll();
+    });
 
     // 5. Lifecycle termination guard: Flush immediately before window unloads
     const handleBeforeUnload = () => {
@@ -881,6 +964,7 @@ export const useDownloadStore = create<DownloadStore>((set, get) => ({
     }
 
     return () => {
+      isDisposed = true;
       if (isLifetimeDirty) {
         isLifetimeDirty = false;
         get().syncLifetimeStatsToDb().catch(() => {});
@@ -892,9 +976,13 @@ export const useDownloadStore = create<DownloadStore>((set, get) => ({
         clearTimeout(completionSyncTimer);
         completionSyncTimer = null;
       }
+      if (pollTimerId) {
+        clearTimeout(pollTimerId);
+        pollTimerId = null;
+      }
       unlistenProgress();
       unlistenRefresh();
-      clearInterval(intervalId);
+      unlistenProfile();
       clearInterval(syncIntervalId);
       taskDownloadedCache.clear();
     };

@@ -1,4 +1,6 @@
-import React, { useEffect, useState, useCallback, useRef } from 'react';
+import React, { useEffect, useLayoutEffect, useState, useCallback, useRef } from 'react';
+import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
+import { LogicalSize } from '@tauri-apps/api/dpi';
 import { 
   X, 
   Folder, 
@@ -21,13 +23,16 @@ import {
 } from 'lucide-react';
 import { useHardwareBanStore } from '../stores/hardwareBanStore';
 import { initHardwareEventService } from '../services/hardwareEventService';
+import { FolderChangeModal } from '../components/FolderChangeModal';
 import { 
   addDownload, 
   closeDownloadDialog, 
   getDefaultDownloadDir, 
+  getSystemDefaultDownloadDir,
+  normalizePathForCompare,
   setDefaultDownloadDir, 
   getDiskFreeSpace, 
-  openFolderPicker, 
+  setDownloadDialogExpanded,
   probeUrl, 
   onOpenDownloadInfoModal, 
   getDownloadDialogPayload,
@@ -39,7 +44,8 @@ import {
   DownloadInfoModalPayload,
   isTauri,
   openExternalUrl,
-  getDownexWebBaseUrl
+  getDownexWebBaseUrl,
+  SEQUENTIAL_QUEUE_ID
 } from '../services/tauriService';
 import { 
   getCachedDownloadDir, 
@@ -152,14 +158,19 @@ export const DownloadDialogWindow: React.FC = () => {
   const [fileBaseName, setFileBaseName] = useState('');
   const [fileExtension, setFileExtension] = useState('');
   const [savePath, setSavePath] = useState<string>(getCachedDownloadDir);
+  const [systemDefaultDir, setSystemDefaultDir] = useState<string>('');
   const [freeSpaceBytes, setFreeSpaceBytes] = useState<number | null>(getCachedDiskFreeSpace);
-  const [rememberPath, setRememberPath] = useState(true);
+  const [rememberPath, setRememberPath] = useState(false);
   const [totalBytes, setTotalBytes] = useState<number | undefined>();
   const [supportsRanges, setSupportsRanges] = useState(true);
   const [isProbing, setIsProbing] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [copiedUrl, setCopiedUrl] = useState(false);
   const [incomingHeaders, setIncomingHeaders] = useState<Record<string, string> | undefined>();
+  const [isFolderModalOpen, setIsFolderModalOpen] = useState(false);
+  const wasExpandedRef = useRef(false);
+  const cardRef = useRef<HTMLDivElement>(null);
+  const lastRequestedHeightRef = useRef<number>(0);
 
   // Browser sandbox state
   const [activeScenarioId, setActiveScenarioId] = useState<string>('iso');
@@ -226,6 +237,7 @@ export const DownloadDialogWindow: React.FC = () => {
 
   const [copiedId, setCopiedId] = useState(false);
   const probeSeqRef = useRef(0);
+  const configuredDefaultDirRef = useRef<string>(getCachedDownloadDir());
   const handleCopyId = async (e: React.MouseEvent) => {
     e.stopPropagation();
     if (!hwid) return;
@@ -262,7 +274,14 @@ export const DownloadDialogWindow: React.FC = () => {
       ? banReason
       : 'This is hardware patched. Formatting System and reinstalling App will not bypass this.';
 
-  // Sync theme immediately
+  // Sync theme immediately and keep pre-warmed window aligned with main window changes
+  const syncThemeFromStorage = useCallback(() => {
+    try {
+      const explicit = localStorage.getItem('downex_theme_explicit');
+      setIsDarkTheme(explicit === 'true' && localStorage.getItem('downex_theme') === 'dark');
+    } catch {}
+  }, []);
+
   useEffect(() => {
     if (isDarkTheme) {
       document.documentElement.classList.add('dark');
@@ -270,6 +289,75 @@ export const DownloadDialogWindow: React.FC = () => {
       document.documentElement.classList.remove('dark');
     }
   }, [isDarkTheme]);
+
+  useEffect(() => {
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === 'downex_theme' || e.key === 'downex_theme_explicit') {
+        syncThemeFromStorage();
+      }
+    };
+    window.addEventListener('storage', onStorage);
+    window.addEventListener('focus', syncThemeFromStorage);
+    return () => {
+      window.removeEventListener('storage', onStorage);
+      window.removeEventListener('focus', syncThemeFromStorage);
+    };
+  }, [syncThemeFromStorage]);
+
+  // Measure actual card height and keep native download_dialog window pixel-accurate (prevents bottom clipping)
+  const syncWindowHeight = useCallback(() => {
+    if (!isTauri || (isFolderModalOpen && !isBanned)) return;
+    const el = cardRef.current;
+    if (!el) return;
+    const height = Math.max(336, Math.ceil(el.getBoundingClientRect().height));
+    if (Math.abs(window.innerHeight - height) >= 1 && lastRequestedHeightRef.current !== height) {
+      lastRequestedHeightRef.current = height;
+      getCurrentWebviewWindow()
+        .setSize(new LogicalSize(540, height))
+        .catch(() => {});
+    }
+  }, [isFolderModalOpen, isBanned]);
+
+  // Sync native download_dialog window geometry when FolderChangeModal opens/closes
+  useEffect(() => {
+    if (!isTauri) return;
+    const shouldExpand = isFolderModalOpen && !isBanned;
+    if (shouldExpand) {
+      wasExpandedRef.current = true;
+      void setDownloadDialogExpanded(true);
+    } else if (wasExpandedRef.current) {
+      wasExpandedRef.current = false;
+      lastRequestedHeightRef.current = 0;
+      const baseH = cardRef.current ? Math.ceil(cardRef.current.getBoundingClientRect().height) : 346;
+      void setDownloadDialogExpanded(false, baseH >= 320 ? baseH : 346).then(() => {
+        requestAnimationFrame(syncWindowHeight);
+      });
+    }
+  }, [isFolderModalOpen, isBanned, syncWindowHeight]);
+
+  useLayoutEffect(() => {
+    if (isFolderModalOpen && !isBanned) return;
+    lastRequestedHeightRef.current = 0;
+    syncWindowHeight();
+    const raf = requestAnimationFrame(syncWindowHeight);
+    return () => cancelAnimationFrame(raf);
+  }, [url, fileBaseName, fileExtension, savePath, freeSpaceBytes, isProbing, isBanned, isFolderModalOpen, syncWindowHeight]);
+
+  useEffect(() => {
+    if (!isTauri) return;
+    const el = cardRef.current;
+    if (!el) return;
+    const observer = new ResizeObserver(() => {
+      syncWindowHeight();
+    });
+    observer.observe(el);
+    window.addEventListener('resize', syncWindowHeight);
+    document.fonts?.ready?.then(syncWindowHeight).catch(() => {});
+    return () => {
+      observer.disconnect();
+      window.removeEventListener('resize', syncWindowHeight);
+    };
+  }, [syncWindowHeight, isBanned]);
 
   // Update free disk space whenever savePath changes (saves to synchronous cache)
   useEffect(() => {
@@ -291,14 +379,45 @@ export const DownloadDialogWindow: React.FC = () => {
     };
   }, [savePath, activeScenarioId]);
 
-  // Load default download directory on mount in background
+  // Load configured & system default download directories on mount and keep window non-topmost on blur
   useEffect(() => {
+    getSystemDefaultDownloadDir()
+      .then((dir) => {
+        if (dir && dir.trim()) {
+          setSystemDefaultDir(dir.trim());
+        }
+      })
+      .catch(() => {});
+
     getDefaultDownloadDir().then((dir) => {
       if (dir && dir.trim()) {
-        setSavePath(dir.trim());
-        setCachedDownloadDir(dir.trim());
+        const clean = dir.trim();
+        configuredDefaultDirRef.current = clean;
+        setSavePath(clean);
+        setCachedDownloadDir(clean);
       }
     });
+  }, []);
+
+  // Out of focus handler: Cleanly yield focus and disable always-on-top when clicking elsewhere
+  useEffect(() => {
+    const handleBlur = () => {
+      if (isTauri) {
+        try {
+          getCurrentWebviewWindow().setAlwaysOnTop(false).catch(() => {});
+        } catch {}
+      }
+    };
+    const handleVisibilityChange = () => {
+      if (document.hidden) handleBlur();
+    };
+
+    window.addEventListener('blur', handleBlur);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => {
+      window.removeEventListener('blur', handleBlur);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
   }, []);
 
   // Update filename state helper
@@ -333,6 +452,8 @@ export const DownloadDialogWindow: React.FC = () => {
   const applyPayload = useCallback((payload: DownloadInfoModalPayload) => {
     if (!payload || !payload.url) return;
 
+    setIsFolderModalOpen(false);
+    setRememberPath(false);
     probeSeqRef.current += 1;
     setUrl(payload.url);
     const name = payload.filename || payload.url.split('?')[0].split('/').pop() || 'download.bin';
@@ -340,6 +461,18 @@ export const DownloadDialogWindow: React.FC = () => {
 
     if (payload.destination_folder && payload.destination_folder.trim()) {
       setSavePath(payload.destination_folder.trim());
+    } else {
+      setSavePath(configuredDefaultDirRef.current);
+      getDefaultDownloadDir()
+        .then((dir) => {
+          if (dir && dir.trim()) {
+            const clean = dir.trim();
+            configuredDefaultDirRef.current = clean;
+            setSavePath(clean);
+            setCachedDownloadDir(clean);
+          }
+        })
+        .catch(() => {});
     }
 
     if (isTauri) {
@@ -387,12 +520,24 @@ export const DownloadDialogWindow: React.FC = () => {
     setFreeSpaceBytes(sc.freeSpaceBytes);
   }, [applyFilename]);
 
-  // Listen for payload from Tauri backend + check initial cached payload
+  // Listen for payload from Tauri backend + synchronous eval bridge + initial cached payload
   useEffect(() => {
+    (window as any).__onDownexDialogPayload = (p: DownloadInfoModalPayload) => {
+      syncThemeFromStorage();
+      applyPayload(p);
+    };
+
+    const injected = (window as any).__DOWNEX_DIALOG_PAYLOAD__;
+    if (injected && injected.url) {
+      syncThemeFromStorage();
+      applyPayload(injected);
+    }
+
     getDownloadDialogPayload().then((cached) => {
       if (cached) {
+        syncThemeFromStorage();
         applyPayload(cached);
-      } else if (!isTauri) {
+      } else if (!isTauri && !injected) {
         // Auto-load default rich mock scenario in browser mode!
         const urlParams = new URLSearchParams(window.location.search);
         const requestedScenario = urlParams.get('scenario') || 'iso';
@@ -401,13 +546,15 @@ export const DownloadDialogWindow: React.FC = () => {
     });
 
     const unlisten = onOpenDownloadInfoModal((payload: DownloadInfoModalPayload) => {
+      syncThemeFromStorage();
       applyPayload(payload);
     });
 
     return () => {
+      delete (window as any).__onDownexDialogPayload;
       unlisten();
     };
-  }, [applyPayload, applyScenario]);
+  }, [applyPayload, applyScenario, syncThemeFromStorage]);
 
   const handlePasteClipboard = useCallback(async () => {
     try {
@@ -470,24 +617,57 @@ export const DownloadDialogWindow: React.FC = () => {
     }
   };
 
-  const handleBrowseFolder = async () => {
+  const handleBrowseFolder = () => {
+    if (isBanned) return;
+    setIsFolderModalOpen(true);
+  };
+
+  const handleUseDefault = async () => {
+    if (isBanned) return;
     try {
-      const selected = await openFolderPicker();
-      if (selected) {
-        setSavePath(selected);
-      } else if (!isTauri) {
-        // Browser quick folder choices
-        const choices = ['C:\\Users\\User\\Downloads', 'D:\\Downloads\\ISOs', 'E:\\Media\\Videos', 'C:\\Software\\Packages'];
-        const nextChoice = choices[(choices.indexOf(savePath) + 1) % choices.length] || choices[0];
-        setSavePath(nextChoice);
-        showToast(`Selected mock folder: ${nextChoice}`);
+      const resolved = await setDefaultDownloadDir('');
+      const clean = (resolved || systemDefaultDir || 'C:\\Downloads\\Downex').trim();
+      configuredDefaultDirRef.current = clean;
+      setSavePath(clean);
+      setCachedDownloadDir(clean);
+      setRememberPath(false);
+      setSystemDefaultDir((prev) => prev || clean);
+      if (!isTauri) {
+        showToast(`Default folder restored: ${clean}`);
       }
-    } catch (e) {
-      console.warn('Folder picker error:', e);
+    } catch {
+      const fallback = (systemDefaultDir || 'C:\\Downloads\\Downex').trim();
+      configuredDefaultDirRef.current = fallback;
+      setSavePath(fallback);
+      setCachedDownloadDir(fallback);
+      setRememberPath(false);
     }
   };
 
+  const handleFolderSelected = (selected: string) => {
+    const cleaned = selected.trim();
+    if (cleaned) {
+      setSavePath(cleaned);
+      getDiskFreeSpace(cleaned)
+        .then((bytes) => {
+          if (bytes > 0) {
+            if (!isTauri && activeScenarioId === 'lowspace') {
+              return;
+            }
+            setFreeSpaceBytes(bytes);
+            setCachedDiskFreeSpace(bytes);
+          }
+        })
+        .catch(() => {});
+    }
+    setIsFolderModalOpen(false);
+  };
+
   const handleClose = async () => {
+    setIsFolderModalOpen(false);
+    setRememberPath(false);
+    setSavePath(configuredDefaultDirRef.current);
+    wasExpandedRef.current = false;
     if (document.activeElement instanceof HTMLElement) {
       document.activeElement.blur();
     }
@@ -530,11 +710,13 @@ export const DownloadDialogWindow: React.FC = () => {
         .trim();
       const fullFilename = sanitizedRawName || undefined;
 
-      // Persist chosen directory if "Remember this folder" is checked
+      // Persist chosen directory ONLY when the user explicitly checks Remember folder
       if (rememberPath && savePath.trim()) {
         try {
-          await setDefaultDownloadDir(savePath.trim());
-          setCachedDownloadDir(savePath.trim());
+          const savedDir = await setDefaultDownloadDir(savePath.trim());
+          const clean = (savedDir || savePath).trim();
+          configuredDefaultDirRef.current = clean;
+          setCachedDownloadDir(clean);
         } catch (e) {
           console.warn('Could not save default download directory:', e);
         }
@@ -543,11 +725,14 @@ export const DownloadDialogWindow: React.FC = () => {
       await addDownload(
         url.trim(),
         savePath.trim() || undefined,
-        undefined,
+        startImmediately ? undefined : SEQUENTIAL_QUEUE_ID,
         incomingHeaders,
         startImmediately,
         fullFilename
       );
+
+      setRememberPath(false);
+      setSavePath(configuredDefaultDirRef.current);
 
       if (!isTauri) {
         showToast(startImmediately ? '🚀 Download started! Added to queue.' : '⏸️ Saved to queue in paused state.');
@@ -557,8 +742,9 @@ export const DownloadDialogWindow: React.FC = () => {
       // Close dialog window immediately
       await closeDownloadDialog();
 
-      // Bring Downex main downloader window to front and show downloading list!
-      await restoreManagerWindow();
+      // Bring Downex main manager to front showing the tab matching what user clicked:
+      // 'Start Download' -> All Downloads ('all'), 'Later' -> Queues ('queues')
+      await restoreManagerWindow(startImmediately ? 'all' : 'queues');
     } catch (err) {
       if (!isTauri) {
         showToast('🚀 Download simulated in browser mode');
@@ -573,6 +759,7 @@ export const DownloadDialogWindow: React.FC = () => {
   // Keyboard navigation: Enter to start, Esc to cancel
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      if (isFolderModalOpen) return;
       if (e.key === 'Escape') {
         e.preventDefault();
         handleClose();
@@ -592,7 +779,7 @@ export const DownloadDialogWindow: React.FC = () => {
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [url, fileBaseName, fileExtension, savePath, incomingHeaders, rememberPath, submitting, isBanned]);
+  }, [url, fileBaseName, fileExtension, savePath, incomingHeaders, rememberPath, submitting, isBanned, isFolderModalOpen]);
 
   const handleCopyUrl = () => {
     if (!url) return;
@@ -609,7 +796,11 @@ export const DownloadDialogWindow: React.FC = () => {
 
   // The Dialog Window Component
   const DialogContent = (
-    <div className="w-full h-full flex flex-col justify-between bg-white dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 font-sans select-none overflow-hidden border border-zinc-200 dark:border-zinc-800">
+    <div
+      ref={!isBanned ? cardRef : undefined}
+      data-testid="download-dialog-card"
+      className="w-full flex flex-col justify-between bg-white dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 font-sans select-none overflow-hidden border border-zinc-200 dark:border-zinc-800"
+    >
       {/* Title Bar */}
       <div 
         data-tauri-drag-region
@@ -731,6 +922,27 @@ export const DownloadDialogWindow: React.FC = () => {
               />
               <Folder className="w-3.5 h-3.5 text-zinc-400 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
             </div>
+            {(() => {
+              const isAtSystemDefault = Boolean(systemDefaultDir) &&
+                normalizePathForCompare(savePath) === normalizePathForCompare(systemDefaultDir);
+              return (
+                <button
+                  type="button"
+                  data-testid="use-default-folder-btn"
+                  onClick={handleUseDefault}
+                  disabled={isAtSystemDefault}
+                  title={systemDefaultDir ? `Use default folder (${systemDefaultDir})` : 'Reset to default Downloads\\Downex folder'}
+                  className={`h-7.5 px-2.5 border font-mono-tabular text-[10px] uppercase tracking-wider shrink-0 flex items-center gap-1 transition-colors ${
+                    isAtSystemDefault
+                      ? 'border-zinc-200 dark:border-zinc-800 text-zinc-400 dark:text-zinc-600 cursor-default'
+                      : 'border-zinc-300 dark:border-zinc-700 text-zinc-700 dark:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-800 cursor-pointer'
+                  }`}
+                >
+                  <RotateCcw className="w-3 h-3" />
+                  <span>Default</span>
+                </button>
+              );
+            })()}
             <button
               type="button"
               onClick={handleBrowseFolder}
@@ -844,7 +1056,11 @@ export const DownloadDialogWindow: React.FC = () => {
   );
 
   const BannedDialogContent = (
-    <div className="w-full h-full flex flex-col justify-between bg-white dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 font-sans select-none overflow-hidden border border-zinc-200 dark:border-zinc-800 shadow-2xl">
+    <div
+      ref={isBanned ? cardRef : undefined}
+      data-testid="download-dialog-banned-card"
+      className="w-full min-h-[346px] flex flex-col justify-between bg-white dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 font-sans select-none overflow-hidden border border-zinc-200 dark:border-zinc-800 shadow-2xl"
+    >
       {/* Title Bar Strip - Matching OG modal subtlety */}
       <div
         data-tauri-drag-region
@@ -986,11 +1202,28 @@ export const DownloadDialogWindow: React.FC = () => {
 
   const ActiveDialogContent = isBanned ? BannedDialogContent : DialogContent;
 
+  const folderChangeModal = (
+    <FolderChangeModal
+      isOpen={isFolderModalOpen}
+      initialPath={savePath}
+      onClose={() => setIsFolderModalOpen(false)}
+      onSelect={handleFolderSelected}
+      title="SAVE DESTINATION"
+      subtitle="CHOOSE DOWNLOAD FOLDER"
+    />
+  );
+
   // If running natively in Tauri desktop, render pure frameless window directly
   if (isTauri) {
+    const isExpandedOverlay = isFolderModalOpen && !isBanned;
     return (
-      <div className="w-screen h-screen flex flex-col bg-white dark:bg-zinc-900 text-zinc-900 dark:text-zinc-100 font-sans select-none overflow-hidden">
+      <div
+        className={`w-screen flex flex-col bg-white dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 font-sans select-none overflow-hidden ${
+          isExpandedOverlay ? 'h-screen justify-center' : ''
+        }`}
+      >
         {ActiveDialogContent}
+        {!isBanned && folderChangeModal}
       </div>
     );
   }
@@ -1104,6 +1337,8 @@ export const DownloadDialogWindow: React.FC = () => {
           <span>{toastMessage}</span>
         </div>
       )}
+
+      {!isBanned && folderChangeModal}
     </div>
   );
 };

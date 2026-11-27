@@ -62,7 +62,14 @@ export const DownloadCompleteWindow: React.FC = () => {
     }
   });
 
-  // Sync theme
+  // Sync theme dynamically (handles pre-warmed window reuse after theme switches in main window)
+  const syncThemeFromStorage = useCallback(() => {
+    try {
+      const explicit = localStorage.getItem('downex_theme_explicit');
+      setIsDarkTheme(explicit === 'true' && localStorage.getItem('downex_theme') === 'dark');
+    } catch {}
+  }, []);
+
   useEffect(() => {
     if (isDarkTheme) {
       document.documentElement.classList.add('dark');
@@ -71,9 +78,24 @@ export const DownloadCompleteWindow: React.FC = () => {
     }
   }, [isDarkTheme]);
 
+  useEffect(() => {
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === 'downex_theme' || e.key === 'downex_theme_explicit') {
+        syncThemeFromStorage();
+      }
+    };
+    window.addEventListener('storage', onStorage);
+    window.addEventListener('focus', syncThemeFromStorage);
+    return () => {
+      window.removeEventListener('storage', onStorage);
+      window.removeEventListener('focus', syncThemeFromStorage);
+    };
+  }, [syncThemeFromStorage]);
+
   // Synchronous payload bridge from Rust window.eval
   useEffect(() => {
     (window as any).__onDownexCompletePayload = (p: DownloadCompletePayload) => {
+      syncThemeFromStorage();
       if (p && (p.url || p.filename)) {
         setPayload(p);
         try {
@@ -86,7 +108,7 @@ export const DownloadCompleteWindow: React.FC = () => {
     return () => {
       delete (window as any).__onDownexCompletePayload;
     };
-  }, []);
+  }, [syncThemeFromStorage]);
 
   // Out of focus handler: Cleanly yield focus and disable always-on-top when clicking elsewhere
   useEffect(() => {
@@ -132,6 +154,7 @@ export const DownloadCompleteWindow: React.FC = () => {
 
     // 2. Listen to live events (both live completions and manual details triggers)
     const handleIncoming = (p: DownloadCompletePayload) => {
+      syncThemeFromStorage();
       if (p && (p.url || p.filename)) {
         setPayload(p);
         try {

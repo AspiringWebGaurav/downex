@@ -252,4 +252,44 @@ test.describe('Downex Background Download, Tray & Complete Modal Lifecycle (IDM 
 
     expect(errors).toEqual([]);
   });
+
+  test('Isolated Complete Window Regression Guard: Main app UI never opens in-app Download Complete modal overlay', async ({ page }) => {
+    const errors = captureConsoleErrors(page);
+
+    // Dispatch legacy/completion event inside main app view and confirm main UI does NOT render an in-app complete overlay
+    await page.evaluate(() => {
+      window.dispatchEvent(new CustomEvent('downex-open-complete-modal', {
+        detail: {
+          id: 'isolated-check-1',
+          url: 'https://cdn.example.org/isolated/Ice.Cream.Man.2026.mkv',
+          filename: 'Ice.Cream.Man.2026.mkv',
+          destination_path: 'D:\\Ice.Cream.Man.2026.mkv',
+          total_bytes: 10468982784,
+          downloaded_bytes: 10468982784,
+        },
+        cancelable: true,
+      }));
+    });
+
+    await page.waitForTimeout(250);
+    await expect(page.getByTestId('download-complete-card')).toHaveCount(0);
+
+    // Verify dedicated standalone window route still renders complete UI cleanly in complete isolation
+    await page.addInitScript(() => {
+      (window as any).__DOWNEX_MOCK_COMPLETE_PAYLOAD__ = {
+        id: 'isolated-check-1',
+        url: 'https://cdn.example.org/isolated/Ice.Cream.Man.2026.mkv',
+        filename: 'Ice.Cream.Man.2026.mkv',
+        destination_path: 'D:\\Ice.Cream.Man.2026.mkv',
+        total_bytes: 10468982784,
+        downloaded_bytes: 10468982784,
+      };
+    });
+    await page.goto('/?window=download_complete');
+    await expect(page.getByTestId('download-complete-card')).toBeVisible();
+    await expect(page.getByText('DOWNLOAD COMPLETE', { exact: true })).toBeVisible();
+    await expect(page.getByText('Ice.Cream.Man.2026').first()).toBeVisible();
+
+    expect(errors).toEqual([]);
+  });
 });

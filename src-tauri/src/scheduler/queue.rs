@@ -19,6 +19,8 @@ struct ActiveTaskHandle {
 
 const PENDING_STAGING_DELETES_KEY: &str = "pending_staging_deletes";
 
+pub const SEQUENTIAL_QUEUE_ID: &str = "sequential";
+
 #[derive(Clone)]
 pub struct QueueManager {
     client: reqwest::Client,
@@ -114,7 +116,11 @@ impl QueueManager {
         let probe = probe_url(&self.client, &url, custom_headers.as_ref()).await?;
 
         let id = uuid::Uuid::new_v4().to_string();
-        let queue = queue_id.unwrap_or_else(|| "default".to_string());
+        let queue = match queue_id {
+            Some(q) if !q.trim().is_empty() => q,
+            _ if !start_immediately => SEQUENTIAL_QUEUE_ID.to_string(),
+            _ => "default".to_string(),
+        };
 
         // Resolve unified Downex download folder
         let default_dir = PathBuf::from(self.get_default_download_directory());
@@ -232,14 +238,28 @@ impl QueueManager {
             Err(_) => return false,
         };
 
-        if let Some(next_task) = queued.into_iter().next() {
+        if let Some(mut next_task) = queued.into_iter().next() {
             eprintln!("[Downex Queue] 1-by-1 Auto-starting: {} ({})", next_task.filename, next_task.id);
+            if next_task.queue_id != SEQUENTIAL_QUEUE_ID {
+                let _ = self.db.update_download_queue_id(&next_task.id, SEQUENTIAL_QUEUE_ID);
+                next_task.queue_id = SEQUENTIAL_QUEUE_ID.to_string();
+            }
             let _ = self.db.update_download_status(&next_task.id, "downloading", 0, None);
+            next_task.status = "downloading".to_string();
             self.start_task(next_task);
+            if let Some(app) = self.get_app_handle() {
+                use tauri::Emitter;
+                let _ = app.emit("refresh-downloads", ());
+            }
             return true;
         }
 
         eprintln!("[Downex Queue] Simple 1-by-1 queue finished all tasks.");
+        self.queue_running.store(false, Ordering::Relaxed);
+        if let Some(app) = self.get_app_handle() {
+            use tauri::Emitter;
+            let _ = app.emit("refresh-downloads", ());
+        }
         false
     }
 
@@ -247,18 +267,22 @@ impl QueueManager {
         self.queue_running.store(true, Ordering::Relaxed);
         let queued = self.db.get_queued_downloads().unwrap_or_default();
         let count = queued.len();
+        if count == 0 {
+            self.queue_running.store(false, Ordering::Relaxed);
+            return 0;
+        }
         self.process_next_in_queue().await;
         count
     }
 
     pub fn pause_queue(&self) -> bool {
         self.queue_running.store(false, Ordering::Relaxed);
-        // Find any active downloading task that was part of the queue and pause it
+        // Pause only active tasks belonging to the sequential queue (never hijack normal downloads)
         if let Ok(downloads) = self.db.get_all_downloads() {
             for d in downloads {
-                if d.status == "downloading" || d.status == "probing" {
+                if d.queue_id == SEQUENTIAL_QUEUE_ID && (d.status == "downloading" || d.status == "probing") {
                     self.pause_task(&d.id);
-                    // Retain place in line
+                    // Retain place in queue
                     let _ = self.db.update_download_status(&d.id, "queued", 0, None);
                 }
             }
@@ -272,6 +296,7 @@ impl QueueManager {
 
     pub fn queue_download(&self, id: &str) -> bool {
         self.pause_task(id);
+        let _ = self.db.update_download_queue_id(id, SEQUENTIAL_QUEUE_ID);
         let res = self.db.update_download_status(id, "queued", 0, None).is_ok();
         if self.is_queue_running() {
             let qm = self.clone();
@@ -280,6 +305,23 @@ impl QueueManager {
             });
         }
         res
+    }
+
+    pub fn unqueue_download(&self, id: &str) -> bool {
+        let existing = self.db.get_download(id).ok().flatten();
+        if let Some(ref rec) = existing {
+            if rec.status == "downloading" || rec.status == "probing" {
+                self.pause_task(id);
+            } else if rec.status == "queued" {
+                let _ = self.db.update_download_status(id, "paused", 0, None);
+            }
+        }
+        let ok = self.db.update_download_queue_id(id, "default").is_ok();
+        if let Some(app) = self.get_app_handle() {
+            use tauri::Emitter;
+            let _ = app.emit("refresh-downloads", ());
+        }
+        ok
     }
 
     pub fn start_task(&self, record: DownloadRecord) {
@@ -348,7 +390,8 @@ impl QueueManager {
         let headers: Option<HashMap<String, String>> = record.headers_json.as_ref().and_then(|h| serde_json::from_str(h).ok());
 
         tauri::async_runtime::spawn(async move {
-            let _permit = sem.acquire().await;
+            let permit_weight = crate::system_profile::concurrent_permit_weight();
+            let _permit = sem.acquire_many(permit_weight).await;
 
             if cancel_token.is_cancelled() {
                 let is_current_gen = {
@@ -404,12 +447,13 @@ impl QueueManager {
             #[cfg(target_os = "windows")]
             prevent_windows_sleep(true);
 
-            let max_conns = db
-                .get_setting("max_segments")
-                .ok()
-                .flatten()
-                .and_then(|s| s.parse::<u32>().ok())
-                .unwrap_or(32); // Max throughput saturation for 200Mbps+ plans
+            let max_conns = crate::system_profile::effective_max_connections(
+                db.get_setting("max_segments")
+                    .ok()
+                    .flatten()
+                    .and_then(|s| s.parse::<u32>().ok())
+                    .unwrap_or(32), // Max throughput saturation for 200Mbps+ plans
+            );
 
             let supports_ranges = record.supports_ranges && record.total_bytes.is_some();
             let dest_path_clone = record.destination_path.clone();
@@ -1381,5 +1425,69 @@ mod tests {
         assert!(normal_file.exists(), "Non-staging user files must never be touched");
 
         crate::engine::staging::robust_delete_path(&root);
+    }
+
+    #[test]
+    fn test_sequential_queue_membership_persists_across_start_pause_complete_and_unqueue() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let root = make_test_dir("seq_queue_membership");
+            let db = DatabaseManager::new(&root.join("test.db")).unwrap();
+            let (tx, _rx) = mpsc::channel(16);
+            let qm = QueueManager::new(reqwest::Client::new(), db.clone(), tx);
+
+            // 1. Normal task stays in 'default', queued task stays in SEQUENTIAL_QUEUE_ID
+            let normal_dst = root.join("NormalFile.bin");
+            let mut normal_rec = build_record(
+                "task-normal",
+                "http://127.0.0.1/normal.bin",
+                &normal_dst,
+                &crate::engine::staging::derive_primary_unconfirmed_path(&normal_dst),
+                "downloading",
+                1024,
+            );
+            normal_rec.queue_id = "default".to_string();
+            db.insert_download(&normal_rec).unwrap();
+
+            let q1_dst = root.join("QueueFile1.bin");
+            let mut q1_rec = build_record(
+                "task-q1",
+                "http://127.0.0.1/q1.bin",
+                &q1_dst,
+                &crate::engine::staging::derive_primary_unconfirmed_path(&q1_dst),
+                "downloading",
+                1024,
+            );
+            q1_rec.queue_id = SEQUENTIAL_QUEUE_ID.to_string();
+            db.insert_download(&q1_rec).unwrap();
+
+            // 2. pause_queue pauses only SEQUENTIAL_QUEUE_ID back to queued, never normal 'default' task
+            assert!(qm.pause_queue());
+            assert_eq!(db.get_download("task-normal").unwrap().unwrap().status, "downloading");
+            assert_eq!(db.get_download("task-normal").unwrap().unwrap().queue_id, "default");
+            let q1_paused = db.get_download("task-q1").unwrap().unwrap();
+            assert_eq!(q1_paused.status, "queued");
+            assert_eq!(q1_paused.queue_id, SEQUENTIAL_QUEUE_ID);
+
+            // 3. queue_download attaches SEQUENTIAL_QUEUE_ID
+            assert!(qm.queue_download("task-normal"));
+            let normal_queued = db.get_download("task-normal").unwrap().unwrap();
+            assert_eq!(normal_queued.queue_id, SEQUENTIAL_QUEUE_ID);
+            assert_eq!(normal_queued.status, "queued");
+
+            // 4. unqueue_download detaches to 'default' (queued->paused, completed->completed)
+            assert!(qm.unqueue_download("task-normal"));
+            let normal_unqueued = db.get_download("task-normal").unwrap().unwrap();
+            assert_eq!(normal_unqueued.queue_id, "default");
+            assert_eq!(normal_unqueued.status, "paused");
+
+            db.update_download_status("task-q1", "completed", 0, None).unwrap();
+            assert!(qm.unqueue_download("task-q1"));
+            let q1_unqueued = db.get_download("task-q1").unwrap().unwrap();
+            assert_eq!(q1_unqueued.queue_id, "default");
+            assert_eq!(q1_unqueued.status, "completed");
+
+            crate::engine::staging::robust_delete_path(&root);
+        });
     }
 }

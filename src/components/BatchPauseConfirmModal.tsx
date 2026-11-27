@@ -2,6 +2,7 @@ import React, { useEffect } from 'react';
 import { X, Pause, Play, ListOrdered, AlertTriangle, File, RotateCcw, ShieldCheck } from 'lucide-react';
 import { DownloadItem } from '../types/download';
 import { getResumeCapability } from '../utils/format';
+import { isQueueItem } from '../services/tauriService';
 
 export interface BatchPauseConfirmModalProps {
   isOpen: boolean;
@@ -47,7 +48,7 @@ export const BatchPauseConfirmModal: React.FC<BatchPauseConfirmModalProps> = ({
     ? items.filter((i) => i.status === 'paused' || i.status === 'failed' || i.status === 'error')
     : action === 'start_queue'
     ? items.filter((i) => i.status === 'queued')
-    : items.filter((i) => i.status !== 'completed' && i.status !== 'queued');
+    : items.filter((i) => !isQueueItem(i) && i.status !== 'completed');
 
   const finalAffected = affectedItems.length > 0 ? affectedItems : items;
   if (!isOpen || !action || finalAffected.length === 0) return null;

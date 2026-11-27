@@ -81,7 +81,7 @@ export const FolderChangeModal: React.FC<FolderChangeModalProps> = ({
   const handleNativeBrowse = async () => {
     setIsBrowsingNative(true);
     try {
-      const selected = await openFolderPicker();
+      const selected = await openFolderPicker(currentPath);
       if (selected && selected.trim()) {
         handlePathChange(selected.trim());
       }

@@ -99,17 +99,20 @@ test.describe('Downex — Comprehensive Latest Features E2E (OTA, Marquee, Ban/U
     await tabRestore.click();
     await expect(customInput).toHaveValue('192');
 
-    // Open in-app Complete Modal via Dev QA and verify Swiss overlay actions
+    // Open isolated Complete Modal via Dev QA and verify Swiss window actions
     await page.locator('[data-testid="dev-qa-pill-trigger"]').click();
     await page.getByRole('button', { name: 'Modals', exact: true }).click();
-    await page.locator('[data-testid="dev-qa-open-complete-modal"]').click();
+    const [completePopup] = await Promise.all([
+      page.waitForEvent('popup'),
+      page.locator('[data-testid="dev-qa-open-complete-modal"]').click(),
+    ]);
+    await completePopup.waitForLoadState('domcontentloaded');
 
-    const completeCard = page.getByTestId('download-complete-card');
+    const completeCard = completePopup.getByTestId('download-complete-card');
     await expect(completeCard).toBeVisible({ timeout: 5000 });
-    await expect(completeCard.getByRole('button', { name: 'Open File' })).toBeVisible();
+    await expect(completeCard.getByRole('button', { name: 'Open With...' })).toBeVisible();
     await expect(completeCard.getByRole('button', { name: 'Open Folder' })).toBeVisible();
-    await completeCard.getByRole('button', { name: 'Close', exact: true }).click();
-    await expect(completeCard).toBeHidden();
+    await completePopup.close();
   });
 
   test('3. OTA Pipeline Stages, Check Updates Exclusivity, and Live Marquee Attest Reflection', async ({ page }) => {
@@ -328,5 +331,159 @@ test.describe('Downex — Comprehensive Latest Features E2E (OTA, Marquee, Ban/U
     // Release network response and verify UP TO DATE appears cleanly
     releaseManifest();
     await expect(stageEl).toHaveText('UP TO DATE', { timeout: 5000 });
+  });
+
+  test('8. Silent background checks keep APP VERSION quiet, and Start Download from Queues switches to All Downloads', async ({ page }) => {
+    const versionRow = page.getByTestId('sidebar-version');
+    const stageEl = page.getByTestId('sidebar-version-stage');
+
+    // Silent background check with no newer release must NEVER change APP VERSION UI
+    await page.route('**/api/v1/releases/downex/latest*', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ no_release: true }),
+      });
+    });
+
+    await page.evaluate(async () => {
+      await (window as any).__DOWNEX_VERSION_STORE__.getState().checkForUpdates(true);
+    });
+    await page.waitForTimeout(300);
+    await expect(versionRow.locator('text=APP VERSION')).toHaveCSS('opacity', '1');
+    await expect(stageEl).toHaveCount(0);
+
+    // Navigate to Queues first, then start an immediate download -> UI must switch to All Downloads
+    await page.getByRole('button', { name: 'Queues' }).click();
+    await expect(page.locator('h3', { hasText: 'Simple 1-by-1 Queue' })).toBeVisible();
+
+    await page.click('aside button:has-text("Add URL")');
+    const urlInput = page.locator('input[placeholder*="Paste download link"]');
+    await urlInput.fill('https://cdn.example.org/Singh.Vs.Kaur-2.2026.mkv');
+    await page.locator('button:has-text("Start Download")').click();
+
+    await expect(page.locator('div.rounded-xl', { hasText: 'Singh.Vs.Kaur-2.2026.mkv' })).toBeVisible();
+    await expect(page.locator('aside button', { hasText: 'All Downloads' })).toHaveAttribute('class', /bg-black|bg-zinc-900/);
+  });
+
+  test('9. Automatic system profile activates downex-eco-mode CSS under Low-RAM / Heavy-Load and restores Normal', async ({ page }) => {
+    await expect.poll(() =>
+      page.evaluate(() => document.documentElement.classList.contains('downex-eco-mode'))
+    ).toBe(false);
+
+    // Trigger an active card / animated probe element so we inspect real computed CSS animation behavior
+    await page.evaluate(() => {
+      const probe = document.createElement('div');
+      probe.id = 'e2e-eco-anim-probe';
+      probe.className = 'animate-shimmer';
+      document.body.appendChild(probe);
+    });
+
+    const animBefore = await page.evaluate(() => {
+      const el = document.getElementById('e2e-eco-anim-probe')!;
+      return window.getComputedStyle(el).animationName;
+    });
+    expect(animBefore).not.toBe('none');
+
+    // Simulate OS backend switching automatically to Low-RAM profile (4 GB class)
+    await page.evaluate(() => {
+      window.dispatchEvent(
+        new CustomEvent('downex-system-profile', {
+          detail: {
+            mode: 'low_ram',
+            eco_ui: true,
+            max_connections_cap: 8,
+            max_concurrent_tasks: 1,
+            telemetry_interval_ms: 350,
+            ui_poll_interval_ms: 3000,
+            prewarm_dialogs: false,
+            destroy_dialogs_on_close: true,
+            force_background_priority: true,
+            total_phys_mb: 4096,
+            avail_phys_mb: 1600,
+            memory_load_pct: 61,
+            cpu_load_pct: 12,
+            is_low_ram_hardware: true,
+          },
+        })
+      );
+    });
+
+    await expect.poll(() =>
+      page.evaluate(() => document.documentElement.classList.contains('downex-eco-mode'))
+    ).toBe(true);
+    await expect.poll(() =>
+      page.evaluate(() => (window as any).__DOWNEX_DOWNLOAD_STORE__.getState().systemProfile.ui_poll_interval_ms)
+    ).toBe(3000);
+
+    const animDuringEco = await page.evaluate(() => {
+      const el = document.getElementById('e2e-eco-anim-probe')!;
+      return window.getComputedStyle(el).animationName;
+    });
+    expect(animDuringEco).toBe('none');
+
+    // Transition automatically to Heavy-Load profile (CPU/RAM spike)
+    await page.evaluate(() => {
+      window.dispatchEvent(
+        new CustomEvent('downex-system-profile', {
+          detail: {
+            mode: 'heavy_load',
+            eco_ui: true,
+            max_connections_cap: 4,
+            max_concurrent_tasks: 1,
+            telemetry_interval_ms: 450,
+            ui_poll_interval_ms: 3500,
+            prewarm_dialogs: false,
+            destroy_dialogs_on_close: true,
+            force_background_priority: true,
+            total_phys_mb: 16384,
+            avail_phys_mb: 350,
+            memory_load_pct: 94,
+            cpu_load_pct: 91,
+            is_low_ram_hardware: false,
+          },
+        })
+      );
+    });
+
+    await expect.poll(() =>
+      page.evaluate(() => (window as any).__DOWNEX_DOWNLOAD_STORE__.getState().systemProfile.max_connections_cap)
+    ).toBe(4);
+    await expect.poll(() =>
+      page.evaluate(() => document.documentElement.classList.contains('downex-eco-mode'))
+    ).toBe(true);
+
+    // Recover automatically back to Normal profile
+    await page.evaluate(() => {
+      window.dispatchEvent(
+        new CustomEvent('downex-system-profile', {
+          detail: {
+            mode: 'normal',
+            eco_ui: false,
+            max_connections_cap: 32,
+            max_concurrent_tasks: 3,
+            telemetry_interval_ms: 150,
+            ui_poll_interval_ms: 1000,
+            prewarm_dialogs: true,
+            destroy_dialogs_on_close: false,
+            force_background_priority: false,
+            total_phys_mb: 16384,
+            avail_phys_mb: 8192,
+            memory_load_pct: 50,
+            cpu_load_pct: 10,
+            is_low_ram_hardware: false,
+          },
+        })
+      );
+    });
+
+    await expect.poll(() =>
+      page.evaluate(() => document.documentElement.classList.contains('downex-eco-mode'))
+    ).toBe(false);
+    const animRestored = await page.evaluate(() => {
+      const el = document.getElementById('e2e-eco-anim-probe')!;
+      return window.getComputedStyle(el).animationName;
+    });
+    expect(animRestored).not.toBe('none');
   });
 });

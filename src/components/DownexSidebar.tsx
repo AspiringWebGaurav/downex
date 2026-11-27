@@ -13,9 +13,9 @@ import {
   Gauge,
 } from 'lucide-react';
 import { useDownloadStore } from '../stores/downloadStore';
+import { isQueueItem } from '../services/tauriService';
 import { useAppVersionStore } from '../stores/appVersionStore';
 import { useHardwareBanStore } from '../stores/hardwareBanStore';
-import { useMarqueeNoticeStore } from '../stores/marqueeNoticeStore';
 import { cleanVersion } from '../utils/version';
 import { SidebarTooltip } from './ui/SidebarTooltip';
 
@@ -55,7 +55,6 @@ export const DownexSidebar: React.FC<DownexSidebarProps> = ({
   const status = useAppVersionStore((state) => state.status);
   const currentVersion = useAppVersionStore((state) => state.currentVersion);
   const checkForUpdates = useAppVersionStore((state) => state.checkForUpdates);
-  const noticePulse = useMarqueeNoticeStore((state) => state.noticePulse);
 
   // Sync sidebar state when unban completes or pre-ban snapshot is restored
   useEffect(() => {
@@ -144,12 +143,13 @@ export const DownexSidebar: React.FC<DownexSidebarProps> = ({
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
 
-  // ScheduleMe 1:1 Stage presentation
-  const isChecking = status.state === 'checking';
-
+  // Show stage transitions ONLY when it matters: explicit manual check or a real update lifecycle.
+  // Never flash fake/background states (silent syncs, empty checks, or header marquee notice pulses).
   const wasManualClickRef = useRef(false);
   const [showResultStage, setShowResultStage] = useState(false);
   const resultTimerRef = useRef<number | null>(null);
+  const isManualAction = Boolean(status.isManualCheck || wasManualClickRef.current);
+  const isChecking = status.state === 'checking' && !status.isSilentSync && isManualAction;
 
   // Theme switch tactile pulse animation (Sun & Moon ambient halo)
   const [themePulse, setThemePulse] = useState<'sun' | 'moon' | null>(null);
@@ -209,9 +209,10 @@ export const DownexSidebar: React.FC<DownexSidebarProps> = ({
   const pct = Math.min(100, Math.max(1, Math.round(status.progress?.percentage || 0)));
 
   const otaStageText = (() => {
+    if (status.isSilentSync) return '';
     switch (status.state) {
       case 'checking':
-        return 'CHECKING';
+        return isManualAction ? 'CHECKING' : '';
       case 'available':
         return 'UPDATE AVAILABLE';
       case 'up-to-date':
@@ -233,7 +234,7 @@ export const DownexSidebar: React.FC<DownexSidebarProps> = ({
       case 'queued':
         return 'QUEUED';
       default:
-        return noticePulse ? 'NOTICE' : '';
+        return '';
     }
   })();
 
@@ -262,24 +263,20 @@ export const DownexSidebar: React.FC<DownexSidebarProps> = ({
       case 'restarting':
         return darkMode ? 'text-purple-400 font-semibold animate-pulse' : 'text-purple-600 font-semibold animate-pulse';
       default:
-        return noticePulse
-          ? darkMode
-            ? 'text-sky-400 font-semibold animate-pulse'
-            : 'text-sky-600 font-semibold animate-pulse'
-          : darkMode
-            ? 'text-emerald-400 font-semibold'
-            : 'text-emerald-600 font-semibold';
+        return darkMode ? 'text-emerald-400 font-semibold' : 'text-emerald-600 font-semibold';
     }
   })();
 
   const activeDlPct =
-    status.state === 'downloading'
+    !status.isSilentSync && status.state === 'downloading'
       ? pct
-      : status.state === 'verifying' ||
-        status.state === 'patching' ||
-        status.state === 'installing' ||
-        status.state === 'ready' ||
-        status.state === 'restarting'
+      : !status.isSilentSync && (
+          status.state === 'verifying' ||
+          status.state === 'patching' ||
+          status.state === 'installing' ||
+          status.state === 'ready' ||
+          status.state === 'restarting'
+        )
         ? 100
         : 0;
 
@@ -334,7 +331,7 @@ export const DownexSidebar: React.FC<DownexSidebarProps> = ({
     hideTimerRef.current = window.setTimeout(() => {
       setDisplayedStage('');
       hideTimerRef.current = null;
-    }, 350);
+    }, 120);
 
     return () => {
       if (hideTimerRef.current !== null) {
@@ -362,23 +359,33 @@ export const DownexSidebar: React.FC<DownexSidebarProps> = ({
                   ? `opacity-100 ${darkMode ? 'bg-zinc-800/35' : 'bg-zinc-200/40'}`
                   : `opacity-100 ${darkMode ? 'bg-emerald-500/[0.08]' : 'bg-emerald-500/[0.06]'}`;
 
-  const showShimmer = status.state === 'checking' && stageVisible;
+  const showShimmer = isChecking && stageVisible;
   const showDlBar =
-    status.state === 'downloading' ||
-    status.state === 'verifying' ||
-    status.state === 'patching' ||
-    status.state === 'ready' ||
-    status.state === 'installing' ||
-    status.state === 'restarting';
+    !status.isSilentSync && (
+      status.state === 'downloading' ||
+      status.state === 'verifying' ||
+      status.state === 'patching' ||
+      status.state === 'ready' ||
+      status.state === 'installing' ||
+      status.state === 'restarting'
+    );
 
-  const activeDownloadingCount = items.filter(
+  const queueItems = items.filter((i) => isQueueItem(i));
+  const pendingInQueueCount = queueItems.filter((i) => i.status === 'queued').length;
+  const activeInQueueCount = queueItems.filter(
     (i) => i.status === 'downloading' || i.status === 'probing'
   ).length;
-  const queuedCount = items.filter((i) => i.status === 'queued').length;
+  const completedInQueueCount = queueItems.filter((i) => i.status === 'completed').length;
+  const queuedCount = queueItems.length;
+
+  const allDownloadsItems = items.filter((i) => !isQueueItem(i));
+  const activeDownloadingCount = allDownloadsItems.filter(
+    (i) => i.status === 'downloading' || i.status === 'probing'
+  ).length;
   const trashCount = items.filter(
     (i) => i.status === 'failed' || i.status === 'cancelled' || i.status === 'error'
   ).length;
-  const allDownloadsCount = items.filter((i) => i.status !== 'queued').length;
+  const allDownloadsCount = allDownloadsItems.length;
 
   const navItems = [
     {
@@ -397,14 +404,16 @@ export const DownexSidebar: React.FC<DownexSidebarProps> = ({
       label: 'Queues',
       icon: ListOrdered,
       count: queuedCount,
-      highlight: isQueueRunning && queuedCount > 0,
+      highlight: (isQueueRunning || activeInQueueCount > 0) && queuedCount > 0,
       subLabel:
-        isQueueRunning && queuedCount > 0
-          ? `Queue active (${queuedCount} pending)`
-          : queuedCount > 0
-            ? `${queuedCount} pending in queue`
-            : 'Queue is empty',
-      badgeTone: (isQueueRunning && queuedCount > 0 ? 'emerald' : 'amber') as 'emerald' | 'amber',
+        activeInQueueCount > 0 || isQueueRunning
+          ? `${activeInQueueCount} active • ${pendingInQueueCount} waiting`
+          : pendingInQueueCount > 0
+            ? `${pendingInQueueCount} pending in queue`
+            : completedInQueueCount > 0
+              ? `${completedInQueueCount} completed in queue`
+              : 'Queue is empty',
+      badgeTone: ((isQueueRunning || activeInQueueCount > 0) && queuedCount > 0 ? 'emerald' : 'amber') as 'emerald' | 'amber',
     },
     {
       id: 'telemetry',
@@ -664,26 +673,27 @@ export const DownexSidebar: React.FC<DownexSidebarProps> = ({
               const isStageActive = Boolean(stageVisible && displayedStage);
               return (
                 <>
-                  {/* Left Slot: APP VERSION label smoothly cross-glides with sliding vX.Y.Z */}
+                  {/* Left Slot: APP VERSION label glides out quickly before vX.Y.Z arrives */}
                   <span
-                    className={`absolute left-2.5 inset-y-0 z-10 flex items-center whitespace-nowrap leading-none pointer-events-none transition-[opacity,transform] duration-[260ms] ease-[cubic-bezier(0.22,1,0.36,1)] ${
+                    className={`absolute left-2.5 inset-y-0 z-10 flex items-center whitespace-nowrap leading-none pointer-events-none transition-[opacity,transform] ${
                       isStageActive
-                        ? 'opacity-0 -translate-x-2 delay-0'
-                        : 'opacity-100 translate-x-0 delay-[70ms]'
+                        ? 'opacity-0 -translate-x-2 duration-[120ms] ease-in delay-0'
+                        : 'opacity-100 translate-x-0 duration-[180ms] ease-out delay-[140ms]'
                     }`}
                   >
                     APP VERSION
                   </span>
 
-                  {/* Single vX.Y.Z badge: glides smoothly between right-2.5 (idle) and left-2.5 (active stage) */}
+                  {/* Single vX.Y.Z badge: enters left immediately on active stage; waits for stage fadeout before returning right */}
                   <span
                     ref={versionBadgeRef}
                     style={{
                       transform: isStageActive
                         ? `translate3d(${-versionSlidePx}px, 0, 0)`
                         : 'translate3d(0, 0, 0)',
-                      transition:
-                        'transform 340ms cubic-bezier(0.22, 1, 0.36, 1), color 220ms ease',
+                      transition: isStageActive
+                        ? 'transform 220ms cubic-bezier(0.22, 1, 0.36, 1) 0ms, color 180ms ease'
+                        : 'transform 220ms cubic-bezier(0.22, 1, 0.36, 1) 110ms, color 180ms ease',
                     }}
                     className={`absolute right-2.5 inset-y-0 z-10 flex items-center text-[10px] uppercase tracking-wider leading-none font-mono-tabular whitespace-nowrap will-change-transform ${
                       isStageActive
@@ -694,17 +704,17 @@ export const DownexSidebar: React.FC<DownexSidebarProps> = ({
                     v{cleanVersion(currentVersion)}
                   </span>
 
-                  {/* Right Stage Slot: UP TO DATE / DOWNLOADING / CHECKING */}
+                  {/* Right Stage Slot: fades in AFTER vX.Y.Z has slid left; fades out completely BEFORE vX.Y.Z returns */}
                   {displayedStage ? (
                     <span
                       data-testid="sidebar-version-stage"
-                      className={`absolute right-2.5 inset-y-0 z-10 inline-flex items-center text-[10px] uppercase font-mono-tabular tracking-wider leading-none whitespace-nowrap transition-[opacity,transform] ${displayedTone} ${
+                      className={`absolute right-2.5 inset-y-0 z-10 inline-flex items-center max-w-[116px] truncate text-[9.5px] uppercase font-mono-tabular tracking-wider leading-none whitespace-nowrap transition-[opacity,transform] ${displayedTone} ${
                         isStageActive
-                          ? 'opacity-100 translate-x-0 duration-[220ms] ease-out delay-[60ms]'
-                          : 'opacity-0 translate-x-1.5 duration-[180ms] ease-in delay-0 pointer-events-none'
+                          ? 'opacity-100 translate-x-0 duration-[140ms] ease-out delay-[120ms]'
+                          : 'opacity-0 translate-x-1.5 duration-[100ms] ease-in delay-0 pointer-events-none'
                       }`}
                     >
-                      <span className="inline-block font-semibold leading-none">
+                      <span className="inline-block font-semibold leading-none truncate">
                         {displayedStage}
                       </span>
                     </span>

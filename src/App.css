@@ -532,3 +532,25 @@ html.dark #root {
   animation-play-state: paused;
 }
 
+/* Automatic Eco-UI Mode (Activated dynamically on Low-RAM / Heavy-Load hardware profiles) */
+html.downex-eco-mode .animate-stripes,
+html.downex-eco-mode .animate-shimmer,
+html.downex-eco-mode .animate-radar,
+html.downex-eco-mode .animate-btn-shimmer,
+html.downex-eco-mode .animate-badge-shimmer,
+html.downex-eco-mode .animate-progress-glow,
+html.downex-eco-mode .animate-progress-pulse,
+html.downex-eco-mode .animate-shimmer-sweep,
+html.downex-eco-mode .ota-progress-active,
+html.downex-eco-mode .downex-marquee-item-ltr,
+html.downex-eco-mode .downex-marquee-item-rtl,
+html.downex-eco-mode .animate-pulse,
+html.downex-eco-mode .animate-ping {
+  animation: none !important;
+}
+
+html.downex-eco-mode [class*="backdrop-blur"] {
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+}
+

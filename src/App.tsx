@@ -7,7 +7,6 @@ import { DownloadTable } from './components/DownloadTable';
 import { InAppSearchBar } from './components/InAppSearchBar';
 import { TelemetryWidget } from './components/TelemetryWidget';
 import { NewDownloadModal } from './components/NewDownloadModal';
-import { DownloadCompleteModal } from './components/DownloadCompleteModal';
 import { useDownloadStore } from './stores/downloadStore';
 import { useAppVersionStore } from './stores/appVersionStore';
 import { useHardwareBanStore } from './stores/hardwareBanStore';
@@ -26,7 +25,7 @@ import { SettingsView } from './components/SettingsView';
 import { TelemetryView } from './components/TelemetryView';
 import { SpeedtestView } from './components/SpeedtestView';
 import { HardwareBannedView } from './components/HardwareBannedView';
-import { onOpenNewDownloadModal, onOpenDownloadCompleteModal, onDownloadCompleted, restoreManagerWindow, onNavigate, onCheckUpdatesFromTray, onOtaRollbackRecovered, notifyDomReady, onUiOpened, onHardwareBanChanged } from './services/tauriService';
+import { onOpenNewDownloadModal, restoreManagerWindow, onNavigate, onCheckUpdatesFromTray, onOtaRollbackRecovered, notifyDomReady, onUiOpened, onHardwareBanChanged } from './services/tauriService';
 import { updateService } from './services/updateService';
 import { initHardwareEventService, ensureDirectiveStreamConnected } from './services/hardwareEventService';
 import './App.css';
@@ -120,10 +119,10 @@ export const App: React.FC = () => {
 
   const setNewModalOpen = useDownloadStore((state) => state.setNewModalOpen);
   const openNewModalWithData = useDownloadStore((state) => state.openNewModalWithData);
-  const openCompleteModal = useDownloadStore((state) => state.openCompleteModal);
   const selectedView = useDownloadStore((state) => state.selectedView);
   const setSelectedView = useDownloadStore((state) => state.setSelectedView);
   const showTelemetryOnHome = useDownloadStore((state) => state.showTelemetryOnHome);
+  const systemProfile = useDownloadStore((state) => state.systemProfile);
   const [rollbackAlert, setRollbackAlert] = useState<string | null>(null);
 
   // Centralized Reactive Silicon Hardware Ban State
@@ -233,6 +232,10 @@ export const App: React.FC = () => {
     }
   }, [darkMode]);
 
+  useEffect(() => {
+    document.documentElement.classList.toggle('downex-eco-mode', Boolean(systemProfile?.eco_ui));
+  }, [systemProfile?.eco_ui]);
+
   // Global Ctrl+K / Ctrl+N shortcuts & Tray events
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -275,29 +278,6 @@ export const App: React.FC = () => {
       setNewModalOpen(true);
       restoreManagerWindow().catch(() => {});
     });
-
-    const handleCompleteModalEvent = (e: any) => {
-      if (e?.detail) {
-        e.preventDefault();
-        openCompleteModal(e.detail);
-      }
-    };
-    window.addEventListener('downex-open-complete-modal', handleCompleteModalEvent);
-
-    const unlistenCompleteModal = onOpenDownloadCompleteModal((payload) => {
-      if (payload) {
-        openCompleteModal(payload);
-        restoreManagerWindow().catch(() => {});
-      }
-    });
-
-    const unlistenDownloadCompleted = onDownloadCompleted((payload) => {
-      if (payload) {
-        openCompleteModal(payload);
-        restoreManagerWindow().catch(() => {});
-      }
-    });
-
 
     const unlistenNavigate = onNavigate((view) => {
       if (view) setSelectedView(view);
@@ -357,11 +337,8 @@ export const App: React.FC = () => {
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('downex-open-new-download', handleBrowserOpen);
-      window.removeEventListener('downex-open-complete-modal', handleCompleteModalEvent);
       window.removeEventListener('downex-ban-state-changed', handleLocalBan);
       unlistenTrayModal();
-      unlistenCompleteModal();
-      unlistenDownloadCompleted();
       unlistenNavigate();
       unlistenCheckUpdates();
       unlistenUiOpened();
@@ -371,7 +348,7 @@ export const App: React.FC = () => {
       unlistenBan();
       cleanupHardwareEvents();
     };
-  }, [setNewModalOpen, openNewModalWithData, openCompleteModal, setSelectedView]);
+  }, [setNewModalOpen, openNewModalWithData, setSelectedView]);
 
   return (
     <>
@@ -466,7 +443,6 @@ export const App: React.FC = () => {
         {!isBanned && !isReinstating && (
           <>
             <NewDownloadModal />
-            <DownloadCompleteModal />
             <ShutdownCountdownModal />
             <QueueGuideModal />
           </>

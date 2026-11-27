@@ -48,11 +48,23 @@ test.describe('Downex Base Application — New Download Modal & Grabber Dialog',
     const filenameInput = page.locator('input[placeholder="Filename"]');
     await expect(filenameInput).toHaveValue('custom-package');
 
+    // Remember folder must start unchecked so manual per-download folders don't stick globally
+    const rememberCheckbox = page.locator('label:has-text("Remember folder") input[type="checkbox"]');
+    await expect(rememberCheckbox).not.toBeChecked();
+
     // Test editing filename
     await filenameInput.fill('renamed-package');
     await expect(filenameInput).toHaveValue('renamed-package');
 
-    // Test Browse button
+    // Test Browse button and verify Default reset restores C:\Downloads\Downex
+    const destInput = page.locator('input[placeholder="Destination folder path"]');
+    await destInput.fill('D:\\');
+    const useDefaultBtn = page.locator('[data-testid="use-default-folder-btn"]');
+    await expect(useDefaultBtn).toBeEnabled();
+    await useDefaultBtn.click();
+    await expect(destInput).toHaveValue('C:\\Downloads\\Downex');
+    await expect(useDefaultBtn).toBeDisabled();
+
     const browseBtn = page.locator('button:has-text("Browse")').first();
     await browseBtn.click();
     // Folder modal opens
@@ -133,10 +145,29 @@ test.describe('Downex Base Application — New Download Modal & Grabber Dialog',
     await copyUrlBtn.click();
     await expect(page.locator('button:has-text("COPIED")').first()).toBeVisible();
 
-    // Verify Browse button updates destination folder
+    // Verify Browse button opens unified FolderChangeModal on Download Dialog and updates destination folder
+    const card = page.getByTestId('download-dialog-card');
+    const startBtn = page.getByRole('button', { name: 'Start Download' });
+    const cardBox = await card.boundingBox();
+    const startBox = await startBtn.boundingBox();
+    expect(cardBox).not.toBeNull();
+    expect(startBox).not.toBeNull();
+    if (cardBox && startBox) {
+      const bottomClearance = cardBox.y + cardBox.height - (startBox.y + startBox.height);
+      expect(bottomClearance).toBeGreaterThanOrEqual(8);
+    }
+    const hasVerticalOverflow = await card.evaluate((el) => el.scrollHeight > el.clientHeight);
+    expect(hasVerticalOverflow).toBe(false);
+
     const browseBtn = page.locator('button:has-text("Browse")').first();
     await browseBtn.click();
-    await expect(page.locator('input[placeholder*="Destination folder path"]')).toHaveValue(/Downloads|ISOs|Packages/);
+    const folderModal = page.locator('[data-testid="folder-change-modal"]');
+    await expect(folderModal).toBeVisible();
+    await expect(folderModal.getByText('SAVE DESTINATION', { exact: true })).toBeVisible();
+    await folderModal.locator('[data-testid="folder-shortcut-downloads"]').click();
+    await folderModal.locator('[data-testid="folder-change-confirm-btn"]').click();
+    await expect(folderModal).not.toBeVisible();
+    await expect(page.locator('input[placeholder*="Destination folder path"]')).toHaveValue(/Downloads/);
 
     // Test submit via Start Download button
     await page.click('button:has-text("Start Download")');
@@ -149,6 +180,50 @@ test.describe('Downex Base Application — New Download Modal & Grabber Dialog',
 
     expect(saved.length).toBeGreaterThan(0);
     expect(saved[0].filename).toBe('ubuntu-26.04-desktop-amd64.iso');
+
+    expect(errors).toEqual([]);
+  });
+
+  test('Grabber Dialog (?window=download_dialog): Remember folder defaults false, manual D:\\ does not persist, Default restores system path', async ({ page }) => {
+    const errors = captureConsoleErrors(page);
+
+    await page.addInitScript(() => {
+      // Simulate an earlier accidental D:\ persistence from a previous build
+      localStorage.setItem('downex_default_dir', 'D:\\');
+      (window as any).__DOWNEX_MOCK_DIALOG_PAYLOAD__ = {
+        url: 'https://cdn.example.org/Hanuman.Ansh.2026.1080p.mkv',
+        filename: 'Hanuman.Ansh.2026.1080p.mkv',
+        total_bytes: 9373000000,
+        supports_ranges: false,
+      };
+    });
+
+    await page.goto('/?window=download_dialog');
+    await expect(page.getByText('NEW DOWNLOAD', { exact: true })).toBeVisible();
+
+    const rememberCheckbox = page.locator('label:has-text("Remember folder") input[type="checkbox"]');
+    await expect(rememberCheckbox).not.toBeChecked();
+
+    const destInput = page.locator('input[placeholder="Destination folder path"]');
+    await expect(destInput).toHaveValue('D:\\');
+
+    // Default button is active when path differs from system default and resets persisted D:\
+    const useDefaultBtn = page.locator('[data-testid="use-default-folder-btn"]');
+    await expect(useDefaultBtn).toBeEnabled();
+    await useDefaultBtn.click();
+    await expect(destInput).toHaveValue('C:\\Downloads\\Downex');
+    await expect(useDefaultBtn).toBeDisabled();
+
+    const persistedAfterReset = await page.evaluate(() => localStorage.getItem('downex_default_dir'));
+    expect(persistedAfterReset).toBe('C:\\Downloads\\Downex');
+
+    // Changing manually to D:\ without checking Remember folder must NOT overwrite default
+    await destInput.fill('D:\\');
+    await expect(useDefaultBtn).toBeEnabled();
+    await page.click('button:has-text("Start Download")');
+
+    const persistedAfterManualDownload = await page.evaluate(() => localStorage.getItem('downex_default_dir'));
+    expect(persistedAfterManualDownload).toBe('C:\\Downloads\\Downex');
 
     expect(errors).toEqual([]);
   });

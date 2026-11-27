@@ -570,7 +570,7 @@ export const DevUpdateSimulator: React.FC = () => {
         };
     try {
       await showDownloadCompleteDialog(payload);
-      showFeedback(`Opened Complete Modal (Open File) for ${payload.filename}`);
+      showFeedback(`Opened Complete Modal (Open Folder) for ${payload.filename}`);
     } catch (e: any) {
       showFeedback('Complete modal error: ' + (e?.message || String(e)));
     }
@@ -1022,11 +1022,11 @@ export const DevUpdateSimulator: React.FC = () => {
                 <button
                   onClick={openCompleteModalTest}
                   className="col-span-2 flex items-center justify-center gap-1.5 px-2 py-2 rounded-lg bg-emerald-50 hover:bg-emerald-100 dark:bg-emerald-950/40 dark:hover:bg-emerald-900/50 border border-emerald-200/80 dark:border-emerald-800/60 text-emerald-800 dark:text-emerald-200 text-[11px] font-medium transition-colors cursor-pointer"
-                  title="Open in-app Download Complete ('Open File') modal matching New Download UI"
+                  title="Open isolated Download Complete ('Open Folder' / 'Open With...') modal"
                   data-testid="dev-qa-open-complete-modal"
                 >
                   <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
-                  <span>Complete Modal (Open File)</span>
+                  <span>Complete Modal (Open Folder)</span>
                 </button>
 
                 <button

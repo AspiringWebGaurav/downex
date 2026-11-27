@@ -119,4 +119,54 @@ test.describe('Downex — Custom Folder Change Modal (1:1 Unified Industrial UI)
     // Settings displays feedback
     await expect(page.getByText(/Saved:/i)).toBeVisible();
   });
+
+  test('Standalone Download Dialog (?window=download_dialog): Browse opens FolderChangeModal centered cleanly with Escape guard', async ({ page }) => {
+    // Emulate exact standalone download_dialog expanded window viewport (540x520) and normal (~540x346)
+    await page.setViewportSize({ width: 540, height: 520 });
+    await page.addInitScript(() => {
+      (window as any).__DOWNEX_MOCK_DIALOG_PAYLOAD__ = {
+        url: 'https://cdn.example.org/movie-2026-4k.mkv',
+        filename: 'movie-2026-4k.mkv',
+        total_bytes: 9750000000,
+        supports_ranges: false,
+      };
+    });
+
+    await page.goto('/?window=download_dialog');
+    await expect(page.getByText('NEW DOWNLOAD', { exact: true })).toBeVisible();
+
+    // Clicking Browse opens FolderChangeModal directly on the download modal UI
+    const browseBtn = page.getByRole('button', { name: 'Browse', exact: true });
+    await browseBtn.click();
+
+    const folderModal = page.locator('[data-testid="folder-change-modal"]');
+    await expect(folderModal).toBeVisible();
+    await expect(folderModal.getByText('SAVE DESTINATION', { exact: true })).toBeVisible();
+    await expect(folderModal.getByText('CHOOSE DOWNLOAD FOLDER', { exact: true })).toBeVisible();
+
+    const folderDialog = folderModal.locator('div.w-\\[450px\\]');
+    const dialogBox = await folderDialog.boundingBox();
+    expect(dialogBox).not.toBeNull();
+    if (dialogBox) {
+      // Ensure zero horizontal or vertical clipping within 540x520 expanded dialog window
+      expect(dialogBox.x).toBeGreaterThanOrEqual(0);
+      expect(dialogBox.y).toBeGreaterThanOrEqual(0);
+      expect(dialogBox.x + dialogBox.width).toBeLessThanOrEqual(540);
+      expect(dialogBox.y + dialogBox.height).toBeLessThanOrEqual(520);
+    }
+
+    // Escape closes ONLY FolderChangeModal, leaving NEW DOWNLOAD intact
+    await page.keyboard.press('Escape');
+    await expect(folderModal).not.toBeVisible();
+    await expect(page.getByText('NEW DOWNLOAD', { exact: true })).toBeVisible();
+
+    // Re-open Browse and pick Secondary Disk Drive (D:\Root)
+    await browseBtn.click();
+    await expect(folderModal).toBeVisible();
+    await folderModal.locator('[data-testid="folder-shortcut-d--root"]').click();
+    await folderModal.locator('[data-testid="folder-change-confirm-btn"]').click();
+    await expect(folderModal).not.toBeVisible();
+
+    await expect(page.locator('input[placeholder="Destination folder path"]')).toHaveValue('D:\\Downloads\\Downex');
+  });
 });

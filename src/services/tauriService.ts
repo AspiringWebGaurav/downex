@@ -153,6 +153,13 @@ export function clearMockDownloads(): void {
   saveMockDownloads([]);
 }
 
+export const SEQUENTIAL_QUEUE_ID = 'sequential';
+
+export function isQueueItem(item: Pick<DownloadItem, 'queue_id' | 'status'>): boolean {
+  if (item.status === 'cancelled') return false;
+  return item.queue_id === SEQUENTIAL_QUEUE_ID || item.status === 'queued';
+}
+
 export async function addDownload(
   url: string,
   destinationFolder?: string,
@@ -166,6 +173,7 @@ export async function addDownload(
     const name = customFilename || url.split('/').pop()?.split('?')[0] || 'file.bin';
     const folder = destinationFolder || (typeof localStorage !== 'undefined' ? localStorage.getItem('downex_default_dir') : null) || 'C:\\Downloads\\Downex';
     const dest = folder.endsWith('\\') ? folder + name : `${folder}\\${name}`;
+    const resolvedQueueId = queueId || (!startImmediately ? SEQUENTIAL_QUEUE_ID : 'default');
     const newItem: DownloadItem = {
       id: 'mock-' + Date.now() + '-' + Math.random().toString(36).substring(2, 7),
       url,
@@ -175,7 +183,7 @@ export async function addDownload(
       total_bytes: 104857600,
       downloaded_bytes: startImmediately ? 26214400 : 0,
       status: startImmediately ? 'downloading' : 'queued',
-      queue_id: queueId || 'default',
+      queue_id: resolvedQueueId,
       speed_bytes_sec: startImmediately ? 15728640 : 0,
       eta_seconds: startImmediately ? 5 : null,
       created_at: Date.now(),
@@ -283,12 +291,35 @@ export async function getSavedCustomSpeedLimit(): Promise<number | null> {
 
 export async function startQueue(): Promise<number> {
   if (!isTauri) {
+    const current = loadMockDownloads();
+    const queuedSorted = current
+      .filter((item) => item.status === 'queued')
+      .sort((a, b) => a.created_at - b.created_at);
+    if (queuedSorted.length === 0) {
+      mockQueueRunning = false;
+      return 0;
+    }
     mockQueueRunning = true;
-    const list = loadMockDownloads().map((item) =>
-      item.status === 'queued' ? { ...item, status: 'downloading' as const, speed_bytes_sec: 12582912 } : item
+    const hasActiveQueueDownload = current.some(
+      (item) => isQueueItem(item) && (item.status === 'downloading' || item.status === 'probing')
     );
-    saveMockDownloads(list);
-    return 1;
+    if (!hasActiveQueueDownload) {
+      const nextId = queuedSorted[0].id;
+      const list = current.map((item) =>
+        item.id === nextId
+          ? {
+              ...item,
+              status: 'downloading' as const,
+              queue_id: SEQUENTIAL_QUEUE_ID,
+              speed_bytes_sec: 12582912,
+            }
+          : item.status === 'queued'
+          ? { ...item, queue_id: SEQUENTIAL_QUEUE_ID }
+          : item
+      );
+      saveMockDownloads(list);
+    }
+    return queuedSorted.length;
   }
   return await invoke<number>('cmd_start_queue');
 }
@@ -296,6 +327,12 @@ export async function startQueue(): Promise<number> {
 export async function pauseQueue(): Promise<boolean> {
   if (!isTauri) {
     mockQueueRunning = false;
+    const list = loadMockDownloads().map((item) =>
+      isQueueItem(item) && (item.status === 'downloading' || item.status === 'probing')
+        ? { ...item, status: 'queued' as const, queue_id: SEQUENTIAL_QUEUE_ID, speed_bytes_sec: 0 }
+        : item
+    );
+    saveMockDownloads(list);
     return true;
   }
   return await invoke<boolean>('cmd_pause_queue');
@@ -309,12 +346,30 @@ export async function isQueueRunning(): Promise<boolean> {
 export async function queueDownload(id: string): Promise<boolean> {
   if (isMockItem(id) || !isTauri) {
     const list = loadMockDownloads().map((item) =>
-      item.id === id ? { ...item, status: 'queued' as const, speed_bytes_sec: 0 } : item
+      item.id === id
+        ? { ...item, status: 'queued' as const, queue_id: SEQUENTIAL_QUEUE_ID, speed_bytes_sec: 0 }
+        : item
     );
     saveMockDownloads(list);
     return true;
   }
   return await invoke<boolean>('cmd_queue_download', { id });
+}
+
+export async function unqueueDownload(id: string): Promise<boolean> {
+  if (isMockItem(id) || !isTauri) {
+    const list = loadMockDownloads().map((item) => {
+      if (item.id !== id) return item;
+      const nextStatus =
+        item.status === 'queued' || item.status === 'downloading' || item.status === 'probing'
+          ? ('paused' as const)
+          : item.status;
+      return { ...item, queue_id: 'default', status: nextStatus, speed_bytes_sec: 0 };
+    });
+    saveMockDownloads(list);
+    return true;
+  }
+  return await invoke<boolean>('cmd_unqueue_download', { id });
 }
 
 export async function getDownloads(): Promise<DownloadItem[]> {
@@ -345,6 +400,19 @@ export async function getDefaultDownloadDir(): Promise<string> {
     }
   }
   return await invoke<string>('cmd_get_default_download_dir');
+}
+
+export async function getSystemDefaultDownloadDir(): Promise<string> {
+  if (!isTauri) {
+    return 'C:\\Downloads\\Downex';
+  }
+  return await invoke<string>('cmd_get_system_default_download_dir');
+}
+
+export function normalizePathForCompare(p: string): string {
+  const normalized = (p || '').trim().replace(/\//g, '\\');
+  if (normalized.length <= 3) return normalized.toLowerCase();
+  return normalized.replace(/\\+$/, '').toLowerCase();
 }
 
 export async function setDefaultDownloadDir(newDir: string): Promise<string> {
@@ -482,9 +550,12 @@ export async function changeDownloadDestination(id: string, newFolder: string): 
   return await invoke<boolean>('cmd_change_download_destination', { id, newFolder });
 }
 
-export async function openFolderPicker(): Promise<string | null> {
+export async function openFolderPicker(initialPath?: string): Promise<string | null> {
   if (!isTauri) return 'D:\\Downloads\\CustomDownexFolder';
-  return await invoke<string | null>('cmd_open_folder_picker');
+  return await invoke<string | null>(
+    'cmd_open_folder_picker',
+    initialPath && initialPath.trim() ? { initialPath: initialPath.trim() } : {}
+  );
 }
 
 export async function fetchUpdateManifest(url: string): Promise<string> {
@@ -1183,10 +1254,16 @@ export interface DownloadInfoModalPayload {
   destination_folder?: string;
 }
 
-export async function restoreManagerWindow(): Promise<void> {
+export async function restoreManagerWindow(targetView?: string): Promise<void> {
+  if (typeof window !== 'undefined' && targetView) {
+    try {
+      const store = (window as any).__DOWNEX_DOWNLOAD_STORE__ || (window as any).useDownloadStore;
+      store?.getState?.()?.setSelectedView?.(targetView);
+    } catch {}
+  }
   if (!isTauri) return;
   try {
-    await invoke('cmd_restore_manager_window');
+    await invoke('cmd_restore_manager_window', { targetView: targetView || null });
   } catch (e) {
     console.warn('Failed to restore manager window:', e);
   }
@@ -1210,6 +1287,18 @@ export async function showDownloadDialog(payload?: DownloadInfoModalPayload): Pr
     await invoke('cmd_show_download_dialog', { payload: payload || null });
   } catch (e) {
     console.warn('Failed to show download dialog:', e);
+  }
+}
+
+export async function setDownloadDialogExpanded(expanded: boolean, baseHeight?: number): Promise<void> {
+  if (!isTauri) return;
+  try {
+    await invoke('cmd_set_download_dialog_expanded', {
+      expanded,
+      baseHeight: typeof baseHeight === 'number' && Number.isFinite(baseHeight) ? baseHeight : null,
+    });
+  } catch (e) {
+    console.warn('Failed to resize download dialog:', e);
   }
 }
 
@@ -1372,14 +1461,6 @@ export async function showDownloadCompleteDialog(payload?: DownloadCompletePaylo
       localStorage.setItem('downex_last_complete_payload', json);
       sessionStorage.setItem('downex_last_complete_payload', json);
     } catch {}
-    const evt = new CustomEvent('downex-open-complete-modal', {
-      detail: payload,
-      cancelable: true,
-    });
-    const notCanceled = window.dispatchEvent(evt);
-    if (!notCanceled) {
-      return;
-    }
   }
   if (isTauri) {
     await invoke('cmd_show_download_complete', { payload: payload || null });
@@ -1870,4 +1951,97 @@ export async function setRuntimeSessionTab(tab: string): Promise<void> {
   try {
     await invoke('cmd_set_runtime_session_tab', { tab });
   } catch {}
+}
+
+export type SystemProfileMode = 'normal' | 'low_ram' | 'heavy_load';
+
+export interface SystemProfileSnapshot {
+  mode: SystemProfileMode;
+  eco_ui: boolean;
+  max_connections_cap: number;
+  max_concurrent_tasks: number;
+  telemetry_interval_ms: number;
+  ui_poll_interval_ms: number;
+  prewarm_dialogs: boolean;
+  destroy_dialogs_on_close: boolean;
+  force_background_priority: boolean;
+  total_phys_mb: number;
+  avail_phys_mb: number;
+  memory_load_pct: number;
+  cpu_load_pct: number;
+  is_low_ram_hardware: boolean;
+}
+
+export const DEFAULT_SYSTEM_PROFILE: SystemProfileSnapshot = {
+  mode: 'normal',
+  eco_ui: false,
+  max_connections_cap: 32,
+  max_concurrent_tasks: 3,
+  telemetry_interval_ms: 150,
+  ui_poll_interval_ms: 1000,
+  prewarm_dialogs: true,
+  destroy_dialogs_on_close: false,
+  force_background_priority: false,
+  total_phys_mb: 8192,
+  avail_phys_mb: 4096,
+  memory_load_pct: 50,
+  cpu_load_pct: 0,
+  is_low_ram_hardware: false,
+};
+
+export async function getSystemProfile(): Promise<SystemProfileSnapshot> {
+  if (!isTauri) return DEFAULT_SYSTEM_PROFILE;
+  try {
+    return await invoke<SystemProfileSnapshot>('cmd_get_system_profile');
+  } catch {
+    return DEFAULT_SYSTEM_PROFILE;
+  }
+}
+
+export function onSystemProfileChanged(
+  callback: (profile: SystemProfileSnapshot) => void
+): () => void {
+  if (!isTauri) {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent<SystemProfileSnapshot>)?.detail;
+      if (detail) {
+        callback(detail);
+      }
+    };
+    if (typeof window !== 'undefined') {
+      window.addEventListener('downex-system-profile', handler);
+    }
+    return () => {
+      if (typeof window !== 'undefined') {
+        window.removeEventListener('downex-system-profile', handler);
+      }
+    };
+  }
+
+  let isCancelled = false;
+  let unlistenFn: (() => void) | null = null;
+
+  listen<SystemProfileSnapshot>('downex-system-profile', (event) => {
+    if (!isCancelled && event.payload) {
+      callback(event.payload);
+    }
+  })
+    .then((fn) => {
+      if (isCancelled) {
+        fn();
+      } else {
+        unlistenFn = fn;
+      }
+    })
+    .catch((err) => {
+      console.error('[Downex] Error listening to downex-system-profile:', err);
+    });
+
+  return () => {
+    isCancelled = true;
+    if (unlistenFn) {
+      unlistenFn();
+      unlistenFn = null;
+    }
+  };
 }

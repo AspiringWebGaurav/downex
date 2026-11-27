@@ -10,6 +10,11 @@ static LAST_DIALOG_SHOW_TIME: Mutex<Option<(String, std::time::Instant)>> = Mute
 static LAST_DOWNLOAD_COMPLETE_PAYLOAD: Mutex<Option<serde_json::Value>> = Mutex::new(None);
 static PROCESS_BOOT_ID: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 static RUNTIME_ACTIVE_TAB: Mutex<Option<String>> = Mutex::new(None);
+static FOLDER_PICKER_ACTIVE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+const DOWNLOAD_DIALOG_WIDTH: f64 = 540.0;
+const DOWNLOAD_DIALOG_BASE_HEIGHT: f64 = 346.0;
+const DOWNLOAD_DIALOG_EXPANDED_HEIGHT: f64 = 520.0;
 
 fn get_process_boot_id() -> &'static str {
     PROCESS_BOOT_ID.get_or_init(|| uuid::Uuid::new_v4().to_string())
@@ -121,6 +126,14 @@ pub fn cmd_queue_download(app: AppHandle, id: String, state: State<'_, AppState>
 }
 
 #[tauri::command]
+pub fn cmd_unqueue_download(app: AppHandle, id: String, state: State<'_, AppState>) -> Result<bool, String> {
+    let res = state.queue_manager.unqueue_download(&id);
+    let _ = crate::tray::sync_download_task_tray(&app);
+    let _ = crate::tray::refresh_tray_menu(&app);
+    Ok(res)
+}
+
+#[tauri::command]
 pub async fn cmd_resume_download(app: AppHandle, id: String, state: State<'_, AppState>) -> Result<bool, String> {
     let res = state.queue_manager.resume_task(&id).await;
     let _ = crate::tray::sync_download_task_tray(&app);
@@ -197,6 +210,13 @@ pub async fn cmd_get_downloads(state: State<'_, AppState>) -> Result<Vec<Downloa
 #[tauri::command]
 pub fn cmd_get_default_download_dir(state: State<'_, AppState>) -> Result<String, String> {
     Ok(state.queue_manager.get_default_download_directory())
+}
+
+#[tauri::command]
+pub fn cmd_get_system_default_download_dir() -> Result<String, String> {
+    Ok(crate::scheduler::resolve_default_download_directory()
+        .to_string_lossy()
+        .to_string())
 }
 
 #[tauri::command]
@@ -289,24 +309,153 @@ pub async fn cmd_change_download_destination(
         .map_err(|e| e.to_string())
 }
 
+#[cfg(target_os = "windows")]
+struct FolderPickerTopmostGuard<R: tauri::Runtime> {
+    windows_to_restore: Vec<tauri::WebviewWindow<R>>,
+    focus_window: tauri::WebviewWindow<R>,
+}
+
+#[cfg(target_os = "windows")]
+impl<R: tauri::Runtime> Drop for FolderPickerTopmostGuard<R> {
+    fn drop(&mut self) {
+        FOLDER_PICKER_ACTIVE.store(false, std::sync::atomic::Ordering::SeqCst);
+        for w in &self.windows_to_restore {
+            if should_keep_window_always_on_top(w.label()) {
+                let _ = w.set_always_on_top(true);
+            }
+        }
+        if self.focus_window.is_visible().unwrap_or(false) {
+            let _ = self.focus_window.set_focus();
+            force_window_to_foreground(&self.focus_window);
+        }
+    }
+}
+
+fn sanitize_picker_initial_dir(initial_path: Option<String>) -> Option<String> {
+    let mut raw = initial_path?.trim().replace('/', "\\");
+    while raw.len() > 3 && raw.ends_with('\\') {
+        raw.pop();
+    }
+    if raw.is_empty() {
+        return None;
+    }
+    let path = std::path::Path::new(&raw);
+    if path.is_dir() {
+        return Some(raw);
+    }
+    path.parent()
+        .filter(|p| p.is_dir())
+        .map(|p| {
+            let mut s = p.to_string_lossy().to_string();
+            while s.len() > 3 && s.ends_with('\\') {
+                s.pop();
+            }
+            s
+        })
+}
+
 #[tauri::command]
-pub async fn cmd_open_folder_picker() -> Result<Option<String>, String> {
+pub async fn cmd_open_folder_picker(
+    app: AppHandle,
+    window: tauri::WebviewWindow,
+    initial_path: Option<String>,
+) -> Result<Option<String>, String> {
     #[cfg(target_os = "windows")]
     {
-        tauri::async_runtime::spawn_blocking(|| {
-            use std::process::Command;
-            use std::os::windows::process::CommandExt;
+        use windows_sys::Win32::UI::WindowsAndMessaging::{
+            AllowSetForegroundWindow, SetWindowPos, ASFW_ANY, HWND_NOTOPMOST, SWP_NOACTIVATE,
+            SWP_NOMOVE, SWP_NOSIZE,
+        };
 
-            let output = Command::new("powershell")
-                .args(&[
-                    "-NoProfile",
-                    "-Sta",
-                    "-Command",
-                    "$null = [System.Reflection.Assembly]::LoadWithPartialName('System.windows.forms'); $f = New-Object System.Windows.Forms.FolderBrowserDialog; $f.Description = 'Select Downex Download Folder'; $f.ShowNewFolderButton = $true; if ($f.ShowDialog((New-Object System.Windows.Forms.NativeWindow)) -eq [System.Windows.Forms.DialogResult]::OK) { Write-Output $f.SelectedPath }",
-                ])
-                .creation_flags(0x08000000) // CREATE_NO_WINDOW
-                .output()
-                .map_err(|e| e.to_string())?;
+        FOLDER_PICKER_ACTIVE.store(true, std::sync::atomic::Ordering::SeqCst);
+
+        let mut windows_to_restore = Vec::new();
+        let mut seen_labels = std::collections::HashSet::new();
+        for candidate in [
+            Some(window.clone()),
+            app.get_webview_window("download_dialog"),
+            app.get_webview_window("download_complete"),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            if !seen_labels.insert(candidate.label().to_string()) {
+                continue;
+            }
+            if candidate.is_visible().unwrap_or(false)
+                && candidate.is_always_on_top().unwrap_or(false)
+            {
+                let _ = candidate.set_always_on_top(false);
+                if let Ok(hwnd) = candidate.hwnd() {
+                    unsafe {
+                        SetWindowPos(
+                            hwnd.0 as _,
+                            HWND_NOTOPMOST,
+                            0,
+                            0,
+                            0,
+                            0,
+                            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+                        );
+                    }
+                }
+                windows_to_restore.push(candidate);
+            }
+        }
+
+        let _topmost_guard = FolderPickerTopmostGuard {
+            windows_to_restore,
+            focus_window: window,
+        };
+
+        unsafe {
+            let _ = AllowSetForegroundWindow(ASFW_ANY);
+        }
+
+        let initial_dir = sanitize_picker_initial_dir(initial_path);
+
+        tauri::async_runtime::spawn_blocking(move || {
+            use std::os::windows::process::CommandExt;
+            use std::process::Command;
+
+            let script = r#"
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
+[System.Windows.Forms.Application]::EnableVisualStyles()
+$owner = New-Object System.Windows.Forms.Form
+$owner.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::None
+$owner.ShowInTaskbar = $false
+$owner.StartPosition = [System.Windows.Forms.FormStartPosition]::CenterScreen
+$owner.Size = New-Object System.Drawing.Size(1, 1)
+$owner.Opacity = 0
+$owner.TopMost = $true
+$f = New-Object System.Windows.Forms.FolderBrowserDialog
+$f.Description = 'Select Downex Download Folder'
+$f.ShowNewFolderButton = $true
+$init = $env:DOWNEX_INITIAL_DIR
+if ($init -and (Test-Path -LiteralPath $init -PathType Container)) {
+    $f.SelectedPath = $init
+}
+try {
+    $owner.Show()
+    $owner.Activate()
+    if ($f.ShowDialog($owner) -eq [System.Windows.Forms.DialogResult]::OK) {
+        Write-Output $f.SelectedPath
+    }
+} finally {
+    $f.Dispose()
+    $owner.Close()
+    $owner.Dispose()
+}
+"#;
+
+            let mut cmd = Command::new("powershell");
+            cmd.args(&["-NoProfile", "-Sta", "-Command", script])
+                .creation_flags(0x08000000); // CREATE_NO_WINDOW
+            if let Some(dir) = initial_dir {
+                cmd.env("DOWNEX_INITIAL_DIR", dir);
+            }
+            let output = cmd.output().map_err(|e| e.to_string())?;
 
             let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
             if path.is_empty() {
@@ -320,6 +469,7 @@ pub async fn cmd_open_folder_picker() -> Result<Option<String>, String> {
     }
     #[cfg(not(target_os = "windows"))]
     {
+        let _ = (app, window, initial_path);
         Ok(None)
     }
 }
@@ -1348,7 +1498,9 @@ pub fn cmd_notify_dom_ready(app: AppHandle) {
         }
         #[cfg(target_os = "windows")]
         {
-            set_process_priority_background(false);
+            if !crate::system_profile::should_force_background_priority() {
+                set_process_priority_background(false);
+            }
             if !SHELL_REFRESHED_ON_READY.swap(true, std::sync::atomic::Ordering::SeqCst) {
                 let is_update_handoff = args.iter().any(|a| {
                     a == "--update-restart" || a == "--restarted" || a == "--restarted-after-update" || a == "--rolled-back"
@@ -1397,10 +1549,56 @@ pub fn cmd_set_tray_icon(app: AppHandle, state: String) -> Result<(), String> {
     crate::tray::set_tray_icon_state(&app, &state).map_err(|e| e.to_string())
 }
 
-/// Pre-warms the quick-capture `download_dialog` window in hidden state
-/// so browser extension / CLI grabs appear instantaneously (<10ms).
-/// (`download_complete` uses the main window modal when available and is created lazily only if needed.)
+/// Hides a secondary dialog in Normal mode (<10ms warm reuse) or destroys it under constrained profiles.
+pub fn dispose_or_hide_secondary_window<R: tauri::Runtime>(app: &tauri::AppHandle<R>, label: &str) {
+    if let Some(window) = app.get_webview_window(label) {
+        let _ = window.set_always_on_top(false);
+        let _ = window.hide();
+        if crate::system_profile::should_destroy_dialogs_on_close() {
+            let _ = window.destroy();
+            #[cfg(target_os = "windows")]
+            trim_process_working_set();
+        } else if label == "download_dialog" {
+            let _ = window.set_size(tauri::Size::Logical(tauri::LogicalSize {
+                width: DOWNLOAD_DIALOG_WIDTH,
+                height: DOWNLOAD_DIALOG_BASE_HEIGHT,
+            }));
+        }
+    }
+}
+
+/// Destroys any secondary dialog currently sitting hidden in memory when pressure escalates.
+pub fn reclaim_hidden_secondary_dialogs<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
+    if !crate::system_profile::should_destroy_dialogs_on_close() {
+        return;
+    }
+    let app_clone = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        let mut reclaimed = false;
+        for label in ["download_dialog", "download_complete"] {
+            if let Some(window) = app_clone.get_webview_window(label) {
+                let is_visible = window.is_visible().unwrap_or(false);
+                if !is_visible {
+                    let _ = window.set_always_on_top(false);
+                    let _ = window.destroy();
+                    reclaimed = true;
+                }
+            }
+        }
+        #[cfg(target_os = "windows")]
+        if reclaimed {
+            trim_process_working_set();
+        }
+    });
+}
+
+/// Pre-warms secondary dialog windows (`download_dialog`, `download_complete`) in hidden state
+/// so browser extension captures and background completions appear instantaneously (<10ms)
+/// as completely isolated standalone windows without surfacing the main window from tray.
 pub fn prewarm_secondary_dialogs<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
+    if !crate::system_profile::should_prewarm_dialogs() {
+        return;
+    }
     if app.get_webview_window("download_dialog").is_none() {
         let builder = tauri::WebviewWindowBuilder::new(
             app,
@@ -1408,14 +1606,38 @@ pub fn prewarm_secondary_dialogs<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
             tauri::WebviewUrl::default(),
         )
         .title("Downex - Download File Info")
-        .inner_size(540.0, 318.0)
+        .inner_size(DOWNLOAD_DIALOG_WIDTH, DOWNLOAD_DIALOG_BASE_HEIGHT)
         .decorations(false)
         .transparent(false)
         .shadow(true)
         .center()
         .resizable(false)
-        .always_on_top(true)
+        .always_on_top(false)
         .initialization_script("window.__DOWNEX_WINDOW_LABEL__ = 'download_dialog';")
+        .visible(false);
+
+        if let Ok(window) = builder.build() {
+            if let Ok(icon) = tauri::image::Image::from_bytes(include_bytes!("../../icons/128x128.png")) {
+                let _ = window.set_icon(icon);
+            }
+        }
+    }
+
+    if app.get_webview_window("download_complete").is_none() {
+        let builder = tauri::WebviewWindowBuilder::new(
+            app,
+            "download_complete",
+            tauri::WebviewUrl::default(),
+        )
+        .title("Download complete")
+        .inner_size(540.0, 282.0)
+        .decorations(false)
+        .transparent(false)
+        .shadow(true)
+        .center()
+        .resizable(false)
+        .always_on_top(false)
+        .initialization_script("window.__DOWNEX_WINDOW_LABEL__ = 'download_complete';")
         .visible(false);
 
         if let Ok(window) = builder.build() {
@@ -1457,23 +1679,37 @@ pub fn show_download_dialog<R: tauri::Runtime>(app: &tauri::AppHandle<R>, payloa
         }
     }
 
+    let eval_script = payload.as_ref().map(|p| {
+        let json_str = serde_json::to_string(p).unwrap_or_default();
+        format!(
+            "window.__DOWNEX_DIALOG_PAYLOAD__ = {json}; if (typeof window.__onDownexDialogPayload === 'function') {{ window.__onDownexDialogPayload({json}); }}",
+            json = json_str
+        )
+    });
+
     if app.get_webview_window("download_dialog").is_some() {
         let app_clone = app.clone();
         let payload_clone = payload.clone();
+        let eval_clone = eval_script.clone();
         let _ = app.run_on_main_thread(move || {
             if let Some(window) = app_clone.get_webview_window("download_dialog") {
                 if let Some(ref p) = payload_clone {
                     use tauri::Emitter;
                     let _ = window.emit("open-download-info-modal", p);
                 }
-                let _ = window.set_size(tauri::Size::Logical(tauri::LogicalSize {
-                    width: 540.0,
-                    height: 318.0,
-                }));
+                if let Some(ref script) = eval_clone {
+                    let _ = window.eval(script);
+                }
+                if !window.is_visible().unwrap_or(false) {
+                    let _ = window.set_size(tauri::Size::Logical(tauri::LogicalSize {
+                        width: DOWNLOAD_DIALOG_WIDTH,
+                        height: DOWNLOAD_DIALOG_BASE_HEIGHT,
+                    }));
+                    let _ = window.center();
+                }
                 let _ = window.unminimize();
-                let _ = window.center();
                 let _ = window.show();
-                let _ = window.set_always_on_top(true);
+                let _ = window.set_always_on_top(false);
                 let _ = window.set_focus();
                 #[cfg(target_os = "windows")]
                 force_window_to_foreground(&window);
@@ -1482,21 +1718,29 @@ pub fn show_download_dialog<R: tauri::Runtime>(app: &tauri::AppHandle<R>, payloa
     } else {
         let app_handle = app.clone();
         let payload_clone = payload.clone();
+        let eval_clone = eval_script;
         let _ = app.run_on_main_thread(move || {
+            let init_script = match payload_clone.as_ref() {
+                Some(p) => format!(
+                    "window.__DOWNEX_WINDOW_LABEL__ = 'download_dialog'; window.__DOWNEX_DIALOG_PAYLOAD__ = {};",
+                    serde_json::to_string(p).unwrap_or_else(|_| "null".to_string())
+                ),
+                None => "window.__DOWNEX_WINDOW_LABEL__ = 'download_dialog';".to_string(),
+            };
             let builder = tauri::WebviewWindowBuilder::new(
                 &app_handle,
                 "download_dialog",
                 tauri::WebviewUrl::default(),
             )
             .title("Downex - Download File Info")
-            .inner_size(540.0, 318.0)
+            .inner_size(DOWNLOAD_DIALOG_WIDTH, DOWNLOAD_DIALOG_BASE_HEIGHT)
             .decorations(false)
             .transparent(false)
             .shadow(true)
             .center()
             .resizable(false)
-            .always_on_top(true)
-            .initialization_script("window.__DOWNEX_WINDOW_LABEL__ = 'download_dialog';")
+            .always_on_top(false)
+            .initialization_script(&init_script)
             .visible(false);
 
             match builder.build() {
@@ -1508,10 +1752,13 @@ pub fn show_download_dialog<R: tauri::Runtime>(app: &tauri::AppHandle<R>, payloa
                         use tauri::Emitter;
                         let _ = window.emit("open-download-info-modal", p);
                     }
+                    if let Some(ref script) = eval_clone {
+                        let _ = window.eval(script);
+                    }
                     let _ = window.unminimize();
                     let _ = window.center();
                     let _ = window.show();
-                    let _ = window.set_always_on_top(true);
+                    let _ = window.set_always_on_top(false);
                     let _ = window.set_focus();
 
                     #[cfg(target_os = "windows")]
@@ -1536,11 +1783,15 @@ pub fn show_download_dialog<R: tauri::Runtime>(app: &tauri::AppHandle<R>, payloa
     }
 }
 
+pub(crate) fn should_keep_window_always_on_top(label: &str) -> bool {
+    !matches!(label, "main" | "download_complete" | "download_dialog")
+}
+
 #[cfg(target_os = "windows")]
 pub fn force_window_to_foreground<R: tauri::Runtime>(window: &tauri::WebviewWindow<R>) {
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         BringWindowToTop, GetForegroundWindow, GetWindowThreadProcessId, SetForegroundWindow, SetWindowPos, ShowWindow,
-        HWND_NOTOPMOST, HWND_TOP, HWND_TOPMOST, SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW, SW_RESTORE, SW_SHOW,
+        HWND_NOTOPMOST, HWND_TOP, HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW, SW_RESTORE, SW_SHOW,
     };
     if let Ok(h) = window.hwnd() {
         let hwnd_val = h.0 as _;
@@ -1565,10 +1816,11 @@ pub fn force_window_to_foreground<R: tauri::Runtime>(window: &tauri::WebviewWind
 
             ShowWindow(hwnd_val, SW_RESTORE);
             ShowWindow(hwnd_val, SW_SHOW);
-            if window.label() == "main" || window.label() == "download_complete" {
-                // Main and download_complete windows must NEVER remain permanently topmost (WS_EX_TOPMOST).
-                // Setting HWND_NOTOPMOST allows other applications (IDE, browser, etc.) to come in front
-                // naturally when clicking elsewhere outside Downex.
+            if !should_keep_window_always_on_top(window.label()) {
+                // Non-pinned windows (main, download_complete, download_dialog) must NEVER remain permanently
+                // WS_EX_TOPMOST: briefly pulse to top then immediately drop to HWND_NOTOPMOST + HWND_TOP so other
+                // apps naturally come in front and the modal loses focus when clicking elsewhere.
+                SetWindowPos(hwnd_val, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
                 SetWindowPos(hwnd_val, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
                 SetWindowPos(hwnd_val, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
             } else {
@@ -1628,15 +1880,96 @@ pub fn cmd_show_download_dialog(app: AppHandle, payload: Option<serde_json::Valu
     Ok(())
 }
 
+fn compute_centered_clamped_position(
+    cur_pos: (i32, i32),
+    cur_size: (i32, i32),
+    target_size: (i32, i32),
+    monitor_bounds: Option<(i32, i32, i32, i32)>,
+    scale: f64,
+) -> (i32, i32) {
+    let mut next_x = cur_pos.0 + (cur_size.0 - target_size.0) / 2;
+    let mut next_y = cur_pos.1 + (cur_size.1 - target_size.1) / 2;
+
+    if let Some((mon_x, mon_y, mon_w, mon_h)) = monitor_bounds {
+        let margin = (12.0 * scale).round() as i32;
+        let taskbar_margin = (48.0 * scale).round() as i32;
+        let min_x = mon_x + margin;
+        let min_y = mon_y + margin;
+        let max_x = (mon_x + mon_w - target_size.0 - margin).max(min_x);
+        let max_y = (mon_y + mon_h - target_size.1 - taskbar_margin).max(min_y);
+        next_x = next_x.clamp(min_x, max_x);
+        next_y = next_y.clamp(min_y, max_y);
+    }
+
+    (next_x, next_y)
+}
+
+#[tauri::command]
+pub fn cmd_set_download_dialog_expanded(
+    app: AppHandle,
+    expanded: bool,
+    base_height: Option<f64>,
+) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window("download_dialog") {
+        let target_w: f64 = DOWNLOAD_DIALOG_WIDTH;
+        let resolved_base = base_height
+            .filter(|h| h.is_finite() && *h >= 300.0 && *h <= 460.0)
+            .unwrap_or(DOWNLOAD_DIALOG_BASE_HEIGHT);
+        let target_h: f64 = if expanded {
+            DOWNLOAD_DIALOG_EXPANDED_HEIGHT
+        } else {
+            resolved_base
+        };
+        let scale = window.scale_factor().unwrap_or(1.0);
+        let target_phys_w = (target_w * scale).round() as i32;
+        let target_phys_h = (target_h * scale).round() as i32;
+
+        let prev_pos = window.outer_position().ok();
+        let prev_size = window.outer_size().ok();
+
+        if let Some(sz) = prev_size {
+            if (sz.width as i32 - target_phys_w).abs() <= 2
+                && (sz.height as i32 - target_phys_h).abs() <= 2
+            {
+                return Ok(());
+            }
+        }
+
+        let _ = window.set_size(tauri::Size::Logical(tauri::LogicalSize {
+            width: target_w,
+            height: target_h,
+        }));
+
+        if let (Some(pos), Some(sz)) = (prev_pos, prev_size) {
+            if window.is_visible().unwrap_or(false) {
+                let monitor_bounds = window.current_monitor().ok().flatten().map(|m| {
+                    let mp = m.position();
+                    let ms = m.size();
+                    (mp.x, mp.y, ms.width as i32, ms.height as i32)
+                });
+                let (next_x, next_y) = compute_centered_clamped_position(
+                    (pos.x, pos.y),
+                    (sz.width as i32, sz.height as i32),
+                    (target_phys_w, target_phys_h),
+                    monitor_bounds,
+                    scale,
+                );
+                let _ = window.set_position(tauri::Position::Physical(tauri::PhysicalPosition {
+                    x: next_x,
+                    y: next_y,
+                }));
+            }
+        }
+    }
+    Ok(())
+}
+
 #[tauri::command]
 pub fn cmd_close_download_dialog(app: AppHandle) -> Result<(), String> {
     if let Ok(mut lock) = LAST_DOWNLOAD_DIALOG_PAYLOAD.lock() {
         *lock = None;
     }
-    if let Some(window) = app.get_webview_window("download_dialog") {
-        let _ = window.set_always_on_top(false);
-        let _ = window.hide();
-    }
+    dispose_or_hide_secondary_window(&app, "download_dialog");
     Ok(())
 }
 
@@ -1730,13 +2063,42 @@ pub fn cmd_get_available_disks() -> Result<Vec<DiskVolumeInfo>, String> {
     Ok(Vec::new())
 }
 
+pub(crate) fn resolve_restore_target_view(target_view: Option<&str>) -> Option<String> {
+    let view = target_view?.trim();
+    if matches!(
+        view,
+        "all" | "queues" | "telemetry" | "settings" | "speedtest" | "trash" | "active" | "completed"
+    ) {
+        Some(view.to_string())
+    } else {
+        None
+    }
+}
+
 #[tauri::command]
-pub fn cmd_restore_manager_window(app: AppHandle) -> Result<(), String> {
+pub fn cmd_restore_manager_window(app: AppHandle, target_view: Option<String>) -> Result<(), String> {
+    let normalized_view = resolve_restore_target_view(target_view.as_deref());
+    if let Some(ref view) = normalized_view {
+        if let Ok(mut guard) = RUNTIME_ACTIVE_TAB.lock() {
+            *guard = Some(view.clone());
+        }
+    }
+
     let window = if let Some(w) = app.get_webview_window("main") {
         w
     } else {
         crate::tray::create_or_show_main_window(&app).map_err(|e| e.to_string())?
     };
+
+    if let Some(ref view) = normalized_view {
+        let _ = app.emit("downex-navigate", view.as_str());
+        if let Ok(view_json) = serde_json::to_string(view) {
+            let _ = window.eval(&format!(
+                "try {{ sessionStorage.setItem('downex_session_selected_view', {view_json}); }} catch(e) {{}}",
+            ));
+        }
+    }
+
     let _ = window.show();
     let _ = window.unminimize();
     let _ = window.set_focus();
@@ -1877,12 +2239,243 @@ pub fn cmd_open_file(path: String, state: State<'_, AppState>) -> Result<(), Str
     Ok(())
 }
 
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum FolderRevealTarget {
+    SelectFile(String),
+    OpenDir(String),
+}
+
+fn sanitize_win_reveal_path(path: &str) -> Result<String, String> {
+    use std::path::{Component, Path};
+
+    let trimmed = path.trim().replace('/', "\\");
+    let stripped = if let Some(unc_rest) = trimmed.strip_prefix("\\\\?\\UNC\\") {
+        format!("\\\\{}", unc_rest)
+    } else if let Some(rest) = trimmed.strip_prefix("\\\\?\\") {
+        rest.to_string()
+    } else {
+        trimmed
+    };
+
+    if stripped.is_empty()
+        || stripped.contains('"')
+        || stripped.contains('\0')
+        || stripped.contains('\r')
+        || stripped.contains('\n')
+        || stripped.starts_with("\\\\.\\")
+    {
+        return Err("Invalid folder path".to_string());
+    }
+
+    let path_obj = Path::new(&stripped);
+    if !path_obj.is_absolute() {
+        return Err("Path must be an absolute path".to_string());
+    }
+    if path_obj.components().any(|c| matches!(c, Component::ParentDir)) {
+        return Err("Relative path traversal segments are not permitted".to_string());
+    }
+    Ok(stripped)
+}
+
+fn canonical_display_win_path(path: &std::path::Path, fallback: &str) -> String {
+    let io = crate::engine::staging::to_win_io_path(path);
+    if let Ok(canon) = std::fs::canonicalize(&io) {
+        let s = canon.to_string_lossy().to_string();
+        if let Some(unc_rest) = s.strip_prefix("\\\\?\\UNC\\") {
+            return format!("\\\\{}", unc_rest);
+        }
+        if s.len() < 259 {
+            return s.trim_start_matches("\\\\?\\").to_string();
+        }
+        return s;
+    }
+    fallback.to_string()
+}
+
+pub(crate) fn resolve_folder_reveal_target(
+    raw_path: &str,
+    db: &crate::db::DatabaseManager,
+) -> Result<FolderRevealTarget, String> {
+    use std::path::Path;
+
+    let clean_path = sanitize_win_reveal_path(raw_path)?;
+    let path_obj = Path::new(&clean_path);
+    let normalized_req = clean_path.to_lowercase();
+
+    let matched_record = db
+        .get_all_downloads()
+        .ok()
+        .and_then(|list| {
+            list.into_iter().find(|d| {
+                d.destination_path.trim().replace('/', "\\").to_lowercase() == normalized_req
+                    || d.staging_path
+                        .as_deref()
+                        .map(|s| s.trim().replace('/', "\\").to_lowercase() == normalized_req)
+                        .unwrap_or(false)
+            })
+        });
+
+    if clean_path.starts_with("\\\\") && matched_record.is_none() {
+        return Err("Opening unverified UNC network paths is not permitted".to_string());
+    }
+
+    let io_target = crate::engine::staging::to_win_io_path(path_obj);
+    if io_target.is_file() {
+        return Ok(FolderRevealTarget::SelectFile(canonical_display_win_path(
+            path_obj,
+            &clean_path,
+        )));
+    }
+
+    let db_staging = matched_record.and_then(|d| d.staging_path);
+    let active_staging = db_staging
+        .map(std::path::PathBuf::from)
+        .filter(|p| crate::engine::staging::to_win_io_path(p).is_file())
+        .or_else(|| {
+            let derived = crate::engine::staging::derive_primary_unconfirmed_path(path_obj);
+            if crate::engine::staging::to_win_io_path(&derived).is_file() {
+                Some(derived)
+            } else {
+                None
+            }
+        });
+
+    if let Some(staging_file) = active_staging {
+        let staging_str = staging_file
+            .to_string_lossy()
+            .replace(['/', '"', '\r', '\n', '\0'], "\\");
+        return Ok(FolderRevealTarget::SelectFile(canonical_display_win_path(
+            &staging_file,
+            &staging_str,
+        )));
+    }
+
+    if io_target.is_dir() {
+        return Ok(FolderRevealTarget::OpenDir(canonical_display_win_path(
+            path_obj,
+            &clean_path,
+        )));
+    }
+
+    if let Some(parent) = path_obj
+        .parent()
+        .filter(|p| crate::engine::staging::to_win_io_path(p).is_dir())
+    {
+        let parent_str = parent.to_string_lossy().to_string();
+        return Ok(FolderRevealTarget::OpenDir(canonical_display_win_path(
+            parent,
+            &parent_str,
+        )));
+    }
+
+    Err("Target folder does not exist on disk".to_string())
+}
+
+#[cfg(target_os = "windows")]
+fn reveal_in_windows_explorer(target: &FolderRevealTarget) -> Result<(), String> {
+    use std::ffi::c_void;
+    use std::os::windows::ffi::OsStrExt;
+    use std::os::windows::process::CommandExt;
+    use windows_sys::Win32::UI::Shell::ShellExecuteW;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{AllowSetForegroundWindow, ASFW_ANY};
+
+    #[link(name = "ole32")]
+    extern "system" {
+        fn CoInitializeEx(pvReserved: *const c_void, dwCoInit: u32) -> i32;
+        fn CoUninitialize();
+    }
+
+    #[link(name = "shell32")]
+    extern "system" {
+        fn ILCreateFromPathW(pszPath: *const u16) -> *mut c_void;
+        fn SHOpenFolderAndSelectItems(
+            pidlFolder: *const c_void,
+            cidl: u32,
+            apidl: *const *const c_void,
+            dwFlags: u32,
+        ) -> i32;
+        fn ILFree(pidl: *mut c_void);
+    }
+
+    struct ComStaGuard(bool);
+    impl Drop for ComStaGuard {
+        fn drop(&mut self) {
+            if self.0 {
+                unsafe { CoUninitialize() };
+            }
+        }
+    }
+
+    unsafe {
+        let _ = AllowSetForegroundWindow(ASFW_ANY);
+    }
+
+    match target {
+        FolderRevealTarget::SelectFile(file_path) => {
+            const COINIT_APARTMENTTHREADED: u32 = 0x2;
+            const COINIT_DISABLE_OLE1DDE: u32 = 0x4;
+            let hr_com = unsafe { CoInitializeEx(std::ptr::null(), COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE) };
+            // S_OK (0) or S_FALSE (1) must be paired with CoUninitialize; RPC_E_CHANGED_MODE (0x80010106) must not.
+            let _com_guard = ComStaGuard(hr_com == 0 || hr_com == 1);
+
+            let wide: Vec<u16> = std::ffi::OsStr::new(file_path)
+                .encode_wide()
+                .chain(Some(0))
+                .collect();
+            let pidl = unsafe { ILCreateFromPathW(wide.as_ptr()) };
+            if !pidl.is_null() {
+                let hr_open = unsafe { SHOpenFolderAndSelectItems(pidl, 0, std::ptr::null(), 0) };
+                unsafe { ILFree(pidl) };
+                if hr_open == 0 {
+                    return Ok(());
+                }
+            }
+
+            let mut cmd = std::process::Command::new("explorer.exe");
+            cmd.creation_flags(0x08000000);
+            cmd.raw_arg(format!("/select,\"{}\"", file_path));
+            cmd.spawn().map_err(|e| e.to_string())?;
+            Ok(())
+        }
+        FolderRevealTarget::OpenDir(dir_path) => {
+            let op: Vec<u16> = "open\0".encode_utf16().collect();
+            let dir_wide: Vec<u16> = std::ffi::OsStr::new(dir_path)
+                .encode_wide()
+                .chain(Some(0))
+                .collect();
+            let res = unsafe {
+                ShellExecuteW(
+                    std::ptr::null_mut(),
+                    op.as_ptr(),
+                    dir_wide.as_ptr(),
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    1,
+                )
+            };
+            if (res as usize) > 32 {
+                return Ok(());
+            }
+
+            let mut cmd = std::process::Command::new("explorer.exe");
+            cmd.creation_flags(0x08000000);
+            cmd.arg(dir_path);
+            cmd.spawn().map_err(|e| e.to_string())?;
+            Ok(())
+        }
+    }
+}
+
 #[tauri::command]
 pub fn cmd_open_file_with(path: String, state: State<'_, AppState>) -> Result<(), String> {
     let clean_path = ensure_file_ready_to_open(&path, &state.db)?;
     #[cfg(target_os = "windows")]
     {
         use std::os::windows::process::CommandExt;
+        use windows_sys::Win32::UI::WindowsAndMessaging::{AllowSetForegroundWindow, ASFW_ANY};
+        unsafe {
+            let _ = AllowSetForegroundWindow(ASFW_ANY);
+        }
         std::process::Command::new("rundll32.exe")
             .args(["shell32.dll,OpenAs_RunDLL", &clean_path])
             .creation_flags(0x08000000) // CREATE_NO_WINDOW
@@ -1893,88 +2486,13 @@ pub fn cmd_open_file_with(path: String, state: State<'_, AppState>) -> Result<()
 }
 
 #[tauri::command]
-pub fn cmd_open_file_folder(path: String, state: State<'_, AppState>) -> Result<(), String> {
+pub async fn cmd_open_file_folder(path: String, state: State<'_, AppState>) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
-        use std::os::windows::process::CommandExt;
-        use std::path::{Component, Path};
-
-        let clean_path = path.trim().replace('/', "\\");
-        if clean_path.is_empty()
-            || clean_path.contains('"')
-            || clean_path.contains('\0')
-            || clean_path.contains('\r')
-            || clean_path.contains('\n')
-            || clean_path.starts_with("\\\\.\\")
-            || clean_path.starts_with("\\\\?\\")
-        {
-            return Err("Invalid folder path".to_string());
-        }
-        let path_obj = Path::new(&clean_path);
-        if !path_obj.is_absolute() {
-            return Err("Path must be an absolute path".to_string());
-        }
-        if path_obj.components().any(|c| matches!(c, Component::ParentDir)) {
-            return Err("Relative path traversal segments are not permitted".to_string());
-        }
-
-        let normalized_req = clean_path.to_lowercase();
-        let matched_record = state
-            .db
-            .get_all_downloads()
-            .ok()
-            .and_then(|list| {
-                list.into_iter().find(|d| {
-                    d.destination_path.trim().replace('/', "\\").to_lowercase() == normalized_req
-                        || d.staging_path
-                            .as_deref()
-                            .map(|s| s.trim().replace('/', "\\").to_lowercase() == normalized_req)
-                            .unwrap_or(false)
-                })
-            });
-
-        if clean_path.starts_with("\\\\") && matched_record.is_none() {
-            return Err("Opening unverified UNC network paths is not permitted".to_string());
-        }
-
-        let mut cmd = std::process::Command::new("explorer.exe");
-        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
-
-        if crate::engine::staging::to_win_io_path(path_obj).is_file() {
-            cmd.raw_arg(format!("/select,\"{}\"", clean_path));
-        } else {
-            let db_staging = matched_record.and_then(|d| d.staging_path);
-
-            let active_staging = db_staging
-                .map(std::path::PathBuf::from)
-                .filter(|p| crate::engine::staging::to_win_io_path(p).is_file())
-                .or_else(|| {
-                    let derived = crate::engine::staging::derive_primary_unconfirmed_path(path_obj);
-                    if crate::engine::staging::to_win_io_path(&derived).is_file() {
-                        Some(derived)
-                    } else {
-                        None
-                    }
-                });
-
-            if let Some(staging_file) = active_staging {
-                let staging_str = staging_file
-                    .to_string_lossy()
-                    .replace(['/', '"', '\r', '\n', '\0'], "\\");
-                cmd.raw_arg(format!("/select,\"{}\"", staging_str));
-            } else if crate::engine::staging::to_win_io_path(path_obj).is_dir() {
-                cmd.arg(&clean_path);
-            } else if let Some(parent) = path_obj
-                .parent()
-                .filter(|p| crate::engine::staging::to_win_io_path(p).is_dir())
-            {
-                cmd.arg(parent);
-            } else {
-                return Err("Target folder does not exist on disk".to_string());
-            }
-        }
-
-        cmd.spawn().map_err(|e| e.to_string())?;
+        let target = resolve_folder_reveal_target(&path, &state.db)?;
+        tauri::async_runtime::spawn_blocking(move || reveal_in_windows_explorer(&target))
+            .await
+            .map_err(|e| e.to_string())??;
     }
     #[cfg(not(target_os = "windows"))]
     {
@@ -1983,17 +2501,20 @@ pub fn cmd_open_file_folder(path: String, state: State<'_, AppState>) -> Result<
     Ok(())
 }
 
+fn validate_download_complete_payload(payload: Option<serde_json::Value>) -> Option<serde_json::Value> {
+    let p = payload?;
+    let url = p.get("url").and_then(|u| u.as_str()).unwrap_or("").trim();
+    if url.is_empty() {
+        return None;
+    }
+    Some(p)
+}
+
 pub fn show_download_complete<R: tauri::Runtime>(app: &tauri::AppHandle<R>, payload: Option<serde_json::Value>) {
-    // Only open dialog if a valid, non-empty download payload exists
-    let valid_payload = match payload {
-        Some(ref p) => {
-            let url = p.get("url").and_then(|u| u.as_str()).unwrap_or("").trim();
-            if url.is_empty() {
-                return;
-            }
-            p.clone()
-        }
-        None => return,
+    // Only open isolated download_complete window if a valid, non-empty download payload exists.
+    // Never restore or emit this modal into the `main` window so background tray operation stays undisturbed.
+    let Some(valid_payload) = validate_download_complete_payload(payload) else {
+        return;
     };
 
     if let Ok(mut lock) = LAST_DOWNLOAD_COMPLETE_PAYLOAD.lock() {
@@ -2009,30 +2530,19 @@ pub fn show_download_complete<R: tauri::Runtime>(app: &tauri::AppHandle<R>, payl
     let app_clone = app.clone();
     let payload_clone = valid_payload.clone();
     let _ = app.run_on_main_thread(move || {
-        if let Some(main_win) = app_clone.get_webview_window("main") {
-            use tauri::Emitter;
-            let _ = main_win.emit("open-download-complete-modal", &payload_clone);
-            let _ = main_win.unminimize();
-            let _ = main_win.show();
-            let _ = main_win.set_focus();
-
-            #[cfg(target_os = "windows")]
-            force_window_to_foreground(&main_win);
-            return;
-        }
-
         if let Some(window) = app_clone.get_webview_window("download_complete") {
             use tauri::Emitter;
             let _ = window.emit("open-download-complete-modal", &payload_clone);
-            let _ = app_clone.emit("open-download-complete-modal", &payload_clone);
             let _ = window.eval(&eval_script);
 
-            let _ = window.set_size(tauri::Size::Logical(tauri::LogicalSize {
-                width: 540.0,
-                height: 282.0,
-            }));
+            if !window.is_visible().unwrap_or(false) {
+                let _ = window.set_size(tauri::Size::Logical(tauri::LogicalSize {
+                    width: 540.0,
+                    height: 282.0,
+                }));
+                let _ = window.center();
+            }
             let _ = window.unminimize();
-            let _ = window.center();
             let _ = window.show();
             let _ = window.set_focus();
 
@@ -2067,7 +2577,6 @@ pub fn show_download_complete<R: tauri::Runtime>(app: &tauri::AppHandle<R>, payl
                 }
                 use tauri::Emitter;
                 let _ = window.emit("open-download-complete-modal", &payload_clone);
-                let _ = app_clone.emit("open-download-complete-modal", &payload_clone);
                 let _ = window.eval(&eval_script);
 
                 let _ = window.unminimize();
@@ -2100,11 +2609,13 @@ pub fn cmd_close_download_complete(app: AppHandle) -> Result<(), String> {
     if let Ok(mut lock) = LAST_DOWNLOAD_COMPLETE_PAYLOAD.lock() {
         *lock = None;
     }
-    if let Some(window) = app.get_webview_window("download_complete") {
-        let _ = window.set_always_on_top(false);
-        let _ = window.hide();
-    }
+    dispose_or_hide_secondary_window(&app, "download_complete");
     Ok(())
+}
+
+#[tauri::command]
+pub fn cmd_get_system_profile() -> crate::system_profile::SystemProfileSnapshot {
+    crate::system_profile::current_snapshot()
 }
 
 #[tauri::command]
@@ -2621,4 +3132,131 @@ pub fn cmd_trigger_immediate_shutdown(dry_run: Option<bool>, state: State<'_, Ap
         || std::env::var("DOWNEX_DRY_RUN_SHUTDOWN").is_ok()
         || std::env::var("CI").is_ok();
     state.queue_manager.trigger_immediate_shutdown(dry)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_sanitize_picker_initial_dir_handles_empty_existing_and_parent() {
+        assert_eq!(sanitize_picker_initial_dir(None), None);
+        assert_eq!(sanitize_picker_initial_dir(Some("   ".to_string())), None);
+
+        let temp_dir = std::env::temp_dir();
+        let temp_str = temp_dir.to_string_lossy().trim_end_matches(['\\', '/']).to_string();
+        assert_eq!(
+            sanitize_picker_initial_dir(Some(format!("  {}\\  ", temp_str))),
+            Some(temp_str.clone())
+        );
+
+        let non_existent_child = temp_dir.join("downex_nonexistent_leaf_xyz_987654");
+        assert_eq!(
+            sanitize_picker_initial_dir(Some(non_existent_child.to_string_lossy().to_string())),
+            Some(temp_str)
+        );
+    }
+
+    #[test]
+    fn test_compute_centered_clamped_position_keeps_dialog_centered_and_in_bounds() {
+        // 540x318 centered at (400, 300) expanding to 540x520 on 1920x1080 monitor
+        let (x, y) = compute_centered_clamped_position(
+            (400, 300),
+            (540, 318),
+            (540, 520),
+            Some((0, 0, 1920, 1080)),
+            1.0,
+        );
+        assert_eq!(x, 400);
+        assert_eq!(y, 199);
+
+        // Near bottom edge should clamp upward above taskbar margin (48px)
+        let (_x2, y2) = compute_centered_clamped_position(
+            (400, 720),
+            (540, 318),
+            (540, 520),
+            Some((0, 0, 1920, 1080)),
+            1.0,
+        );
+        assert!(y2 + 520 <= 1080 - 48, "Expanded dialog must stay above taskbar margin: y={}", y2);
+
+        // Near top edge should clamp downward to margin (12px)
+        let (_x3, y3) = compute_centered_clamped_position(
+            (400, 10),
+            (540, 318),
+            (540, 520),
+            Some((0, 0, 1920, 1080)),
+            1.0,
+        );
+        assert_eq!(y3, 12);
+    }
+
+    #[test]
+    fn test_validate_download_complete_payload_requires_non_empty_url() {
+        assert_eq!(validate_download_complete_payload(None), None);
+        assert_eq!(
+            validate_download_complete_payload(Some(serde_json::json!({ "url": "   ", "filename": "x.mkv" }))),
+            None
+        );
+        let valid = serde_json::json!({
+            "id": "dl-1",
+            "url": "https://cdn.example.org/file.mkv",
+            "filename": "file.mkv"
+        });
+        assert_eq!(validate_download_complete_payload(Some(valid.clone())), Some(valid));
+    }
+
+    #[test]
+    fn test_should_keep_window_always_on_top_allows_dialog_focus_yield() {
+        assert!(!should_keep_window_always_on_top("download_dialog"));
+        assert!(!should_keep_window_always_on_top("download_complete"));
+        assert!(!should_keep_window_always_on_top("main"));
+    }
+
+    #[test]
+    fn test_cmd_get_system_default_download_dir_resolves_non_empty_downex_path() {
+        let dir = cmd_get_system_default_download_dir().expect("system default download dir");
+        assert!(!dir.trim().is_empty());
+        assert!(dir.ends_with("Downex"));
+    }
+
+    #[test]
+    fn test_resolve_folder_reveal_target_accurately_resolves_file_parent_and_dir() {
+        let temp_root = std::env::temp_dir().join(format!("downex_reveal_test_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&temp_root).unwrap();
+        let db_path = temp_root.join("test.db");
+        let db = crate::db::DatabaseManager::new(db_path.to_str().unwrap()).unwrap();
+
+        let sample_file = temp_root.join("Drishyam [2026].mkv");
+        std::fs::write(&sample_file, b"ok").unwrap();
+
+        // 1. Existing file (even passed with \\?\ prefix) resolves to SelectFile pointing at that exact file
+        let verbatim = format!("\\\\?\\{}", sample_file.to_string_lossy());
+        let resolved_file = resolve_folder_reveal_target(&verbatim, &db).unwrap();
+        assert_eq!(resolved_file, FolderRevealTarget::SelectFile(canonical_display_win_path(&sample_file, "")));
+
+        // 2. Existing directory resolves to OpenDir for that directory
+        let resolved_dir = resolve_folder_reveal_target(temp_root.to_str().unwrap(), &db).unwrap();
+        assert_eq!(resolved_dir, FolderRevealTarget::OpenDir(canonical_display_win_path(&temp_root, "")));
+
+        // 3. Moved/missing file falls back accurately to its containing parent directory
+        let missing_file = temp_root.join("Missing.mkv");
+        let resolved_parent = resolve_folder_reveal_target(missing_file.to_str().unwrap(), &db).unwrap();
+        assert_eq!(resolved_parent, FolderRevealTarget::OpenDir(canonical_display_win_path(&temp_root, "")));
+
+        // 4. Relative path & traversal rejected
+        assert!(resolve_folder_reveal_target("relative\\file.mkv", &db).is_err());
+        assert!(resolve_folder_reveal_target("C:\\Temp\\..\\secret.mkv", &db).is_err());
+
+        let _ = std::fs::remove_dir_all(&temp_root);
+    }
+
+    #[test]
+    fn test_resolve_restore_target_view_filters_valid_tabs() {
+        assert_eq!(resolve_restore_target_view(Some("all")), Some("all".to_string()));
+        assert_eq!(resolve_restore_target_view(Some("  queues  ")), Some("queues".to_string()));
+        assert_eq!(resolve_restore_target_view(Some("")), None);
+        assert_eq!(resolve_restore_target_view(Some("unknown_tab")), None);
+        assert_eq!(resolve_restore_target_view(None), None);
+    }
 }

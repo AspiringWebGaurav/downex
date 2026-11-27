@@ -251,6 +251,16 @@ pub fn update_download_status(&self, id: &str, status: &str, speed: u64, error: 
         Ok(())
     }
 
+    pub fn update_download_queue_id(&self, id: &str, queue_id: &str) -> Result<()> {
+        let conn = self.conn.lock();
+        let now = chrono::Utc::now().timestamp_millis();
+        conn.execute(
+            "UPDATE downloads SET queue_id = ?1, updated_at = ?2 WHERE id = ?3",
+            params![queue_id, now, id],
+        )?;
+        Ok(())
+    }
+
     pub fn update_download_progress(&self, id: &str, downloaded_bytes: u64, speed_bytes_sec: u64) -> Result<()> {
         let conn = self.conn.lock();
         let now = chrono::Utc::now().timestamp_millis();

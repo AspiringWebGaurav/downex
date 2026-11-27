@@ -630,6 +630,11 @@ pub async fn download_and_stage_update(
             .map_err(|e| format!("Failed to flush staging file: {}", e))?;
     }
 
+    // Release decrypted update buffer promptly and trim working set after staging write
+    drop(plain_exe);
+    #[cfg(target_os = "windows")]
+    crate::commands::trim_process_working_set();
+
     if staged_path.exists() {
         let _ = std::fs::remove_file(&staged_path);
     }

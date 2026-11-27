@@ -172,10 +172,10 @@ export const useAppVersionStore = create<AppVersionStore>((set, get) => {
           localStorage.setItem('downex_persisted_version', cleaned);
 
           if (wasRecentlyUpdated) {
-            // One-time post-update verification check: shows "UP TO DATE" on sidebar for 3.5s after fresh update restart
+            // Silent post-update verification check (never flashes dry-run stage text on boot)
             setTimeout(async () => {
               try {
-                await get().checkForUpdates(false);
+                await get().checkForUpdates(true);
               } catch (e) {
                 console.warn('[Downex Store] Post-update verification notice:', e);
               } finally {

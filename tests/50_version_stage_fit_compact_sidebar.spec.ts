@@ -16,6 +16,13 @@ test.describe('Downex — App Version Row Fit in Compact 172px Sidebar', () => {
   });
 
   test('Verify zero text clipping across all stages in 172px compact sidebar', async ({ page }) => {
+    await page.route('**/api/v1/releases/downex/latest*', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ no_release: true }),
+      });
+    });
     await page.goto('/');
     await page.waitForLoadState('networkidle');
 

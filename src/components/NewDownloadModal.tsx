@@ -12,12 +12,15 @@ import {
   Shield,
   Mail,
   Lock,
-  ArrowRight
+  ArrowRight,
+  RotateCcw
 } from 'lucide-react';
 import { useDownloadStore } from '../stores/downloadStore';
 import { useHardwareBanStore } from '../stores/hardwareBanStore';
 import {
   getDefaultDownloadDir,
+  getSystemDefaultDownloadDir,
+  normalizePathForCompare,
   setDefaultDownloadDir,
   getDiskFreeSpace,
   probeUrl,
@@ -26,7 +29,8 @@ import {
   getClipboardText,
   extractSizeFromUrl,
   openExternalUrl,
-  getDownexWebBaseUrl
+  getDownexWebBaseUrl,
+  SEQUENTIAL_QUEUE_ID
 } from '../services/tauriService';
 import {
   getCachedDownloadDir,
@@ -79,8 +83,9 @@ export const NewDownloadModal: React.FC<{ isStandalone?: boolean }> = ({ isStand
   const [fileBaseName, setFileBaseName] = useState('');
   const [fileExtension, setFileExtension] = useState('');
   const [savePath, setSavePath] = useState<string>(getCachedDownloadDir);
+  const [systemDefaultDir, setSystemDefaultDir] = useState<string>('');
   const [freeSpaceBytes, setFreeSpaceBytes] = useState<number | null>(getCachedDiskFreeSpace);
-  const [rememberPath, setRememberPath] = useState(true);
+  const [rememberPath, setRememberPath] = useState(false);
   const [totalBytes, setTotalBytes] = useState<number | undefined>();
   const [supportsRanges, setSupportsRanges] = useState(true);
   const [isProbing, setIsProbing] = useState(false);
@@ -146,6 +151,15 @@ export const NewDownloadModal: React.FC<{ isStandalone?: boolean }> = ({ isStand
   // Initialize modal state on open
   useEffect(() => {
     if (isNewModalOpen) {
+      setRememberPath(false);
+      getSystemDefaultDownloadDir()
+        .then((dir) => {
+          if (dir && dir.trim()) {
+            setSystemDefaultDir(dir.trim());
+          }
+        })
+        .catch(() => {});
+
       getDefaultDownloadDir().then((dir) => {
         if (dir && dir.trim()) {
           setSavePath(dir.trim());
@@ -363,11 +377,11 @@ export const NewDownloadModal: React.FC<{ isStandalone?: boolean }> = ({ isStand
         .trim();
       const fullFilename = sanitizedRawName || undefined;
 
-      // Persist chosen directory if "Remember this folder" is checked
+      // Persist chosen directory ONLY when the user explicitly checks Remember folder
       if (rememberPath && savePath.trim()) {
         try {
-          await setDefaultDownloadDir(savePath.trim());
-          setCachedDownloadDir(savePath.trim());
+          const savedDir = await setDefaultDownloadDir(savePath.trim());
+          setCachedDownloadDir((savedDir || savePath).trim());
         } catch (e) {
           console.warn('Could not save default download directory:', e);
         }
@@ -376,21 +390,24 @@ export const NewDownloadModal: React.FC<{ isStandalone?: boolean }> = ({ isStand
       await addNewDownload(
         url.trim(),
         savePath.trim() || undefined,
-        undefined,
+        startImmediately ? undefined : SEQUENTIAL_QUEUE_ID,
         headersOpt,
         startImmediately,
         fullFilename
       );
 
+      setRememberPath(false);
+
       if (isStandalone) {
         if (startImmediately) {
-          await restoreManagerWindow();
+          await restoreManagerWindow('all');
         } else {
+          await restoreManagerWindow('queues');
           await hideMainWindow();
         }
         setIsStandaloneModal(false);
-      } else if (!startImmediately) {
-        setSelectedView('queues');
+      } else {
+        setSelectedView(startImmediately ? 'all' : 'queues');
       }
       setNewModalOpen(false);
     } catch (err) {
@@ -472,7 +489,7 @@ export const NewDownloadModal: React.FC<{ isStandalone?: boolean }> = ({ isStand
   const bannedDialogCard = (
     <div
       className={`flex flex-col justify-between bg-white dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 font-sans overflow-hidden select-none border border-zinc-200 dark:border-zinc-800 shadow-2xl ${
-        isStandalone ? 'w-full h-full' : 'w-[540px] h-[318px] max-w-[94vw] modal-enter-instant'
+        isStandalone ? 'w-full h-full' : 'w-[540px] min-h-[346px] max-w-[94vw] modal-enter-instant'
       }`}
     >
       {/* Title Bar Strip */}
@@ -755,6 +772,41 @@ export const NewDownloadModal: React.FC<{ isStandalone?: boolean }> = ({ isStand
               />
               <Folder className="w-3.5 h-3.5 text-zinc-400 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
             </div>
+            {(() => {
+              const isAtSystemDefault = Boolean(systemDefaultDir) &&
+                normalizePathForCompare(savePath) === normalizePathForCompare(systemDefaultDir);
+              return (
+                <button
+                  type="button"
+                  data-testid="use-default-folder-btn"
+                  onClick={async () => {
+                    try {
+                      const resolved = await setDefaultDownloadDir('');
+                      const clean = (resolved || systemDefaultDir || 'C:\\Downloads\\Downex').trim();
+                      setSavePath(clean);
+                      setCachedDownloadDir(clean);
+                      setRememberPath(false);
+                      setSystemDefaultDir((prev) => prev || clean);
+                    } catch {
+                      const fallback = (systemDefaultDir || 'C:\\Downloads\\Downex').trim();
+                      setSavePath(fallback);
+                      setCachedDownloadDir(fallback);
+                      setRememberPath(false);
+                    }
+                  }}
+                  disabled={isAtSystemDefault}
+                  title={systemDefaultDir ? `Use default folder (${systemDefaultDir})` : 'Reset to default Downloads\\Downex folder'}
+                  className={`h-7.5 px-2.5 border font-mono-tabular text-[10px] uppercase tracking-wider shrink-0 flex items-center gap-1 transition-colors ${
+                    isAtSystemDefault
+                      ? 'border-zinc-200 dark:border-zinc-800 text-zinc-400 dark:text-zinc-600 cursor-default'
+                      : 'border-zinc-300 dark:border-zinc-700 text-zinc-700 dark:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-800 cursor-pointer'
+                  }`}
+                >
+                  <RotateCcw className="w-3 h-3" />
+                  <span>Default</span>
+                </button>
+              );
+            })()}
             <button
               type="button"
               onClick={handleBrowseFolder}

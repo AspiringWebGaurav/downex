@@ -8,6 +8,7 @@ pub mod extension;
 pub mod hardware;
 pub mod ota;
 pub mod scheduler;
+pub mod system_profile;
 pub mod tray;
 pub mod version;
 
@@ -42,8 +43,10 @@ pub fn run() {
         arg == "--background" || arg == "--silent" || arg == "--minimized" || arg == "--autostart" || arg == "-b"
     });
 
+    let boot_profile = crate::system_profile::init_system_profile();
+
     #[cfg(target_os = "windows")]
-    if is_background_boot {
+    if is_background_boot || boot_profile.force_background_priority {
         // Run with BELOW_NORMAL_PRIORITY_CLASS so mouse cursor, DWM & foreground apps have 100% CPU priority
         crate::commands::set_process_priority_background(true);
     }
@@ -102,20 +105,30 @@ pub fn run() {
                         true
                     };
 
-                    if should_close_to_tray || window.label() != "main" {
+                    if window.label() != "main" {
+                        if crate::system_profile::should_destroy_dialogs_on_close() {
+                            // Tear down secondary WebView2 process under low-RAM / heavy-load profiles
+                            let _ = window.set_always_on_top(false);
+                            let _ = window.hide();
+                            #[cfg(target_os = "windows")]
+                            crate::commands::trim_process_working_set();
+                        } else {
+                            api.prevent_close();
+                            let _ = window.set_always_on_top(false);
+                            let _ = window.hide();
+                        }
+                    } else if should_close_to_tray {
                         api.prevent_close();
                         let _ = window.set_always_on_top(false);
                         let _ = window.hide();
 
-                        if window.label() == "main" {
-                            #[cfg(target_os = "windows")]
-                            {
-                                crate::commands::set_process_priority_background(true);
-                                crate::commands::trim_process_working_set();
-                            }
-                            let _ = crate::tray::sync_download_task_tray(window.app_handle());
-                            let _ = crate::tray::refresh_tray_menu(window.app_handle());
+                        #[cfg(target_os = "windows")]
+                        {
+                            crate::commands::set_process_priority_background(true);
+                            crate::commands::trim_process_working_set();
                         }
+                        let _ = crate::tray::sync_download_task_tray(window.app_handle());
+                        let _ = crate::tray::refresh_tray_menu(window.app_handle());
                     } else {
                         // User explicitly turned off keep running in tray: flush tray cleanup cleanly, then exit
                         api.prevent_close();
@@ -133,7 +146,9 @@ pub fn run() {
                 }
                 tauri::WindowEvent::Focused(true) => {
                     #[cfg(target_os = "windows")]
-                    crate::commands::set_process_priority_background(false);
+                    if !crate::system_profile::should_force_background_priority() {
+                        crate::commands::set_process_priority_background(false);
+                    }
                     if window.label() == "main" {
                         let _ = window.set_always_on_top(false);
                         crate::tray::clean_all_task_trays(window.app_handle());
@@ -202,9 +217,44 @@ pub fn run() {
                 http_client: client.clone(),
             });
 
-            // Pre-warm secondary dialog windows (download_dialog, download_complete)
-            // in hidden state so they appear instantly (<10ms) without 2-3s delay or blank screens
-            crate::commands::prewarm_secondary_dialogs(app.handle());
+            // Pre-warm secondary dialog windows only when system resources allow it
+            if crate::system_profile::should_prewarm_dialogs() {
+                crate::commands::prewarm_secondary_dialogs(app.handle());
+            }
+
+            // Automatic behind-the-scenes RAM / CPU pressure monitor (zero UI configuration)
+            let monitor_app = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                let mut ticker = tokio::time::interval(std::time::Duration::from_secs(10));
+                ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+                ticker.tick().await;
+                loop {
+                    ticker.tick().await;
+                    if let Some(snapshot) = crate::system_profile::sample_and_evaluate() {
+                        let _ = monitor_app.emit("downex-system-profile", &snapshot);
+                        if snapshot.force_background_priority {
+                            #[cfg(target_os = "windows")]
+                            {
+                                crate::commands::set_process_priority_background(true);
+                                crate::commands::trim_process_working_set();
+                            }
+                            crate::commands::reclaim_hidden_secondary_dialogs(&monitor_app);
+                        } else {
+                            #[cfg(target_os = "windows")]
+                            {
+                                let main_focused = monitor_app
+                                    .get_webview_window("main")
+                                    .and_then(|w| w.is_focused().ok())
+                                    .unwrap_or(false);
+                                if main_focused {
+                                    crate::commands::set_process_priority_background(false);
+                                }
+                            }
+                            crate::commands::prewarm_secondary_dialogs(&monitor_app);
+                        }
+                    }
+                }
+            });
 
             // Dev Terminal Watchdog: In development mode, monitor Vite dev server at 127.0.0.1:1420
             // If the dev terminal running `npm run dev` / `vite` is closed, 127.0.0.1:1420 terminates.
@@ -504,6 +554,7 @@ pub fn run() {
             cmd_quit_app,
             cmd_set_tray_icon,
             cmd_get_default_download_dir,
+            cmd_get_system_default_download_dir,
             cmd_set_default_download_dir,
             cmd_set_max_segments,
             cmd_get_max_segments,
@@ -520,9 +571,11 @@ pub fn run() {
             cmd_pause_queue,
             cmd_is_queue_running,
             cmd_queue_download,
+            cmd_unqueue_download,
             cmd_restore_manager_window,
             cmd_hide_main_window,
             cmd_show_download_dialog,
+            cmd_set_download_dialog_expanded,
             cmd_close_download_dialog,
             cmd_get_download_dialog_payload,
             cmd_get_disk_free_space,
@@ -556,6 +609,7 @@ pub fn run() {
             cmd_trigger_immediate_shutdown,
             cmd_get_runtime_session_state,
             cmd_set_runtime_session_tab,
+            cmd_get_system_profile,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Downex application");

@@ -256,7 +256,7 @@ impl DownloadEnginePool {
                 tokio::select! {
                     _ = p_cancel.cancelled() => break,
                     _ = p_complete.cancelled() => break,
-                    _ = tokio::time::sleep(Duration::from_millis(150)) => {
+                    _ = tokio::time::sleep(Duration::from_millis(crate::system_profile::current_telemetry_interval_ms())) => {
                         let should_checkpoint = last_checkpoint_time.elapsed() >= Duration::from_secs(2);
                         if should_checkpoint {
                             last_checkpoint_time = Instant::now();
@@ -428,7 +428,7 @@ impl DownloadEnginePool {
             completion_token.cancel();
             0
         } else if supports_ranges && (total_bytes.is_some() || effective_is_resume) {
-            max_connections.clamp(1, 32) as usize
+            crate::system_profile::effective_max_connections(max_connections).clamp(1, 32) as usize
         } else {
             1
         };

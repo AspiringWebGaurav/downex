@@ -28,7 +28,7 @@ import {
   PinOff
 } from 'lucide-react';
 import { useDownloadStore } from '../stores/downloadStore';
-import { openFileWith, openFileFolder, showDownloadCompleteDialog, isTauri, injectMockDownloadItem, toggleTaskShutdown, openExternalUrl } from '../services/tauriService';
+import { openFileWith, openFileFolder, showDownloadCompleteDialog, isTauri, injectMockDownloadItem, toggleTaskShutdown, openExternalUrl, isQueueItem } from '../services/tauriService';
 import { DeleteConfirmModal } from './DeleteConfirmModal';
 import { BatchDeleteConfirmModal } from './BatchDeleteConfirmModal';
 import { BatchPauseConfirmModal } from './BatchPauseConfirmModal';
@@ -48,7 +48,6 @@ export const DownloadTable: React.FC = () => {
   const removeDownload = useDownloadStore((state) => state.removeDownload);
   const changeFolderAndRetry = useDownloadStore((state) => state.changeFolderAndRetry);
   const isQueueRunning = useDownloadStore((state) => state.isQueueRunning);
-  const activeQueueTaskId = useDownloadStore((state) => state.activeQueueTaskId);
   const startQueue = useDownloadStore((state) => state.startQueue);
   const pauseQueue = useDownloadStore((state) => state.pauseQueue);
   const queueDownload = useDownloadStore((state) => state.queueDownload);
@@ -186,13 +185,17 @@ export const DownloadTable: React.FC = () => {
 
   const isQueuesView = selectedView === 'queues';
 
-  const queuedItems = items
-    .filter((item) => item.status === 'queued')
+  // All items owned by the sequential Queues workspace (queued, active, paused, failed, or completed)
+  const queueLibraryItems = items
+    .filter((item) => isQueueItem(item))
     .sort((a, b) => a.created_at - b.created_at);
 
-  const activeItems = items.filter(
+  const queuedItems = queueLibraryItems;
+  const pendingQueuedItems = queueLibraryItems.filter((item) => item.status === 'queued');
+  const queueActiveItems = queueLibraryItems.filter(
     (item) => item.status === 'downloading' || item.status === 'probing'
   );
+  const queueCompletedCount = queueLibraryItems.filter((item) => item.status === 'completed').length;
 
   const isSearchActive = Boolean(searchQuery.trim());
   const cleanSearchQuery = searchQuery.trim().toLowerCase();
@@ -219,47 +222,38 @@ export const DownloadTable: React.FC = () => {
     }
 
     if (selectedView === 'active') {
-      return (item.status === 'downloading' || item.status === 'probing') && item.id !== activeQueueTaskId;
+      return !isQueueItem(item) && (item.status === 'downloading' || item.status === 'probing');
     }
     if (selectedView === 'completed') {
-      return item.status === 'completed';
+      return !isQueueItem(item) && item.status === 'completed';
     }
     if (selectedView === 'queues') {
-      // In Queues view: strictly items in the queue, or the single task actively downloading from the queue!
-      return (
-        item.status === 'queued' ||
-        Boolean(isQueueRunning && item.id === activeQueueTaskId && (item.status === 'downloading' || item.status === 'probing'))
-      );
+      // Option A: Keep ALL queue-owned items inside Queues (waiting, downloading, paused, failed, completed)
+      return isQueueItem(item);
     }
     if (selectedView === 'trash') {
-      return item.status === 'failed' || item.status === 'cancelled' || item.status === 'error';
+      return (item.status === 'failed' || item.status === 'cancelled' || item.status === 'error') && !isQueueItem(item);
     }
     if (selectedView === 'all') {
-      // In All Downloads: display regular downloads and completed downloads,
-      // but do NOT show pending queued items (they live in the Queues workspace).
-      // When a queued item finishes downloading, its status becomes 'completed',
-      // so it seamlessly reflects in All Downloads!
-      return item.status !== 'queued' && !(isQueueRunning && item.id === activeQueueTaskId);
+      // Option A: Queued downloads live exclusively in Queues and never move into All Downloads unless explicitly unqueued
+      return !isQueueItem(item);
     }
     return true;
   });
 
   if (isQueuesView) {
-    const active = displayItems.filter((i) => i.status === 'downloading' || i.status === 'probing');
-    const queued = displayItems
-      .filter((i) => i.status === 'queued')
-      .sort((a, b) => a.created_at - b.created_at);
-    const otherInQueue = displayItems
-      .filter((i) => i.status !== 'downloading' && i.status !== 'probing' && i.status !== 'queued');
-    displayItems = [...active, ...queued, ...otherInQueue];
+    // Keep FIFO order (#1, #2, #3...) fixed so items visibly progress in place without jumping
+    displayItems = [...displayItems].sort((a, b) => a.created_at - b.created_at);
   }
 
   const downloadingCount = displayItems.filter((i) => i.status === 'downloading').length;
   const pausedCount = displayItems.filter((i) => i.status === 'paused').length;
   const queuedCount = displayItems.filter((i) => i.status === 'queued').length;
   const errorCount = displayItems.filter((i) => i.status === 'failed' || i.status === 'error').length;
-  const canQueueAny = displayItems.some((i) => i.status !== 'completed' && i.status !== 'queued');
-  const canUnqueueAny = isQueuesView ? displayItems.length > 0 : queuedCount > 0;
+  const canQueueAny = isQueuesView
+    ? displayItems.some((i) => i.status === 'paused' || i.status === 'failed' || i.status === 'error')
+    : displayItems.some((i) => !isQueueItem(i) && i.status !== 'completed');
+  const canUnqueueAny = isQueuesView ? displayItems.some((i) => isQueueItem(i)) : queuedCount > 0;
 
   const scrollToCard = (index: number) => {
     const clamped = Math.max(0, Math.min(displayItems.length - 1, index));
@@ -443,12 +437,16 @@ export const DownloadTable: React.FC = () => {
             </h3>
           </div>
           <p className="font-mono-tabular text-[11px] text-zinc-500 dark:text-zinc-400 mt-1 truncate leading-none">
-            {isQueueRunning
-              ? activeItems.length > 0
-                ? `Downloading 1 file at maximum speed. ${queuedItems.length} file(s) waiting in line.`
-                : `Queue is active and listening for queued tasks.`
-              : queuedItems.length > 0
-              ? `${queuedItems.length} file(s) in line. Click Start to download 1-by-1 sequentially.`
+            {isQueueRunning || queueActiveItems.length > 0
+              ? queueActiveItems.length > 0
+                ? `Downloading 1-by-1 at max speed • ${pendingQueuedItems.length} waiting${queueCompletedCount > 0 ? ` • ${queueCompletedCount} completed` : ''}`
+                : pendingQueuedItems.length > 0
+                ? `Starting next queued download (${pendingQueuedItems.length} waiting)...`
+                : `Queue active and listening for queued tasks.`
+              : pendingQueuedItems.length > 0
+              ? `${pendingQueuedItems.length} file(s) waiting${queueCompletedCount > 0 ? ` • ${queueCompletedCount} completed` : ''}. Click Start Queue to download 1-by-1.`
+              : queueCompletedCount > 0
+              ? `${queueCompletedCount} completed file(s) kept in Queues.`
               : `Queue is empty. Ready for downloads.`}
           </p>
         </div>
@@ -457,12 +455,12 @@ export const DownloadTable: React.FC = () => {
       <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
         <span
           className={`h-7 sm:h-7.5 px-3 min-w-[104px] border shrink-0 uppercase tracking-wider inline-flex items-center justify-center font-mono-tabular text-[9.5px] sm:text-[10px] font-semibold leading-none ${
-            isQueueRunning
+            isQueueRunning || queueActiveItems.length > 0
               ? 'border-emerald-500/50 text-emerald-600 dark:text-emerald-400 bg-emerald-500/10'
               : 'border-zinc-300 dark:border-zinc-700 text-zinc-600 dark:text-zinc-400 bg-zinc-100/80 dark:bg-zinc-800/80'
           }`}
         >
-          {isQueueRunning ? 'QUEUE ACTIVE' : 'QUEUE PAUSED'}
+          {isQueueRunning || queueActiveItems.length > 0 ? 'QUEUE ACTIVE' : 'QUEUE PAUSED'}
         </span>
 
         {showGuideButton && (
@@ -487,11 +485,11 @@ export const DownloadTable: React.FC = () => {
         ) : (
           <button
             type="button"
-            disabled={queuedItems.length === 0}
+            disabled={pendingQueuedItems.length === 0}
             onClick={() => {
-              const nonResumable = queuedItems.filter((i) => !getResumeCapability(i).canResume);
+              const nonResumable = pendingQueuedItems.filter((i) => !getResumeCapability(i).canResume);
               if (nonResumable.length > 0) {
-                setBatchPauseCustomItems(queuedItems);
+                setBatchPauseCustomItems(pendingQueuedItems);
                 setBatchPauseAction('start_queue');
               } else {
                 startQueue();
@@ -651,7 +649,7 @@ export const DownloadTable: React.FC = () => {
                     1-by-1 Full Speed
                   </div>
                   <p className="text-[11px] text-zinc-600 dark:text-zinc-400 leading-snug font-sans text-justify [text-justify:inter-word]">
-                    Files download one at a time at top speed. When a file reaches 100%, it moves to completed and the next file starts.
+                    Files download one at a time at top speed and remain right inside Queues through active download and completion.
                   </p>
                 </div>
                 <div className="pt-1.5 text-[9px] font-mono-tabular text-zinc-400 uppercase tracking-wider border-t border-zinc-200/80 dark:border-zinc-800/80 mt-2 flex items-center justify-between">
@@ -697,7 +695,7 @@ export const DownloadTable: React.FC = () => {
               {queuedItems.length} {queuedItems.length === 1 ? 'download is' : 'downloads are'} organized in Queues
             </p>
             <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-1 max-w-sm">
-              Queued files download sequentially 1-by-1 in the dedicated Queues workspace. Once completed, they appear here.
+              Queued files download sequentially 1-by-1 and stay organized inside the Queues workspace.
             </p>
             <div className="mt-4 flex items-center gap-2">
               <Button
@@ -889,7 +887,9 @@ export const DownloadTable: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => {
-                    const toQueue = displayItems.filter((i) => i.status !== 'completed' && i.status !== 'queued');
+                    const toQueue = isQueuesView
+                      ? displayItems.filter((i) => i.status === 'paused' || i.status === 'failed' || i.status === 'error')
+                      : displayItems.filter((i) => !isQueueItem(i) && i.status !== 'completed');
                     setBatchPauseCustomItems(toQueue);
                     setBatchPauseAction('queue');
                   }}
@@ -1132,16 +1132,21 @@ export const DownloadTable: React.FC = () => {
         const formattedTimeTaken = formatTimeTaken(timeTakenSeconds);
         const displayedDiskPath = getActiveDownloadDiskPath(item);
 
-        // Calculate queue position if in queue or if queues view
+        // Calculate queue position tag inside Queues or for queued items
         let queueBadgeText = '';
         if (isQueuesView || isQueued) {
+          const fifoPos = queueLibraryItems.findIndex((q) => q.id === item.id) + 1;
           if (isDownloading) {
-            queueBadgeText = '#1 • Active';
+            queueBadgeText = `#${fifoPos > 0 ? fifoPos : 1} • Active`;
           } else if (isQueued) {
-            const queuedIdx = queuedItems.findIndex((q) => q.id === item.id);
-            const activeCountInQueue = (isQueueRunning && activeQueueTaskId) ? 1 : 0;
-            const pos = activeCountInQueue + (queuedIdx >= 0 ? queuedIdx + 1 : 1);
-            queueBadgeText = pos === 1 ? '#1 • Next in Line' : `#${pos} • In Line`;
+            const waitIdx = pendingQueuedItems.findIndex((q) => q.id === item.id);
+            const activeOffset = queueActiveItems.length > 0 ? 1 : 0;
+            const waitPos = activeOffset + (waitIdx >= 0 ? waitIdx + 1 : 1);
+            queueBadgeText = waitIdx === 0 && activeOffset === 0 ? '#1 • Next in Line' : `#${waitPos} • In Line`;
+          } else if (isQueuesView && item.status === 'completed') {
+            queueBadgeText = `#${fifoPos > 0 ? fifoPos : index + 1} • Completed`;
+          } else if (isQueuesView && isPaused) {
+            queueBadgeText = `#${fifoPos > 0 ? fifoPos : index + 1} • Paused`;
           }
         }
 
@@ -1307,6 +1312,17 @@ export const DownloadTable: React.FC = () => {
                       <Play className="w-2.5 h-2.5 fill-current" />
                       <span>{resInfo.label === 'No' ? 'Restart' : 'Resume'}</span>
                     </button>
+                    {isQueuesView && isQueueItem(item) && (
+                      <button
+                        type="button"
+                        onClick={() => unqueueDownload(item.id)}
+                        className="h-6 px-2 border border-zinc-300 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-800 text-zinc-600 dark:text-zinc-300 font-mono-tabular text-[10.5px] uppercase tracking-wider cursor-pointer flex items-center gap-1"
+                        title="Remove from queue and move to All Downloads"
+                      >
+                        <Undo2 className="w-2.5 h-2.5 text-zinc-400" />
+                        <span>Unqueue</span>
+                      </button>
+                    )}
                     <button
                       type="button"
                       onClick={() => setDeletingItem(item)}
@@ -1339,12 +1355,12 @@ export const DownloadTable: React.FC = () => {
                         <span>{isQueued ? 'Start' : isError ? 'Retry' : 'Resume'}</span>
                       </button>
                     )}
-                    {isQueued && (
+                    {(isQueued || (isQueuesView && isQueueItem(item))) && (
                       <button
                         type="button"
                         onClick={() => unqueueDownload(item.id)}
                         className="h-6 px-2 border border-zinc-300 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-800 text-zinc-600 dark:text-zinc-300 font-mono-tabular text-[10.5px] uppercase tracking-wider cursor-pointer flex items-center gap-1"
-                        title="Remove from queue and return to All Downloads as paused"
+                        title={item.status === 'completed' ? 'Move completed file out of Queues to All Downloads' : 'Remove from queue and return to All Downloads as paused'}
                       >
                         <Undo2 className="w-2.5 h-2.5 text-zinc-400" />
                         <span>Unqueue</span>
